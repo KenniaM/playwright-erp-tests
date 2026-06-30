@@ -8,8 +8,7 @@ setup('authenticate as admin', async ({ page }) => {
 
   await page.locator('#loginButton').click();
 
-  // Espera robusta (elige algo del dashboard real)
-  await expect(page.locator('#dashboard')).toBeVisible({ timeout: 60000 });
+  await expect(page.locator('#dashboardTitle')).toBeVisible({ timeout: 60000 });
 
   await page.context().storageState({
     path: 'playwright/.auth/admin.json'

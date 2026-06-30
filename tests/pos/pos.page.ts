@@ -37,6 +37,9 @@ const L = {
   PRODUCTO:          '.product_box_name',
   BTN_FACTURAR:      '#btn_pay_sale',
   CARRITO_FILAS:     '#table_sale_pos tbody tr',
+  CARRITO_CLAVES:    '#table_buy_list p[id^="drag_and_drop_"]',
+  TOTAL_SUB:         '#total_sub',
+  DESCUENTO_GENERAL: '#apply_general_discount',
 
   // Modal de pago
   TOTAL_MODAL:       'total_sale_txt',         // ID sin # — se lee vía evaluate()
@@ -76,6 +79,22 @@ export const METODO: Record<string, MetodoPago> = {
 
 // Efectivo permite superar el total (el sistema calcula el vuelto).
 export const MONTO_EFECTIVO = '100';
+export const DESCUENTO_INDIVIDUAL_PCT = '5';
+
+// ─── Tipos de resultado del descuento individual ───────────────────────────────
+
+export type EscenarioDescuento =
+  | 'aplicado'        // descuento aplicado exactamente como se solicitó
+  | 'maximo_superado' // porcentaje mayor al máximo; se aplicó el máximo permitido
+  | 'sin_descuento';  // producto no permite descuento (máximo = 0)
+
+export type ResultadoDescuento = {
+  clave: string;
+  porcentajeSolicitado: string;
+  porcentajeAplicado: string;
+  escenario: EscenarioDescuento;
+  mensajeAlerta?: string;  // texto del diálogo que apareció, si hubo uno
+};
 
 // ─── Page Object ──────────────────────────────────────────────────────────────
 
@@ -153,15 +172,211 @@ export class PosPage {
     await this.page.waitForTimeout(PAUSES.ESTADO_FINAL);
   }
 
+  /** Agrega el producto en la posición n del grid (0-indexed). Cierra el modal
+   *  "Monto a comprar" si aparece para productos sin precio fijo. */
+  async agregarProductoPorIndice(n: number) {
+    await this.page.locator(L.PRODUCTO).nth(n).click();
+    await this.page.waitForTimeout(1_500);
+    const modalMonto = this.page.getByText('Monto a comprar', { exact: false });
+    if (await modalMonto.isVisible().catch(() => false)) {
+      await this.page.keyboard.press('Escape');
+      await this.page.waitForTimeout(500);
+    }
+    await this.page.waitForTimeout(PAUSES.VER_CARRITO);
+  }
+
+  /** Devuelve las claves únicas de los productos actualmente en el carrito. */
+  async obtenerClavesProductos(): Promise<string[]> {
+    return this.page.evaluate(() =>
+      [...document.querySelectorAll('#table_buy_list p[id^="drag_and_drop_"]')]
+        .map(el => el.id.replace('drag_and_drop_', ''))
+    );
+  }
+
+  /** Indica si el checkbox de descuento general está activo. */
+  async estaDescuentoGeneralActivo(): Promise<boolean> {
+    return this.page.evaluate(
+      () => (document.getElementById('apply_general_discount') as HTMLInputElement)?.checked ?? false
+    );
+  }
+
+  /** Desactiva el descuento general para habilitar los descuentos individuales. */
+  async desactivarDescuentoGeneral() {
+    if (await this.estaDescuentoGeneralActivo()) {
+      await this.page.evaluate(
+        () => (document.getElementById('apply_general_discount') as HTMLInputElement).click()
+      );
+      await this.page.waitForTimeout(1_000);
+    }
+  }
+
+  /**
+   * Intenta aplicar un porcentaje de descuento individual al producto indicado.
+   * Maneja tres escenarios sin fallar:
+   *   - El sistema no permite descuento en el producto (retorna escenario 'sin_descuento').
+   *   - El porcentaje supera el máximo permitido; el sistema lo corrige (retorna 'maximo_superado').
+   *   - El descuento se aplica exactamente como se pidió (retorna 'aplicado').
+   * Si aparece un diálogo, lo valida, lo cierra y reintenta con el máximo extraído o 1 %.
+   */
+  async aplicarDescuentoIndividual(clave: string, porcentaje: string): Promise<ResultadoDescuento> {
+    await this._llamarSetProductTotal(clave, porcentaje);
+    await this.page.waitForTimeout(PAUSES.CAMPO_HABILITADO);
+
+    const mensajeAlerta = await this._leerYCerrarAlerta();
+    let porcentajeAplicado = await this._leerValorDescuentoInput(clave);
+
+    if (mensajeAlerta) {
+      const pctActual = parseFloat(porcentajeAplicado);
+      const pctSolicitado = parseFloat(porcentaje);
+
+      if (pctActual === 0) {
+        // El sistema rechazó el descuento completamente.
+        return { clave, porcentajeSolicitado: porcentaje, porcentajeAplicado: '0', escenario: 'sin_descuento', mensajeAlerta };
+      }
+
+      if (pctActual >= pctSolicitado) {
+        // El sistema mostró un diálogo pero no corrigió el input: intentar con el máximo del mensaje.
+        const match = mensajeAlerta.match(/(\d+(?:[.,]\d+)?)\s*%/);
+        const retryPct = match ? match[1].replace(',', '.') : '1';
+        await this._llamarSetProductTotal(clave, retryPct);
+        await this.page.waitForTimeout(PAUSES.CAMPO_HABILITADO);
+        await this._leerYCerrarAlerta();
+        porcentajeAplicado = await this._leerValorDescuentoInput(clave);
+
+        if (parseFloat(porcentajeAplicado) === 0) {
+          return { clave, porcentajeSolicitado: porcentaje, porcentajeAplicado: '0', escenario: 'sin_descuento', mensajeAlerta };
+        }
+      }
+    }
+
+    const pctAplicado = parseFloat(porcentajeAplicado);
+    const pctSolicitado = parseFloat(porcentaje);
+    const escenario: EscenarioDescuento =
+      pctAplicado <= 0               ? 'sin_descuento'  :
+      pctAplicado < pctSolicitado - 0.01 ? 'maximo_superado' :
+                                        'aplicado';
+
+    await this.page.waitForTimeout(PAUSES.VER_MONTO);
+    return { clave, porcentajeSolicitado: porcentaje, porcentajeAplicado, escenario, mensajeAlerta: mensajeAlerta ?? undefined };
+  }
+
+  /** Lee el total de una línea del carrito como número. */
+  async obtenerTotalProducto(clave: string): Promise<number> {
+    const texto = await this.page.locator(`#total_by_product_${clave}`).textContent() ?? '0';
+    return parseFloat(texto.replace(/[^0-9.]/g, '')) || 0;
+  }
+
+  /** Lee el subtotal base del carrito como número (no refleja descuentos individuales). */
+  async obtenerSubtotalNumerico(): Promise<number> {
+    const texto = await this.page.locator(L.TOTAL_SUB).textContent() ?? '$0.00';
+    return parseFloat(texto.replace(/[^0-9.]/g, '')) || 0;
+  }
+
+  /** Lee el total final de venta como número (sí refleja descuentos individuales). */
+  async obtenerTotalVentaNumerico(): Promise<number> {
+    const texto = await this.page.evaluate(
+      (id) => document.getElementById(id)?.textContent ?? '$0.00',
+      L.TOTAL_MODAL
+    );
+    return parseFloat(texto.replace(/[^0-9.]/g, '')) || 0;
+  }
+
+  /** Pago mixto: activa tarjeta manteniendo efectivo, luego llena ambos montos. */
+  async seleccionarPagoMixto(montoTarjeta: string, montoEfectivo: string) {
+    await this.page.evaluate(
+      (id) => (document.getElementById(id) as HTMLInputElement).click(),
+      CHECKBOX_ID.TARJETA
+    );
+    await this.page.waitForTimeout(PAUSES.CAMPO_HABILITADO);
+    await this.page.locator('#payment_credit_card_total').fill(montoTarjeta);
+    await this.page.locator(L.EFECTIVO_MONTO).fill(montoEfectivo);
+    await this.page.waitForTimeout(PAUSES.VER_MONTO);
+  }
+
   // ─── Métodos privados ────────────────────────────────────────────────────────
 
+  private async _llamarSetProductTotal(clave: string, porcentaje: string) {
+    await this.page.evaluate(
+      ({ key, value }) => {
+        const el = document.getElementById(`input_product_discount_${key}`) as HTMLInputElement;
+        if (el) el.value = value;
+        (window as any).set_product_total(key);
+      },
+      { key: clave, value: porcentaje }
+    );
+  }
+
+  private async _leerValorDescuentoInput(clave: string): Promise<string> {
+    return this.page.evaluate(
+      (key) => (document.getElementById(`input_product_discount_${key}`) as HTMLInputElement)?.value ?? '0',
+      clave
+    );
+  }
+
+  /**
+   * Detecta y cierra un diálogo de alerta (SweetAlert2 o Bootstrap modal visible).
+   * Devuelve el texto completo del diálogo, o null si no había ninguno.
+   */
+  private async _leerYCerrarAlerta(): Promise<string | null> {
+    // SweetAlert2
+    const swal2 = this.page.locator('.swal2-popup');
+    if (await swal2.isVisible().catch(() => false)) {
+      const titulo  = await this.page.locator('.swal2-title').textContent().catch(() => '') ?? '';
+      const cuerpo  = await this.page.locator('.swal2-html-container, .swal2-content').first().textContent().catch(() => '') ?? '';
+      const texto   = `${titulo} ${cuerpo}`.trim();
+      const btnOk   = this.page.locator('.swal2-confirm');
+      if (await btnOk.isVisible().catch(() => false)) {
+        await btnOk.click();
+      } else {
+        await this.page.keyboard.press('Escape');
+      }
+      await this.page.waitForTimeout(PAUSES.VER_MODAL);
+      return texto || null;
+    }
+
+    // Bootstrap modal (si el framework usa uno en lugar de SweetAlert2)
+    const modalBody = await this.page.evaluate(() => {
+      const modal = [...document.querySelectorAll('.modal')].find(
+        m => window.getComputedStyle(m).display !== 'none'
+      );
+      if (!modal) return null;
+      const titulo = modal.querySelector('.modal-title')?.textContent?.trim() ?? '';
+      const cuerpo = modal.querySelector('.modal-body')?.textContent?.trim() ?? '';
+      return `${titulo} ${cuerpo}`.trim() || null;
+    });
+    if (modalBody) {
+      await this.page.keyboard.press('Escape');
+      await this.page.waitForTimeout(PAUSES.VER_MODAL);
+      return modalBody;
+    }
+
+    return null;
+  }
+
   private async _abrirCajaSiEstaCerrada() {
-    const modalCaja = this.page.getByText(L.CAJA_TEXTO);
-    if (await modalCaja.isVisible().catch(() => false)) {
+    // Escenario 1: caja cerrada (apertura normal)
+    const modalCerrada = this.page.getByText(L.CAJA_TEXTO);
+    if (await modalCerrada.isVisible().catch(() => false)) {
       await this.page.locator(L.CAJA_MONTO).fill('0');
       await this.page.getByPlaceholder(L.CAJA_OBSERVACION).fill('Apertura automatizada');
       await this.page.locator(L.CAJA_BTN_ABRIR).click();
-      await this.page.waitForTimeout(2_000); // espera cierre del modal
+      await this.page.waitForTimeout(2_000);
+      return;
+    }
+
+    // Escenario 2: modal de apertura con discrepancia de efectivo (#dialog_cash_opening visible)
+    const dialogApertura = this.page.locator('#dialog_cash_opening');
+    if (await dialogApertura.isVisible().catch(() => false)) {
+      const montoInput = dialogApertura.locator('input[placeholder="0.00"]').first();
+      if (await montoInput.isVisible().catch(() => false)) {
+        await montoInput.fill('0');
+      }
+      const obsInput = dialogApertura.locator('textarea, input[type="text"]').last();
+      if (await obsInput.isVisible().catch(() => false)) {
+        await obsInput.fill('Apertura automatizada');
+      }
+      await this.page.locator(L.CAJA_BTN_ABRIR).click();
+      await this.page.waitForTimeout(2_000);
     }
   }
 
