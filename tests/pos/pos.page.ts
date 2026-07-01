@@ -47,11 +47,27 @@ const L = {
   EFECTIVO_MONTO:    '#payment_cash_total',    // señal confiable de apertura del modal
   EFECTIVO_RECIBIDO: '#received_mount',
 
-  // Apertura de caja
-  CAJA_TEXTO:       'Caja: Cerrada',
-  CAJA_BTN_ABRIR:   '#btn_open_cash',
-  CAJA_MONTO:       'input[placeholder="0.00"]',
-  CAJA_OBSERVACION: 'Ingrese sus observaciones aquí',
+  // Apertura de caja — un único contenedor cubre tanto "Caja: Cerrada" (sin
+  // discrepancia) como el aviso de diferencia de efectivo al intentar abrirla.
+  DIALOG_ABRIR_CAJA: '#dialog_cash_opening',
+  CAJA_TEXTO:        'Caja: Cerrada',
+  CAJA_BTN_ABRIR:    '#btn_open_cash',
+  CAJA_MONTO:        'input[placeholder="0.00"]',
+  CAJA_OBSERVACION:  'Ingrese sus observaciones aquí',
+
+  // Menú "Caja" → "(F12) Abrir/Cerrar Caja". El mismo ítem de menú despliega el
+  // modal "Abrir Caja" si la caja está cerrada, o "Detalle de Cierre" si está
+  // abierta — descubierto inspeccionando el DOM real, no asumido.
+  MENU_CAJA_BTN:        '#menu_cash',
+  MENU_CAJA_ITEM_F12:   'Abrir/Cerrar Caja',
+
+  // Modal "Detalle de Cierre" (cerrar caja)
+  DIALOG_CERRAR_CAJA:      '#dialog_cash_closing',
+  CIERRE_EFECTIVO_CAJA:    '#closure_posted_balance',
+  CIERRE_EFECTIVO_SIGUIENTE: '#next_cash_closing',
+  CIERRE_OBSERVACION:      '#closuse_cash_observation', // sic: typo real de la app ("closuse")
+  CIERRE_BTN_CERRAR:       '#btn_close_cash',
+  CIERRE_BTN_CANCELAR:     'button[data-dismiss="modal"]',
 } as const;
 
 // IDs de checkboxes de métodos de pago.
@@ -101,10 +117,211 @@ export type ResultadoDescuento = {
 export class PosPage {
   constructor(private readonly page: Page) {}
 
-  /** Navega al POS y abre la caja si el modal aparece. */
-  async navegar() {
+  /** Locator del modal "Abrir Caja", expuesto para que los tests validen su contenido. */
+  get modalAbrirCaja() {
+    return this.page.locator(L.DIALOG_ABRIR_CAJA);
+  }
+
+  /** Locator del primer producto disponible en el grid del POS. */
+  get primerProducto() {
+    return this.page.locator(L.PRODUCTO).first();
+  }
+
+  /** Navega al POS. No decide nada sobre el modal "Abrir Caja"; eso es responsabilidad del test. */
+  async irAlPos() {
     await this.page.goto(POS_URL, { waitUntil: 'commit', timeout: TIMEOUTS.NAVIGATE });
-    await this._abrirCajaSiEstaCerrada();
+  }
+
+  /**
+   * Espera a que el POS resuelva su estado inicial: el modal "Abrir Caja" (si la caja
+   * está cerrada) o el grid de productos (si no hay nada que resolver). Es necesario
+   * porque `irAlPos()` resuelve apenas el navegador recibe la respuesta
+   * (`waitUntil: 'commit'`), antes de que la comprobación asíncrona del estado de la
+   * caja termine de decidir cuál de los dos se renderiza.
+   */
+  async esperarEstadoInicial() {
+    // Ambos locators son independientes (no un `.or()` combinado): con dos elementos
+    // en el DOM a la vez, `.or()` viola el modo estricto de Playwright aunque solo
+    // uno esté visible. Se corre una carrera entre las dos esperas explícitas y se
+    // continúa apenas la primera de las dos efectivamente se vuelve visible.
+    await Promise.race([
+      this.modalAbrirCaja.waitFor({ state: 'visible', timeout: TIMEOUTS.PRODUCTS_LOAD }),
+      this.primerProducto.waitFor({ state: 'visible', timeout: TIMEOUTS.PRODUCTS_LOAD }),
+    ]);
+  }
+
+  /** Indica si el modal "Abrir Caja" está visible en este momento (chequeo puntual, sin esperar). */
+  async modalAbrirCajaVisible(): Promise<boolean> {
+    return this.modalAbrirCaja.isVisible();
+  }
+
+  /**
+   * Cierra el modal "Abrir Caja" con su botón "Cancelar", sin completar la apertura.
+   * Útil cuando el flujo no depende de tener la caja abierta.
+   */
+  async cerrarModalAbrirCaja() {
+    await expect(this.modalAbrirCaja).toBeVisible();
+    await this.modalAbrirCaja.getByRole('button', { name: 'Cancelar' }).click();
+    await expect(this.modalAbrirCaja).toBeHidden();
+  }
+
+  /**
+   * Completa la apertura de caja desde el modal "Abrir Caja": monto en efectivo,
+   * observaciones y confirmación. No hay evidencia confirmada de que el sistema
+   * requiera más de una confirmación para cerrar el modal, así que se hace un único
+   * click; si el modal no se cierra, la aserción de visibilidad del test debe fallar
+   * para exponer la causa real (p. ej. un monto o una diferencia de efectivo no
+   * contemplados) en vez de enmascararla con reintentos.
+   */
+  async completarAperturaCaja() {
+    await expect(this.modalAbrirCaja).toBeVisible();
+
+    await this.modalAbrirCaja.locator(L.CAJA_MONTO).first().fill('0');
+    await this.modalAbrirCaja.getByPlaceholder(L.CAJA_OBSERVACION).fill('Apertura automatizada');
+    await this.modalAbrirCaja.locator(L.CAJA_BTN_ABRIR).click();
+  }
+
+  /** Locator del modal "Detalle de Cierre" (cerrar caja). */
+  get modalCerrarCaja() {
+    return this.page.locator(L.DIALOG_CERRAR_CAJA);
+  }
+
+  /** Modal para activar las notificaciones del navegador: elemento opcional, ajeno al flujo de caja. */
+  get modalNotificaciones() {
+    return this.page.locator('#workshop-web-notification-permission');
+  }
+
+  /**
+   * Cierra el modal de activar notificaciones si aparece. Es un elemento opcional
+   * del sistema (puede o no aparecer) que puede quedar sobre el encabezado e
+   * interceptar clicks; no tiene relación con ningún flujo de negocio, así que su
+   * aparición o ausencia nunca debe hacer fallar el test.
+   */
+  async cerrarModalNotificacionesSiAparece() {
+    if (await this.modalNotificaciones.isVisible().catch(() => false)) {
+      await this.modalNotificaciones
+        .getByRole('button', { name: 'Cerrar' })
+        .first()
+        .click()
+        .catch(() => {});
+      await expect(this.modalNotificaciones).toBeHidden().catch(() => {});
+    }
+  }
+
+  /** Abre el menú "Caja" del encabezado del POS. */
+  async abrirMenuCaja() {
+    // El aviso de permisos de notificación del navegador puede quedar sobre el
+    // encabezado e interceptar el click; se descarta aquí como parte de la propia
+    // acción, sin importar el estado de la caja.
+    await this.cerrarModalNotificacionesSiAparece();
+
+    await this.page.locator(L.MENU_CAJA_BTN).click();
+  }
+
+  /**
+   * Selecciona "(F12) Abrir/Cerrar Caja" del menú "Caja" ya desplegado. Este único
+   * ítem muestra el modal "Abrir Caja" si la caja está cerrada, o "Detalle de
+   * Cierre" si está abierta — el sistema decide cuál, no el test.
+   */
+  async seleccionarAbrirCerrarCaja() {
+    await this.cerrarModalNotificacionesSiAparece();
+    await this.page.locator('li', { hasText: L.MENU_CAJA_ITEM_F12 }).click();
+  }
+
+  /**
+   * Espera a que "Abrir/Cerrar Caja (F12)" resuelva cuál de los dos modales
+   * corresponde. El click solo dispara la decisión; el propio modal puede tardar
+   * en aparecer, así que se corre una carrera entre ambos en vez de asumir que ya
+   * está resuelta justo después del click.
+   */
+  async esperarResultadoMenuCaja() {
+    await Promise.race([
+      this.modalAbrirCaja.waitFor({ state: 'visible', timeout: TIMEOUTS.PAYMENT_MODAL }),
+      this.modalCerrarCaja.waitFor({ state: 'visible', timeout: TIMEOUTS.PAYMENT_MODAL }),
+    ]);
+  }
+
+  /** Indica si el modal "Detalle de Cierre" está visible en este momento (chequeo puntual, sin esperar). */
+  async modalCerrarCajaVisible(): Promise<boolean> {
+    return this.modalCerrarCaja.isVisible();
+  }
+
+  /**
+   * Completa el formulario de cierre: efectivo en caja, efectivo para la
+   * siguiente caja y observaciones. No confirma el cierre.
+   */
+  async completarFormularioCerrarCaja(efectivoEnCaja: string, efectivoSiguienteCaja: string, observacion: string) {
+    await expect(this.modalCerrarCaja).toBeVisible();
+
+    await this.modalCerrarCaja.locator(L.CIERRE_EFECTIVO_CAJA).fill(efectivoEnCaja);
+    await this.modalCerrarCaja.locator(L.CIERRE_EFECTIVO_SIGUIENTE).fill(efectivoSiguienteCaja);
+    await this.modalCerrarCaja.locator(L.CIERRE_OBSERVACION).fill(observacion);
+  }
+
+  /**
+   * Confirma el cierre de caja: presiona "Cerrar Caja" y acepta el diálogo de
+   * confirmación ("¿Está seguro(a) de que desea cerrar esta caja?") que el sistema
+   * siempre muestra a continuación.
+   *
+   * El diálogo (SweetAlert v1) agrega la clase "visible" recién cuando termina su
+   * animación de entrada; antes de eso su propio manejador de click no procesa la
+   * confirmación (queda visible para Playwright por tamaño, pero el click no
+   * dispara nada). Por eso se espera explícitamente esa clase antes de hacer click,
+   * en vez de confiar en la visibilidad genérica.
+   *
+   * La señal de éxito real es la respuesta del propio cierre (`closePosCash`), no
+   * la ventana de reporte: en un reintento (si el ciclo ya intentó cerrar antes en
+   * esta misma página) el navegador puede reutilizar una ventana ya abierta en vez
+   * de emitir un nuevo evento "popup", lo que dejaría la espera del popup colgada
+   * para siempre aunque el cierre haya sido exitoso. Si sí aparece una ventana
+   * nueva, se muestra y se cierra para volver al POS; si no aparece, el cierre
+   * igualmente se considera exitoso en base a la respuesta del servidor.
+   */
+  async confirmarCerrarCaja() {
+    const cierreConfirmadoPromise = this.page.waitForResponse(
+      (res) => res.url().includes('closePosCash'),
+      { timeout: TIMEOUTS.PRINT_POPUP }
+    );
+    const popupPromise = this.page.waitForEvent('popup', { timeout: TIMEOUTS.PRINT_POPUP }).catch(() => null);
+
+    // Ambos avisos opcionales se descartan ANTES de confirmar, nunca después: el
+    // cierre exitoso recarga la página (confirmado inspeccionando el DOM real tras
+    // el click de confirmación — "Execution context was destroyed... navigation"),
+    // lo que vuelve a generar el mismo aviso de consecutivo desde cero. Intentar
+    // cerrarlo después del click compite con esa recarga en vez de resolverlo.
+    await this.cerrarModalNotificacionesSiAparece();
+    await this.cerrarAvisoConsecutivoSiAparece();
+    await this.modalCerrarCaja.locator(L.CIERRE_BTN_CERRAR).click();
+    await this.page.locator('.sweet-alert.visible').waitFor({ state: 'visible', timeout: TIMEOUTS.PAYMENT_MODAL });
+    await this.page.locator('.sweet-alert.visible button.confirm').click();
+
+    await cierreConfirmadoPromise;
+
+    const printPage = await popupPromise;
+    if (printPage) {
+      await this.mostrarYCerrarVentanaImpresion(printPage);
+    }
+  }
+
+  /** Cancela el cierre de caja cerrando el modal "Detalle de Cierre" sin confirmar. */
+  async cancelarCerrarCaja() {
+    await expect(this.modalCerrarCaja).toBeVisible();
+    await this.modalCerrarCaja.locator(L.CIERRE_BTN_CANCELAR).click();
+    await expect(this.modalCerrarCaja).toBeHidden();
+  }
+
+  /**
+   * Presiona "Facturar" para abrir el modal de pago. La apertura de caja, si es
+   * necesaria, solo puede ocurrir más adelante al confirmar el pago —no aquí—.
+   */
+  async presionarFacturar() {
+    await this.page.locator(L.BTN_FACTURAR).click();
+  }
+
+  /** Espera a que el modal de pago esté listo para recibir el método de pago. */
+  async esperarModalPago() {
+    await this.page.locator(L.EFECTIVO_MONTO).waitFor({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await this.page.waitForTimeout(PAUSES.VER_MODAL);
   }
 
   /** Espera el primer producto visible, lo agrega al carrito y pausa para verlo. */
@@ -113,17 +330,6 @@ export class PosPage {
     await this.page.waitForTimeout(PAUSES.VER_PRODUCTOS);
     await this.page.locator(L.PRODUCTO).first().click();
     await this.page.waitForTimeout(PAUSES.VER_CARRITO);
-  }
-
-  /**
-   * Abre el modal de pago.
-   * Usa #payment_cash_total como señal de apertura porque #total_sale_txt
-   * puede estar hidden durante el render inicial del modal.
-   */
-  async abrirModalPago() {
-    await this.page.locator(L.BTN_FACTURAR).click();
-    await this.page.locator(L.EFECTIVO_MONTO).waitFor({ timeout: TIMEOUTS.PAYMENT_MODAL });
-    await this.page.waitForTimeout(PAUSES.VER_MODAL);
   }
 
   /** Llena el monto en efectivo y el dinero recibido. Efectivo permite superar el total. */
@@ -150,15 +356,41 @@ export class PosPage {
     await this.page.waitForTimeout(PAUSES.VER_MONTO);
   }
 
+  /** Aviso de "consecutivo de facturación fuera de rango": advertencia informativa del sistema, no bloqueante. */
+  get avisoConsecutivoFueraDeRango() {
+    return this.page.locator('.noty_bar').filter({ hasText: /consecutivo/i });
+  }
+
   /**
-   * Confirma la factura, espera la ventana de impresión, la muestra 4 segundos
-   * y la cierra para volver al POS.
+   * Cierra el aviso de consecutivo fuera de rango si aparece (los "noty" se cierran
+   * al hacer click). Es un aviso puramente informativo del sistema (no bloquea
+   * ninguna acción) que puede volver a generarse por su cuenta —p. ej. tras una
+   * recarga de página no relacionada—, así que ni el click ni la validación de que
+   * desapareció usan aserciones duras: su reaparición no debe hacer fallar el test.
    */
-  async confirmarFactura() {
-    const [printPage] = await Promise.all([
-      this.page.waitForEvent('popup', { timeout: TIMEOUTS.PRINT_POPUP }),
-      this.page.locator(L.BTN_CONFIRMAR).click(),
-    ]);
+  async cerrarAvisoConsecutivoSiAparece() {
+    const aviso = this.avisoConsecutivoFueraDeRango;
+    const aparecio = await aviso.waitFor({ state: 'visible', timeout: 5_000 }).then(() => true).catch(() => false);
+    if (aparecio) {
+      await aviso.click().catch(() => {});
+      await aviso.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => {});
+    }
+  }
+
+  /**
+   * Presiona el botón "Facturar" del modal de pago (confirma el pago), sin esperar
+   * su resultado. Es este botón —no el que abre el modal de pago— el que puede
+   * mostrar el modal "Abrir Caja" si la caja está cerrada.
+   */
+  async presionarConfirmarPago() {
+    await this.page.locator(L.BTN_CONFIRMAR).click();
+  }
+
+  /**
+   * Muestra la ventana de impresión de la factura (señal de que se generó
+   * correctamente) 4 segundos y la cierra para volver al POS.
+   */
+  async mostrarYCerrarVentanaImpresion(printPage: Page) {
     await printPage.waitForLoadState('domcontentloaded');
     await this.page.waitForTimeout(PAUSES.VER_FACTURA);
     await printPage.close();
@@ -289,6 +521,7 @@ export class PosPage {
     );
     await this.page.waitForTimeout(PAUSES.CAMPO_HABILITADO);
     await this.page.locator('#payment_credit_card_total').fill(montoTarjeta);
+    await this.page.getByPlaceholder('Referencia pago en tarjeta').fill('AUTOMATIZADO');
     await this.page.locator(L.EFECTIVO_MONTO).fill(montoEfectivo);
     await this.page.waitForTimeout(PAUSES.VER_MONTO);
   }
@@ -351,33 +584,6 @@ export class PosPage {
     }
 
     return null;
-  }
-
-  private async _abrirCajaSiEstaCerrada() {
-    // Escenario 1: caja cerrada (apertura normal)
-    const modalCerrada = this.page.getByText(L.CAJA_TEXTO);
-    if (await modalCerrada.isVisible().catch(() => false)) {
-      await this.page.locator(L.CAJA_MONTO).fill('0');
-      await this.page.getByPlaceholder(L.CAJA_OBSERVACION).fill('Apertura automatizada');
-      await this.page.locator(L.CAJA_BTN_ABRIR).click();
-      await this.page.waitForTimeout(2_000);
-      return;
-    }
-
-    // Escenario 2: modal de apertura con discrepancia de efectivo (#dialog_cash_opening visible)
-    const dialogApertura = this.page.locator('#dialog_cash_opening');
-    if (await dialogApertura.isVisible().catch(() => false)) {
-      const montoInput = dialogApertura.locator('input[placeholder="0.00"]').first();
-      if (await montoInput.isVisible().catch(() => false)) {
-        await montoInput.fill('0');
-      }
-      const obsInput = dialogApertura.locator('textarea, input[type="text"]').last();
-      if (await obsInput.isVisible().catch(() => false)) {
-        await obsInput.fill('Apertura automatizada');
-      }
-      await this.page.locator(L.CAJA_BTN_ABRIR).click();
-      await this.page.waitForTimeout(2_000);
-    }
   }
 
   /**
