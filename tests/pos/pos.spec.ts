@@ -1,5 +1,5 @@
-import { test, expect, Page } from '@playwright/test';
-import { PosPage, METODO, MONTO_EFECTIVO, DESCUENTO_INDIVIDUAL_PCT, TIMEOUTS, ResultadoDescuento } from './pos.page';
+import { test, expect, Locator, Page } from '@playwright/test';
+import { PosPage, METODO, MONTO_EFECTIVO, DESCUENTO_INDIVIDUAL_PCT, CAJA_TEXTO, TIMEOUTS, ResultadoDescuento } from './pos.page';
 
 /**
  * Carga el POS y decide qué hacer con el modal "Abrir Caja" si aparece: lo valida y
@@ -11,7 +11,7 @@ async function cargarPosYCerrarModalSiAparece(pos: PosPage) {
   await pos.esperarEstadoInicial();
   if (await pos.modalAbrirCajaVisible()) {
     await expect(pos.modalAbrirCaja).toBeVisible();
-    await expect(pos.modalAbrirCaja.getByText('Caja: Cerrada')).toBeVisible();
+    await expect(pos.modalAbrirCaja.getByText(CAJA_TEXTO)).toBeVisible();
     await pos.cerrarModalAbrirCaja();
   }
 }
@@ -24,6 +24,15 @@ async function cargarPosYCerrarModalSiAparece(pos: PosPage) {
 async function abrirModalDePago(pos: PosPage) {
   await pos.presionarFacturar();
   await pos.esperarModalPago();
+}
+
+/**
+ * Espera (con reintentos reales, no una pausa fija) a que la condición de
+ * "activo" dada se cumpla — usado para confirmar que una categoría o un tab
+ * quedó seleccionado tras hacer click.
+ */
+async function esperarQuedaActivo(chequeoActivo: () => Promise<boolean>) {
+  await expect.poll(chequeoActivo).toBe(true);
 }
 
 /**
@@ -80,7 +89,7 @@ test('facturar producto con efectivo en POS', async ({ page }) => {
 
   await test.step('Abrir POS y agregar producto al carrito', async () => {
     await cargarPosYCerrarModalSiAparece(pos);
-    await pos.agregarPrimerProducto();
+    await pos.agregarPrimerProductoDePrecioFijo();
   });
 
   await test.step('Abrir modal de pago', async () => {
@@ -106,7 +115,7 @@ test('facturar producto con tarjeta en POS', async ({ page }) => {
 
   await test.step('Abrir POS y agregar producto al carrito', async () => {
     await cargarPosYCerrarModalSiAparece(pos);
-    await pos.agregarPrimerProducto();
+    await pos.agregarPrimerProductoDePrecioFijo();
   });
 
   await test.step('Abrir modal de pago', async () => {
@@ -132,7 +141,7 @@ test('facturar producto con SINPE Móvil en POS', async ({ page }) => {
 
   await test.step('Abrir POS y agregar producto al carrito', async () => {
     await cargarPosYCerrarModalSiAparece(pos);
-    await pos.agregarPrimerProducto();
+    await pos.agregarPrimerProductoDePrecioFijo();
   });
 
   await test.step('Abrir modal de pago', async () => {
@@ -158,7 +167,7 @@ test('facturar producto con transacción bancaria en POS', async ({ page }) => {
 
   await test.step('Abrir POS y agregar producto al carrito', async () => {
     await cargarPosYCerrarModalSiAparece(pos);
-    await pos.agregarPrimerProducto();
+    await pos.agregarPrimerProductoDePrecioFijo();
   });
 
   await test.step('Abrir modal de pago', async () => {
@@ -192,8 +201,10 @@ test('facturar dos productos con descuento individual y pago mixto (tarjeta + ef
   });
 
   await test.step('Agregar dos productos al carrito', async () => {
-    await pos.agregarPrimerProducto();       // producto índice 0 (FRENOS)
-    await pos.agregarProductoPorIndice(2);   // producto índice 2 (PRODUCTO CON 13%)
+    // Por nombre exacto, no por posición: el catálogo puede reordenarse en
+    // cualquier momento con solo agregar productos nuevos.
+    await pos.agregarProductoPorNombre('FRENOS');
+    await pos.agregarProductoPorNombre('PRODUCTO CON 13%');
   });
 
   await test.step('Desactivar descuento general si está activo', async () => {
@@ -244,11 +255,7 @@ test('facturar dos productos con descuento individual y pago mixto (tarjeta + ef
   });
 
   await test.step('Configurar pago mixto: 50% tarjeta + 50% efectivo', async () => {
-    const textoTotal = await page.evaluate(
-      (id) => document.getElementById(id)?.textContent ?? '',
-      'total_sale_txt'
-    );
-    const totalNum  = parseFloat(textoTotal.replace(/[^0-9.]/g, ''));
+    const totalNum  = await pos.obtenerTotalVentaNumerico();
     const montoCard = (Math.floor(totalNum * 100 / 2) / 100).toFixed(2);
     const montoCash = (totalNum - parseFloat(montoCard)).toFixed(2);
     await pos.seleccionarPagoMixto(montoCard, montoCash);
@@ -339,9 +346,182 @@ test('Cerrar caja', async ({ page }) => {
     await pos.irAlPos();
     await pos.esperarEstadoInicial();
     await expect(pos.modalAbrirCaja).toBeVisible();
-    await expect(pos.modalAbrirCaja.getByText('Caja: Cerrada')).toBeVisible();
+    await expect(pos.modalAbrirCaja.getByText(CAJA_TEXTO)).toBeVisible();
 
     // No debe quedar ningún mensaje de error visible tras el cierre.
     await expect(page.locator('.noty_bar', { hasText: /error/i })).toHaveCount(0);
+  });
+});
+
+test('Abrir Historial de Facturas', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const pos = new PosPage(page);
+  let historial: Page;
+
+  await test.step('Abrir POS y cerrar modales opcionales si aparecen', async () => {
+    await cargarPosYCerrarModalSiAparece(pos);
+    await pos.cerrarModalNotificacionesSiAparece();
+    await pos.cerrarAvisoConsecutivoSiAparece();
+  });
+
+  await test.step('Abrir el menú de tres puntos y seleccionar "Historial de Facturas"', async () => {
+    await pos.abrirMenuTresPuntos();
+    historial = await pos.abrirHistorialFacturas();
+  });
+
+  await test.step('Validar que la ventana de Historial de Facturas se abrió correctamente', async () => {
+    await historial.waitForLoadState('domcontentloaded');
+    expect(historial.url()).toContain('printPosReceip');
+  });
+
+  await test.step('Cerrar la ventana', async () => {
+    await historial.close();
+  });
+});
+
+test('Abrir Historial de Proformas', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const pos = new PosPage(page);
+  let proformas: Page;
+
+  await test.step('Abrir POS', async () => {
+    await cargarPosYCerrarModalSiAparece(pos);
+  });
+
+  await test.step('Cerrar mensaje de consecutivo y modal de permisos si aparecen, antes de usar el menú de tres puntos', async () => {
+    // Ambos son avisos opcionales del sistema: pueden aparecer o no, y en
+    // ningún caso deben bloquear el resto del flujo.
+    await pos.cerrarAvisoConsecutivoSiAparece();
+    await pos.cerrarModalNotificacionesSiAparece();
+  });
+
+  await test.step('Abrir el menú de tres puntos y seleccionar "Historial de Proformas"', async () => {
+    await pos.abrirMenuTresPuntos();
+    proformas = await pos.abrirHistorialProformas();
+  });
+
+  await test.step('Validar que la ventana de Historial de Proformas se abrió correctamente', async () => {
+    await proformas.waitForLoadState('domcontentloaded');
+    expect(proformas.url()).toContain('printPosProform');
+  });
+
+  await test.step('Cerrar la ventana', async () => {
+    await proformas.close();
+  });
+});
+
+test('Seleccionar una categoría', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const pos = new PosPage(page);
+
+  await test.step('Abrir el POS', async () => {
+    await cargarPosYCerrarModalSiAparece(pos);
+  });
+
+  await test.step('Seleccionar la categoría "Combos"', async () => {
+    await pos.categoriaCombos.click();
+  });
+
+  await test.step('Validar que la categoría quedó seleccionada', async () => {
+    await esperarQuedaActivo(() => pos.categoriaEstaActiva(pos.categoriaCombos));
+  });
+});
+
+test('Seleccionar los combos de la sección Categorías', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const pos = new PosPage(page);
+
+  await test.step('Abrir el POS', async () => {
+    await cargarPosYCerrarModalSiAparece(pos);
+  });
+
+  // Los cinco tipos de categoría disponibles en la barra lateral. "Lista de
+  // precios" queda fuera: el propio sistema la mantiene oculta (display: none)
+  // para esta compañía, así que no es una opción real a probar.
+  const combos: Array<{ nombre: string; obtenerLocator: () => Locator }> = [
+    { nombre: 'TODOS', obtenerLocator: () => pos.categoriaTodos },
+    { nombre: 'Combos', obtenerLocator: () => pos.categoriaCombos },
+    { nombre: 'Categoría', obtenerLocator: () => pos.categoriaTipo },
+    { nombre: 'Productos fraccionados', obtenerLocator: () => pos.categoriaProductosFraccionados },
+    { nombre: 'Productos variantes', obtenerLocator: () => pos.categoriaProductosVariantes },
+  ];
+
+  for (const combo of combos) {
+    await test.step(`Seleccionar "${combo.nombre}" y validar que cambió la información`, async () => {
+      const item = combo.obtenerLocator();
+      await item.click();
+      await esperarQuedaActivo(() => pos.categoriaEstaActiva(item));
+    });
+  }
+});
+
+test('Cambiar entre modo Lista y modo Cuadrícula', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const pos = new PosPage(page);
+  let listaActivaAlInicio = false;
+
+  await test.step('Abrir el POS', async () => {
+    await cargarPosYCerrarModalSiAparece(pos);
+  });
+
+  await test.step('Detectar cuál vista está activa actualmente, sin asumirla', async () => {
+    const listaActiva = await pos.vistaEstaActiva(pos.botonVistaLista);
+    const cuadriculaActiva = await pos.vistaEstaActiva(pos.botonVistaCuadricula);
+
+    if (listaActiva) {
+      listaActivaAlInicio = true;
+    } else if (cuadriculaActiva) {
+      listaActivaAlInicio = false;
+    } else {
+      // Ninguno de los dos botones fue interactuado todavía en esta sesión:
+      // el sistema reporta el estilo inicial en un elemento oculto del DOM.
+      listaActivaAlInicio = (await pos.estiloVistaTexto()) === 'list';
+    }
+  });
+
+  await test.step('Cambiar a la vista contraria y validar el cambio', async () => {
+    if (listaActivaAlInicio) {
+      await pos.botonVistaCuadricula.click();
+      await expect.poll(() => pos.vistaEstaActiva(pos.botonVistaCuadricula)).toBe(true);
+      await expect.poll(() => pos.vistaEstaActiva(pos.botonVistaLista)).toBe(false);
+    } else {
+      await pos.botonVistaLista.click();
+      await expect.poll(() => pos.vistaEstaActiva(pos.botonVistaLista)).toBe(true);
+      await expect.poll(() => pos.vistaEstaActiva(pos.botonVistaCuadricula)).toBe(false);
+    }
+  });
+});
+
+test('Seleccionar el tab Servicios', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const pos = new PosPage(page);
+
+  await test.step('Abrir el POS', async () => {
+    await cargarPosYCerrarModalSiAparece(pos);
+  });
+
+  await test.step('Seleccionar el tab "Servicios"', async () => {
+    await pos.tabServicios.click();
+  });
+
+  await test.step('Validar que el tab "Servicios" quedó activo', async () => {
+    await esperarQuedaActivo(() => pos.tabEstaActivo(pos.tabServicios));
+  });
+});
+
+test('Seleccionar el tab End. Pintura', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const pos = new PosPage(page);
+
+  await test.step('Abrir el POS', async () => {
+    await cargarPosYCerrarModalSiAparece(pos);
+  });
+
+  await test.step('Seleccionar el tab "End. Pintura"', async () => {
+    await pos.tabPintura.click();
+  });
+
+  await test.step('Validar que el tab "End. Pintura" quedó activo', async () => {
+    await esperarQuedaActivo(() => pos.tabEstaActivo(pos.tabPintura));
   });
 });

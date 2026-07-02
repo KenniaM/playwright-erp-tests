@@ -1,4 +1,4 @@
-import { expect, Page } from '@playwright/test';
+import { expect, Locator, Page } from '@playwright/test';
 
 // ─── URL ──────────────────────────────────────────────────────────────────────
 
@@ -36,10 +36,16 @@ const L = {
   // POS principal
   PRODUCTO:          '.product_box_name',
   BTN_FACTURAR:      '#btn_pay_sale',
-  CARRITO_FILAS:     '#table_sale_pos tbody tr',
   CARRITO_CLAVES:    '#table_buy_list p[id^="drag_and_drop_"]',
-  TOTAL_SUB:         '#total_sub',
   DESCUENTO_GENERAL: '#apply_general_discount',
+
+  // Cualquier modal Bootstrap actualmente abierto (".in" es la clase estándar
+  // de Bootstrap 3 para "visible"). Se usa de forma genérica para detectar que
+  // un producto requiere un paso adicional antes de agregarse al carrito —
+  // "Monto a comprar" (precio variable) y "Cantidad de fracciones" (productos
+  // fraccionados) son dos casos confirmados, pero el catálogo puede tener
+  // otros tipos de producto con su propio modal que todavía no se han visto.
+  MODAL_ABIERTO: '.modal.in',
 
   // Modal de pago
   TOTAL_MODAL:       'total_sale_txt',         // ID sin # — se lee vía evaluate()
@@ -50,7 +56,6 @@ const L = {
   // Apertura de caja — un único contenedor cubre tanto "Caja: Cerrada" (sin
   // discrepancia) como el aviso de diferencia de efectivo al intentar abrirla.
   DIALOG_ABRIR_CAJA: '#dialog_cash_opening',
-  CAJA_TEXTO:        'Caja: Cerrada',
   CAJA_BTN_ABRIR:    '#btn_open_cash',
   CAJA_MONTO:        'input[placeholder="0.00"]',
   CAJA_OBSERVACION:  'Ingrese sus observaciones aquí',
@@ -68,7 +73,42 @@ const L = {
   CIERRE_OBSERVACION:      '#closuse_cash_observation', // sic: typo real de la app ("closuse")
   CIERRE_BTN_CERRAR:       '#btn_close_cash',
   CIERRE_BTN_CANCELAR:     'button[data-dismiss="modal"]',
+
+  // Menú de tres puntos del encabezado y sus opciones de historial. El botón
+  // (#demo-menu-lower-left) solo recibe el upgrade "MaterialButton" (estilo);
+  // quien realmente registra el listener que ABRE el menú es el <ul> con
+  // for="demo-menu-lower-left", al upgradearse a "MaterialMenu" — confirmado
+  // inspeccionando el DOM en vivo. Ese es el indicador real de que un click
+  // puede funcionar, no la sola presencia del botón.
+  MENU_TRES_PUNTOS:              '#demo-menu-lower-left',
+  MENU_TRES_PUNTOS_INICIALIZADO: 'ul.mdl-menu[for="demo-menu-lower-left"][data-upgraded*="MaterialMenu"]',
+  HISTORIAL_FACTURAS:   '#print_invoice a',
+  HISTORIAL_PROFORMAS:  '#view_proform',
+
+  // Categorías (barra lateral izquierda). "Lista de precios" no se incluye:
+  // el propio sistema la mantiene oculta (display: none) para esta compañía.
+  CAT_TODOS:         '.left_category_all',
+  CAT_COMBOS:        '.li_left_category_combo',
+  CAT_TIPO:          '#btn_cate_id_171',
+  CAT_FRACCIONADOS:  '#btn_cate_id_175',
+  CAT_VARIANTES:     '#btn_cate_id_174',
+  CAT_ACTIVE_CLASS:  'left_category_active',
+
+  // Toggle de vista de productos: lista vs. cuadrícula
+  VISTA_LISTA:            '#style_list',
+  VISTA_CUADRICULA:       '#style_box',
+  VISTA_ACTIVE_CLASS:     'product_style_active',
+  VISTA_ESTILO_ACTUAL:    '#current_product_style', // oculto en el DOM; refleja el estado inicial ("box")
+
+  // Tabs Servicios / End. Pintura
+  TAB_SERVICIOS:       '#ck_view_services',
+  TAB_PINTURA:         '#ck_view_straightening_and_paint',
+  TAB_ACTIVE_CLASS:    'btn_sale_selected',
 } as const;
+
+// Texto que identifica la caja cerrada en el modal "Abrir Caja". Exportado para
+// que los tests lo reutilicen en vez de repetir el literal.
+export const CAJA_TEXTO = 'Caja: Cerrada';
 
 // IDs de checkboxes de métodos de pago.
 // Usan slider CSS y están fuera del viewport del modal — se acceden via evaluate().
@@ -196,14 +236,25 @@ export class PosPage {
    * del sistema (puede o no aparecer) que puede quedar sobre el encabezado e
    * interceptar clicks; no tiene relación con ningún flujo de negocio, así que su
    * aparición o ausencia nunca debe hacer fallar el test.
+   *
+   * force:true + timeout explícito porque esta zona de la interfaz tiene
+   * elementos con animaciones activas que pueden dejar un click normal sin
+   * timeout esperando indefinidamente — este proyecto no configura
+   * actionTimeout, así que sin este límite propio el único freno sería el
+   * timeout completo del test. Si el click falla, no se oculta en silencio:
+   * queda una traza de diagnóstico, y el control vuelve al flujo para que
+   * quien llama (p. ej. el bucle de reintento de abrirMenuTresPuntos) decida
+   * si vuelve a comprobar el modal en su siguiente vuelta.
    */
   async cerrarModalNotificacionesSiAparece() {
     if (await this.modalNotificaciones.isVisible().catch(() => false)) {
       await this.modalNotificaciones
         .getByRole('button', { name: 'Cerrar' })
         .first()
-        .click()
-        .catch(() => {});
+        .click({ force: true, timeout: 5_000 })
+        .catch((e) => {
+          console.log(`[cerrarModalNotificacionesSiAparece] click en "Cerrar" no tuvo éxito: ${e.message}`);
+        });
       await expect(this.modalNotificaciones).toBeHidden().catch(() => {});
     }
   }
@@ -239,11 +290,6 @@ export class PosPage {
       this.modalAbrirCaja.waitFor({ state: 'visible', timeout: TIMEOUTS.PAYMENT_MODAL }),
       this.modalCerrarCaja.waitFor({ state: 'visible', timeout: TIMEOUTS.PAYMENT_MODAL }),
     ]);
-  }
-
-  /** Indica si el modal "Detalle de Cierre" está visible en este momento (chequeo puntual, sin esperar). */
-  async modalCerrarCajaVisible(): Promise<boolean> {
-    return this.modalCerrarCaja.isVisible();
   }
 
   /**
@@ -303,13 +349,6 @@ export class PosPage {
     }
   }
 
-  /** Cancela el cierre de caja cerrando el modal "Detalle de Cierre" sin confirmar. */
-  async cancelarCerrarCaja() {
-    await expect(this.modalCerrarCaja).toBeVisible();
-    await this.modalCerrarCaja.locator(L.CIERRE_BTN_CANCELAR).click();
-    await expect(this.modalCerrarCaja).toBeHidden();
-  }
-
   /**
    * Presiona "Facturar" para abrir el modal de pago. La apertura de caja, si es
    * necesaria, solo puede ocurrir más adelante al confirmar el pago —no aquí—.
@@ -324,12 +363,77 @@ export class PosPage {
     await this.page.waitForTimeout(PAUSES.VER_MODAL);
   }
 
-  /** Espera el primer producto visible, lo agrega al carrito y pausa para verlo. */
-  async agregarPrimerProducto() {
-    await this.page.locator(L.PRODUCTO).first().waitFor({ timeout: TIMEOUTS.PRODUCTS_LOAD });
-    await this.page.waitForTimeout(PAUSES.VER_PRODUCTOS);
-    await this.page.locator(L.PRODUCTO).first().click();
-    await this.page.waitForTimeout(PAUSES.VER_CARRITO);
+  /**
+   * Agrega al carrito el primer producto que se pueda facturar directamente,
+   * recorriendo el catálogo completo (sin depender de qué producto sea ni de
+   * en qué posición esté). Si un producto requiere un paso adicional antes de
+   * agregarse —confirmado hasta ahora en dos casos: "Monto a comprar" para
+   * precio variable, y "Cantidad de fracciones" para productos fraccionados—
+   * lo descarta y prueba con el siguiente. La detección es genérica (cualquier
+   * modal de Bootstrap que se abra tras el click, validando que el carrito no
+   * creció) en vez de reconocer un modal específico por su título, porque el
+   * catálogo puede tener —o sumar en el futuro— más de un tipo de producto que
+   * no se agrega con un solo click. Si ninguno funciona, falla con un mensaje
+   * explícito en vez de dejar el carrito vacío en silencio.
+   */
+  async agregarPrimerProductoDePrecioFijo() {
+    await this.cerrarModalNotificacionesSiAparece();
+    const productos = this.page.locator(L.PRODUCTO);
+    await productos.first().waitFor({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+    const total = await productos.count();
+    if (total === 0) {
+      throw new Error('No hay ningún producto visible en el catálogo del POS para intentar facturar.');
+    }
+
+    const modalAbierto = this.page.locator(L.MODAL_ABIERTO);
+
+    for (let i = 0; i < total; i++) {
+      // Se cuenta por las claves del carrito (L.CARRITO_CLAVES → #table_buy_list),
+      // no por L.CARRITO_FILAS (#table_sale_pos): ese id no existe en el DOM real
+      // — confirmado inspeccionando el DOM en vivo — así que su conteo siempre
+      // da 0 y nunca detectaría una fila agregada.
+      const clavesAntes = await this.page.locator(L.CARRITO_CLAVES).count();
+      await productos.nth(i).click();
+
+      const requiereInteraccionAdicional = await modalAbierto
+        .waitFor({ state: 'visible', timeout: 2_000 })
+        .then(() => true)
+        .catch(() => false);
+
+      if (requiereInteraccionAdicional) {
+        // Validar que el carrito efectivamente no creció —confirma que el
+        // producto no se agregó y que este modal es del tipo "requiere un
+        // paso adicional", no un efecto secundario inofensivo— antes de
+        // descartarlo y probar con el siguiente.
+        const clavesConModalAbierto = await this.page.locator(L.CARRITO_CLAVES).count();
+        expect(clavesConModalAbierto, 'El carrito creció pero además se abrió un modal: revisar manualmente.').toBe(clavesAntes);
+
+        // force:true porque el panel de ayuda del aviso de notificaciones puede
+        // reaparecer de forma asíncrona y quedar interceptando el click, igual
+        // que ya se observó con el menú de tres puntos.
+        await modalAbierto.getByRole('button', { name: 'Cerrar', exact: true }).click({ force: true });
+        await expect(modalAbierto).toBeHidden();
+        continue; // este producto no se agrega directamente: probar el siguiente
+      }
+
+      // No apareció ningún modal: confirmar que realmente se agregó al
+      // carrito antes de darlo por bueno — un click sin efecto no debe pasar
+      // desapercibido.
+      const agregado = await expect.poll(
+        () => this.page.locator(L.CARRITO_CLAVES).count(),
+        { timeout: 3_000 }
+      ).toBeGreaterThan(clavesAntes).then(() => true).catch(() => false);
+
+      if (agregado) {
+        await this.page.waitForTimeout(PAUSES.VER_CARRITO);
+        return;
+      }
+      // Ni modal ni fila nueva: seguir probando con el siguiente producto.
+    }
+
+    throw new Error(
+      `No se encontró ningún producto de precio fijo disponible para facturar entre los ${total} productos visibles del catálogo.`
+    );
   }
 
   /** Llena el monto en efectivo y el dinero recibido. Efectivo permite superar el total. */
@@ -399,21 +503,34 @@ export class PosPage {
 
   /** Verifica que no quedan filas en el carrito tras la venta. */
   async validarCarritoVacio() {
-    const filas = await this.page.locator(L.CARRITO_FILAS).count();
-    expect(filas).toBe(0);
+    const claves = await this.page.locator(L.CARRITO_CLAVES).count();
+    expect(claves).toBe(0);
     await this.page.waitForTimeout(PAUSES.ESTADO_FINAL);
   }
 
-  /** Agrega el producto en la posición n del grid (0-indexed). Cierra el modal
-   *  "Monto a comprar" si aparece para productos sin precio fijo. */
-  async agregarProductoPorIndice(n: number) {
-    await this.page.locator(L.PRODUCTO).nth(n).click();
-    await this.page.waitForTimeout(1_500);
-    const modalMonto = this.page.getByText('Monto a comprar', { exact: false });
-    if (await modalMonto.isVisible().catch(() => false)) {
-      await this.page.keyboard.press('Escape');
-      await this.page.waitForTimeout(500);
-    }
+  /**
+   * Localiza la card de un producto en el grid por su nombre exacto, no por
+   * posición: el catálogo puede reordenarse en cualquier momento con solo
+   * agregar productos nuevos (confirmado: un producto nuevo desplazó a todos
+   * los demás un puesto), así que depender de un índice es frágil por diseño.
+   */
+  productoPorNombre(nombre: string): Locator {
+    const nombreEscapado = nombre.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return this.page.locator(L.PRODUCTO).filter({ hasText: new RegExp(`^\\s*${nombreEscapado}\\s*$`) });
+  }
+
+  /**
+   * Agrega al carrito el producto identificado por su nombre exacto (no por
+   * posición en el grid). Falla explícitamente si no encuentra exactamente un
+   * producto con ese nombre, en vez de clickear a ciegas sobre lo que sea que
+   * esté en una posición determinada — que es precisamente lo que rompía
+   * `agregarProductoPorIndice` cuando el catálogo cambiaba de orden.
+   */
+  async agregarProductoPorNombre(nombre: string) {
+    const producto = this.productoPorNombre(nombre);
+    await expect(producto, `No se encontró exactamente un producto llamado "${nombre}" en el catálogo`).toHaveCount(1, { timeout: TIMEOUTS.PRODUCTS_LOAD });
+    await this.page.waitForTimeout(PAUSES.VER_PRODUCTOS);
+    await producto.click();
     await this.page.waitForTimeout(PAUSES.VER_CARRITO);
   }
 
@@ -498,12 +615,6 @@ export class PosPage {
     return parseFloat(texto.replace(/[^0-9.]/g, '')) || 0;
   }
 
-  /** Lee el subtotal base del carrito como número (no refleja descuentos individuales). */
-  async obtenerSubtotalNumerico(): Promise<number> {
-    const texto = await this.page.locator(L.TOTAL_SUB).textContent() ?? '$0.00';
-    return parseFloat(texto.replace(/[^0-9.]/g, '')) || 0;
-  }
-
   /** Lee el total final de venta como número (sí refleja descuentos individuales). */
   async obtenerTotalVentaNumerico(): Promise<number> {
     const texto = await this.page.evaluate(
@@ -524,6 +635,169 @@ export class PosPage {
     await this.page.getByPlaceholder('Referencia pago en tarjeta').fill('AUTOMATIZADO');
     await this.page.locator(L.EFECTIVO_MONTO).fill(montoEfectivo);
     await this.page.waitForTimeout(PAUSES.VER_MONTO);
+  }
+
+  // ─── Menú de tres puntos: Historial de Facturas / Proformas ──────────────────
+
+  /**
+   * Abre el menú de tres puntos del encabezado del POS (Historial de Facturas,
+   * Historial de Proformas, Producto externo, etc.).
+   *
+   * La inestabilidad de este menú tiene dos causas distintas, confirmadas por
+   * inspección en vivo del DOM real (cronometraje del upgrade de MDL,
+   * document.elementFromPoint en el punto de click, y sondeo de reaparición
+   * de overlays):
+   *
+   *   1. MDL registra el listener que realmente ABRE el menú sobre el <ul
+   *      for="demo-menu-lower-left"> (componente "MaterialMenu"), no sobre el
+   *      botón (que solo recibe "MaterialButton", puramente visual). Ese
+   *      registro es asíncrono y puede tardar segundos tras la navegación.
+   *      Por eso se espera explícitamente esa condición real —el atributo
+   *      data-upgraded del <ul> conteniendo "MaterialMenu"— antes del primer
+   *      intento, en vez de depender únicamente de reintentos.
+   *
+   *   2. Incluso con MDL ya listo, el modal de permisos de notificación del
+   *      navegador puede aparecer de forma asíncrona en cualquier momento
+   *      —incluso justo después de haber sido revisado y no encontrado— y
+   *      queda físicamente ENCIMA del botón, interceptando el click sin
+   *      importar force:true (confirmado con elementFromPoint: el navegador
+   *      entrega el evento al elemento que está arriba en esa coordenada, no
+   *      al que Playwright pretendía clickear). Por eso los overlays
+   *      conocidos se vuelven a comprobar y cerrar en CADA iteración del
+   *      bucle, no solo una vez antes de entrar a él.
+   *
+   * La apertura nunca se asume: se valida contra el DOM real después de cada
+   * click, y si ningún intento funciona, el error final incluye un
+   * diagnóstico concreto (no un simple "no se abrió") para no tener que
+   * repetir esta investigación la próxima vez que ocurra.
+   */
+  async abrirMenuTresPuntos() {
+    // Condición real de que MDL ya registró el listener de apertura —no una
+    // pausa arbitraria. Si por algún motivo nunca aparece, no se aborta aquí:
+    // el bucle de abajo, con su propio diagnóstico, sigue siendo la fuente de
+    // verdad final (no se depende únicamente de esta espera).
+    await this.page.locator(L.MENU_TRES_PUNTOS_INICIALIZADO)
+      .waitFor({ state: 'attached', timeout: TIMEOUTS.PRODUCTS_LOAD })
+      .catch(() => {});
+
+    const MAX_INTENTOS = 4;
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      // Overlays conocidos: pueden aparecer en cualquier momento, incluso a
+      // mitad de este bucle, así que se revisan de nuevo en cada vuelta.
+      await this.cerrarModalNotificacionesSiAparece();
+      await this.cerrarAvisoConsecutivoSiAparece();
+
+      // force:true porque el botón tiene una animación CSS continua
+      // ("badge-pulse", para destacar ítems "Nuevo" del menú) que lo mantiene
+      // permanentemente "inestable" para las validaciones de Playwright —
+      // confirmado que es una animación real de la app, no un bug transitorio.
+      await this.page.locator(L.MENU_TRES_PUNTOS).click({ force: true });
+
+      // Nunca se asume que abrió: se valida contra el DOM real.
+      const abierto = await this.page.locator(L.HISTORIAL_FACTURAS)
+        .waitFor({ state: 'visible', timeout: 2_000 })
+        .then(() => true)
+        .catch(() => false);
+
+      if (abierto) return;
+    }
+
+    // Diagnóstico del fallo final: por qué se considera fallido, no solo que lo fue.
+    const materialMenuInicializado = await this.page.locator(L.MENU_TRES_PUNTOS_INICIALIZADO).count() > 0;
+    const modalNotificacionesVisible = await this.modalNotificaciones.isVisible().catch(() => false);
+    const avisoConsecutivoVisible = await this.avisoConsecutivoFueraDeRango.isVisible().catch(() => false);
+    const elementoEnElPuntoDeClick = await this.page.evaluate((selector) => {
+      const boton = document.querySelector(selector);
+      if (!boton) return '(el botón no está en el DOM)';
+      const rect = boton.getBoundingClientRect();
+      const el = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      if (!el) return '(ningún elemento en ese punto)';
+      const id = (el as HTMLElement).id ? `#${(el as HTMLElement).id}` : '';
+      const clase = el.className ? `.${el.className.toString().trim().replace(/\s+/g, '.')}` : '';
+      return `${el.tagName.toLowerCase()}${id}${clase}`;
+    }, L.MENU_TRES_PUNTOS);
+
+    throw new Error(
+      `El menú de tres puntos no se abrió tras ${MAX_INTENTOS} intentos.\n` +
+      `  - MaterialMenu inicializado (data-upgraded en el <ul>): ${materialMenuInicializado}\n` +
+      `  - Modal de notificaciones visible: ${modalNotificacionesVisible}\n` +
+      `  - Aviso de consecutivo visible: ${avisoConsecutivoVisible}\n` +
+      `  - Elemento que realmente recibiría el click (elementFromPoint): ${elementoEnElPuntoDeClick}`
+    );
+  }
+
+  /**
+   * Presiona "Historial de Facturas" en el menú de tres puntos (ya abierto) y
+   * devuelve la ventana emergente que el sistema abre en una pestaña nueva.
+   * Click normal (sin force): a diferencia del botón del menú, el ítem ya
+   * confirmado visible y asentado sí pasa las validaciones de accionabilidad,
+   * y un click real (no forzado) es la señal más confiable de que el evento
+   * llega al enlace para disparar la apertura de la pestaña nueva.
+   */
+  async abrirHistorialFacturas(): Promise<Page> {
+    const popupPromise = this.page.waitForEvent('popup', { timeout: TIMEOUTS.PRINT_POPUP });
+    await this.page.locator(L.HISTORIAL_FACTURAS).click({ timeout: 5_000 });
+    return popupPromise;
+  }
+
+  /**
+   * Presiona "Historial de Proformas" en el menú de tres puntos (ya abierto) y
+   * devuelve la ventana emergente que el sistema abre en una pestaña nueva.
+   */
+  async abrirHistorialProformas(): Promise<Page> {
+    const popupPromise = this.page.waitForEvent('popup', { timeout: TIMEOUTS.PRINT_POPUP });
+    await this.page.locator(L.HISTORIAL_PROFORMAS).click({ timeout: 5_000 });
+    return popupPromise;
+  }
+
+  // ─── Categorías (barra lateral) ────────────────────────────────────────────
+
+  get categoriaTodos() { return this.page.locator(L.CAT_TODOS); }
+  get categoriaCombos() { return this.page.locator(L.CAT_COMBOS); }
+  get categoriaTipo() { return this.page.locator(L.CAT_TIPO); }
+  get categoriaProductosFraccionados() { return this.page.locator(L.CAT_FRACCIONADOS); }
+  get categoriaProductosVariantes() { return this.page.locator(L.CAT_VARIANTES); }
+
+  /**
+   * Indica si la categoría dada quedó marcada como activa (clase
+   * "left_category_active"). Válido tanto para categorías planas como para la
+   * que dispara la navegación a subcategorías: ambas reciben la misma clase.
+   */
+  async categoriaEstaActiva(categoria: Locator): Promise<boolean> {
+    const clase = await categoria.getAttribute('class');
+    return clase?.includes(L.CAT_ACTIVE_CLASS) ?? false;
+  }
+
+  // ─── Vista de productos: lista vs. cuadrícula ─────────────────────────────
+
+  get botonVistaLista() { return this.page.locator(L.VISTA_LISTA); }
+  get botonVistaCuadricula() { return this.page.locator(L.VISTA_CUADRICULA); }
+
+  /**
+   * Indica si el botón de vista dado (lista o cuadrícula) está marcado como
+   * activo (clase "product_style_active"). Antes de la primera interacción del
+   * usuario ninguno de los dos botones tiene esta clase todavía: en ese caso
+   * hay que recurrir a `estiloVistaTexto()`.
+   */
+  async vistaEstaActiva(boton: Locator): Promise<boolean> {
+    const clase = await boton.getAttribute('class');
+    return clase?.includes(L.VISTA_ACTIVE_CLASS) ?? false;
+  }
+
+  /** Lee el estilo de vista inicial reportado por el propio sistema: "list" o "box". */
+  async estiloVistaTexto(): Promise<string> {
+    return (await this.page.locator(L.VISTA_ESTILO_ACTUAL).textContent())?.trim() ?? '';
+  }
+
+  // ─── Tabs Servicios / End. Pintura ────────────────────────────────────────
+
+  get tabServicios() { return this.page.locator(L.TAB_SERVICIOS); }
+  get tabPintura() { return this.page.locator(L.TAB_PINTURA); }
+
+  /** Indica si el tab dado (Productos/Servicios/End. Pintura) está activo (clase "btn_sale_selected"). */
+  async tabEstaActivo(tab: Locator): Promise<boolean> {
+    const clase = await tab.getAttribute('class');
+    return clase?.includes(L.TAB_ACTIVE_CLASS) ?? false;
   }
 
   // ─── Métodos privados ────────────────────────────────────────────────────────
