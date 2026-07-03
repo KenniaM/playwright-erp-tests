@@ -5,6 +5,11 @@ import { expect, Locator, Page } from '@playwright/test';
 export const POS_URL =
   'https://dev.designsoftcr.com/qa_talleralpha/public/pos/pointOfSale?company_pos=37&pos_type_option=1';
 
+// Usada únicamente por cargarPosDesdeDashboard() — ver el comentario de ese
+// método para el motivo.
+export const DASHBOARD_URL =
+  'https://dev.designsoftcr.com/qa_talleralpha/public/dash/dashboard';
+
 // ─── Timeouts ─────────────────────────────────────────────────────────────────
 
 export const TIMEOUTS = {
@@ -135,6 +140,100 @@ const L = {
   // no por texto (su rótulo es configurable por la empresa).
   DIALOG_SELECCIONAR_PRECIO: '#dialog_select_prices',
   PINTURA_PRECIO_OPCION:     '#modal_prices_body [id^="div_price_"]:not(#div_price_new)',
+
+  // "Producto Rápido": botón flotante (FAB, librería mfb) en la esquina
+  // inferior derecha. El toggle principal y el ítem hijo quedan con
+  // bounding box 0 (fuera del viewport para Playwright) hasta que el
+  // toggle se clickea y la animación "mfb-zoomin" los expande — confirmado
+  // inspeccionando el DOM en vivo, de ahí la necesidad de click({force:true})
+  // y de reintentar hasta que el ítem hijo se vuelva visible.
+  FAB_TOGGLE:        '#add_sn_product > li.mfb-component__wrap-new > a.mfb-component__button--main',
+  FAB_ITEM_PRODUCTO_RAPIDO: 'a[data-mfb-label*="Producto Rápido"]',
+
+  DIALOG_PRODUCTO_RAPIDO: '#dialog_quick_product_pos',
+  QUICK_PRODUCT_NOMBRE:   '#quick_product_name',
+  QUICK_PRODUCT_PRECIO:   '#quick_product_price',
+  QUICK_PRODUCT_CANTIDAD: '#quick_product_quantity',
+  QUICK_PRODUCT_APLICAR_IVA: '#check_quick_product_apply_tax',
+  QUICK_PRODUCT_TIPO_IVA:    '#quick_product_tax',
+  QUICK_PRODUCT_TASA_IVA:    '#quick_product_tax_rate',
+  QUICK_PRODUCT_PRECIO_CON_IVA: '#quick_product_price_with_iva',
+  QUICK_PRODUCT_GUARDAR:  '.save_quick_product_pos',
+
+  // Sub-modal de búsqueda de CABYS, abierto desde el botón "CABYS" del
+  // formulario de Producto Rápido.
+  QUICK_PRODUCT_BTN_CABYS: '#quick_product_cabys_content a._btn_15',
+  QUICK_PRODUCT_CABYS_TAX_SUGERIDO: '#quick_product_cabys_tax',
+  DIALOG_BUSCAR_CABYS:     '#dialog_add_cabys_code',
+  CABYS_BUSCADOR_INPUT:    '#cabys_code_search',
+  CABYS_BUSCADOR_BOTON:    '#btn_cabys_code_search',
+  CABYS_FILAS_RESULTADO:   '#table_cabys_code_content tbody tr',
+
+  // Petición AJAX real que guarda el producto rápido (ver quick_product_save()
+  // → add_sn_product() en pos.js). Se usa para armar waitForResponse() antes
+  // del click y validar la red explícitamente, no solo el efecto visual.
+  AJAX_GUARDAR_PRODUCTO: 'getPosProductSaleItem',
+
+  // Área de totales del POS (footer principal, NO el modal de pago): fila
+  // etiquetada "IVA" que acumula el impuesto de todo el carrito. Confirmado
+  // en el HTML real que es un elemento distinto de TOTAL_MODAL (el total de
+  // la factura en el modal de pago) y de "#total_by_product_<clave>" (el
+  // total de una sola línea).
+  TOTAL_IVA_GENERAL: '#total_tax',
+
+  // Checkbox "IVA" ubicado en el encabezado (<thead>) de la tabla del
+  // carrito, arriba de las filas — confirmado en el HTML real:
+  // <th id="lbl_price_with_iva">...<input id="show_price_with_iva">...</th>,
+  // NO el checkbox del formulario "Producto Rápido"
+  // (#check_quick_product_apply_tax) ni el del resumen de totales
+  // (#apply_general_tax). Distinto en propósito de ambos: confirmado en vivo
+  // que show_price_with_iva() solo alterna qué elemento paralelo de cada
+  // línea se muestra (con/sin IVA, ya calculados de antemano) — no
+  // recalcula nada ni afecta el resumen de totales.
+  MOSTRAR_PRECIO_CON_IVA: '#show_price_with_iva',
+
+  // Pestañas superiores del POS (POS Facturación / Órdenes de caja / Taller /
+  // etc.) — NO confundir con TAB_SERVICIOS/TAB_PINTURA, que son sub-tabs
+  // dentro del panel de catálogo. Contenedor y clase de "activa" confirmados
+  // en vivo: <div id="menu_pos_option_item"> con un <a> por pestaña, cada
+  // uno con un id técnico estable (btn_pos_option, btn_cashier_option, etc. —
+  // no localizado, a diferencia del texto visible) y la clase "btn_tab_active"
+  // agregada al que está seleccionado. set_pos_type_option es el único POST
+  // que las 8 pestañas probadas dispararon todas, sin excepción, al
+  // cambiar — de ahí que sea la condición de espera de red elegida en vez de
+  // un endpoint distinto por pestaña.
+  PESTANAS_POS_CONTENEDOR: '#menu_pos_option_item',
+  PESTANA_POS_CLASE_ACTIVA: 'btn_tab_active',
+  AJAX_CAMBIO_PESTANA_POS: 'set_pos_type_option',
+
+  // Panel "Buscar Cliente", arriba del carrito. No es Select2/Chosen: es un
+  // panel propio (.customer_selection) que reemplaza al catálogo de
+  // productos con tarjetas de resultado (.customer-list-pos), confirmado en
+  // vivo. selectCustomerToPos(id) —el onclick de cada tarjeta— es puro DOM,
+  // sin AJAX propio; el AJAX real ocurre al buscar (getCustomerByPosOption).
+  PANEL_BUSCAR_CLIENTE: '.panel-customer-search',
+  CLIENTE_INPUT_BUSQUEDA: '#search_pos_customer',
+  CLIENTE_BTN_BUSCAR: '.panel-customer-search .btn-search-product-pos',
+  CLIENTE_AJAX_BUSQUEDA: 'getCustomerByPosOption',
+  CLIENTE_PANEL_RESULTADOS: '.customer_selection',
+  CLIENTE_SIN_RESULTADOS: '#not_result_customer_search',
+  CLIENTE_FILAS_RESULTADO: '.customer-list-pos',
+  CLIENTE_BTN_SELECCIONAR_FILA: '.btn-customer-select',
+  CLIENTE_NOMBRE_SELECCIONADO: '#customer_selected_name',
+  CLIENTE_SELECT_OCULTO: '#customer_select',
+  PANEL_PRODUCTOS: '.product_panel',
+
+  // "Agregar" → "Nombre del cliente": factura solo con un nombre, sin
+  // seleccionar un cliente registrado. editQuickCustomerName() y
+  // setTemporalCustomerName() son puro DOM (sin AJAX). Confirmado en vivo
+  // que el campo realmente leído al facturar es #temporal_customer_name
+  // (pos.js: `client_name = $('#temporal_customer_name').val()`), NO
+  // #customer_selected_name — ese label se actualiza pero su contenedor
+  // nunca se muestra en la pantalla principal con este flujo (solo lo usa
+  // el modal de pago), así que no sirve como confirmación visible aquí.
+  CLIENTE_DROPDOWN_AGREGAR: '.panel-customer-search .dropdown-toggle',
+  CLIENTE_CONTENEDOR_NOMBRE_RAPIDO: '.content-edit-quick-customer-name',
+  CLIENTE_INPUT_NOMBRE_RAPIDO: '#temporal_customer_name',
 } as const;
 
 // Texto que identifica la caja cerrada en el modal "Abrir Caja". Exportado para
@@ -149,6 +248,40 @@ const CHECKBOX_ID = {
   SINPE:       'is_payment_check',
   TRANSACCION: 'is_payment_transaction',
 } as const;
+
+// ─── Pestañas superiores del POS ───────────────────────────────────────────────
+
+export type PestanaPos = {
+  selector: string;             // id/selector del <a> de la pestaña — nunca el texto visible
+  etiqueta: string;              // solo para logs y mensajes de error
+  contenedorContenido: string;    // contenedor que debe quedar visible cuando la pestaña termina de cargar
+};
+
+// "POS Facturación" es el estado inicial del POS y también el punto de
+// retorno final del recorrido de pestañas.
+export const PESTANA_POS_FACTURACION: PestanaPos = {
+  selector: '#btn_pos_option',
+  etiqueta: 'POS Facturación',
+  contenedorContenido: '#content_product_by_style',
+};
+
+// Resto de pestañas a recorrer, en el orden solicitado. Todas confirmadas en
+// vivo con id técnico estable (ver el comentario de PESTANAS_POS_CONTENEDOR)
+// — "Apartados" queda fuera de este arreglo a propósito: a diferencia de
+// estas 7, no hay ningún manejador `$('#btn_..._option').click(...)` para
+// ella en pos.js en este ambiente, así que no existe un id conocido que
+// hardcodear; se localiza dinámicamente por texto (ver
+// localizarPestanaApartados() en PosPage) y puede no existir en absoluto
+// (oculta por permisos/configuración), igual que cualquiera de estas 7.
+export const PESTANAS_POS_A_RECORRER: PestanaPos[] = [
+  { selector: '#btn_cashier_option', etiqueta: 'Órdenes de caja', contenedorContenido: '#content_invoice_order_list' },
+  { selector: '#btn_taller_option', etiqueta: 'Taller', contenedorContenido: '#content_order_list' },
+  { selector: '#btn_get_virtual_order_list', etiqueta: 'Tienda en línea', contenedorContenido: '#content_invoice_order_list' },
+  { selector: '#btn_proform_option', etiqueta: 'Proforma / Cotizaciones', contenedorContenido: '#content_invoice_order_list' },
+  { selector: '#btn_import_invoice_option', etiqueta: 'Importar factura', contenedorContenido: '#content_invoice_order_list' },
+  { selector: '#btn_routing_option', etiqueta: 'Ruteo', contenedorContenido: '#content_invoice_order_list' },
+  { selector: '#btn_product_external_option', etiqueta: 'Productos externos', contenedorContenido: '#content_invoice_order_list' },
+];
 
 // ─── Tipos y configuración de métodos de pago ─────────────────────────────────
 
@@ -181,6 +314,24 @@ export const NOMBRE_SERVICIO = '0-ST-01';
 // Automóvil, Pick-up) — confirmado inspeccionando sus <option> en vivo.
 export const VEHICULO_PINTURA_TIPO = 'Hatchback';
 
+// Término de búsqueda para el catálogo CABYS del formulario "Producto
+// Rápido": devuelve resultados de forma consistente en pruebas repetidas
+// contra el ambiente real. El catálogo CABYS es fijo (clasificación fiscal
+// costarricense, no configurable por la empresa), así que no depende del
+// estado de ninguna compañía en particular.
+export const CABYS_BUSQUEDA = 'aceite';
+
+// Término de búsqueda CABYS cuyo primer resultado resuelve a tasa "0%
+// (Exento)" — confirmado en vivo (Fase 1 de descubrimiento). Se usa para el
+// caso "sin IVA": en este ambiente el CABYS es obligatorio
+// (validate_cabys_code=1), así que "sin IVA" se logra con un CABYS cuya
+// propia clasificación fiscal es exenta, no dejando el campo vacío.
+export const CABYS_BUSQUEDA_SIN_IVA = 'leche';
+
+// Precio base para el producto rápido de prueba; sin IVA aplicado hasta que
+// se selecciona un CABYS (ver esperarIvaAutocompletado()).
+export const PRECIO_PRODUCTO_RAPIDO = '1000';
+
 // ─── Tipos de resultado del descuento individual ───────────────────────────────
 
 export type EscenarioDescuento =
@@ -194,6 +345,78 @@ export type ResultadoDescuento = {
   porcentajeAplicado: string;
   escenario: EscenarioDescuento;
   mensajeAlerta?: string;  // texto del diálogo que apareció, si hubo uno
+};
+
+// ─── Estado real del check "Incluir IVA" ───────────────────────────────────────
+//
+// Investigado en vivo (no asumido): el checkbox #check_quick_product_apply_tax
+// no tiene aria-checked, ni atributos data-*, ni clases CSS que reflejen su
+// estado — su classList está vacío y el atributo HTML crudo (getAttribute
+// ('checked')) siempre es null, incluso ya marcado, porque nunca se actualiza
+// dinámicamente (solo refleja el valor inicial del markup). La ÚNICA fuente
+// real dentro del propio checkbox es la propiedad IDL `.checked`
+// (Playwright: isChecked()), confirmada respondiendo correctamente a clicks
+// reales (false→true→false). quick_product_save() en pos.js lee esa misma
+// propiedad directamente al guardar, así que el checkbox SÍ es la fuente de
+// verdad real del sistema — pero únicamente en el instante exacto del click
+// en "Agregar": el bug ya documentado en pos.js:695 puede resetearlo de forma
+// asíncrona en la ventana entre que se configura y ese click. Por eso la
+// única verdad 100% confiable sobre lo que quedó realmente aplicado es
+// posterior al guardado: `#product_hide_apply_iva_<clave>` en la línea del
+// carrito (ver LineaCarrito más abajo) — nunca el checkbox del formulario ya
+// cerrado.
+
+export type EstadoCheckIva = {
+  activo: boolean;
+  metodo: string;
+  evidencia: string;
+};
+
+// ─── Datos de una línea del carrito (validación de IVA) ────────────────────────
+//
+// Todos los campos se leen directamente del DOM de la fila, nunca por índice
+// fijo — ver los selectores en obtenerDatosLineaCarrito(). Mapeo confirmado
+// leyendo add_sn_product() en pos.js (línea ~17673, el flujo real de
+// "Producto Rápido") y cruzando el payload de red + el DOM resultante contra
+// datos de entrada conocidos (precio base=1000, tasa=10%, cantidad 1 y 2):
+//
+//   - `#total_by_product_<clave>` = total de la línea SIN IVA = precio base
+//     × cantidad (siempre, sin importar apply_iva). Confirmado: 1000→2000
+//     al pasar de cantidad 1 a 2.
+//   - `#total_by_product_with_iva_<clave>` = total de la línea CON IVA =
+//     total sin IVA × (1 + tasa), solo si apply_iva=1; si apply_iva=0 queda
+//     igual al total sin IVA (no hay IVA que sumar). Confirmado: 1100→2200.
+//   - `#product_total_tax_<clave>`: PESE AL NOMBRE, no es el subtotal sin
+//     IVA — es un campo redundante que siempre contiene el mismo valor que
+//     `total_by_product_with_iva_<clave>` (proviene del mismo `total_price`
+//     del request AJAX de add_sn_product(), calculado con el IVA ya sumado
+//     cuando corresponde). Usarlo como "neto" es lo que producía IVA=0
+//     calculado en el escenario "IVA activado": restaba ese campo contra sí
+//     mismo bajo otro nombre. NO SE USA para nada en LineaCarrito.
+//   - `#product_hide_apply_iva_<clave>` = la bandera real y confiable de si
+//     el sistema aplicó IVA a la línea.
+//
+// Ambos totales (`neto` y `totalConIva`) se leen siempre por su id fijo,
+// sin depender del estado de #show_price_with_iva — ese checkbox solo
+// alterna cuál de los dos queda VISIBLE (clase "hide"), nunca cuál contiene
+// qué valor, así que la resta `totalConIva − neto` es válida sin importar
+// el estado del checkbox. `total` sí depende del checkbox: representa lo
+// que el carrito está mostrando en pantalla en este momento, útil para
+// validar que la UI realmente refleja el total esperado.
+
+export type LineaCarrito = {
+  clave: string;
+  nombre: string;
+  cantidad: number;
+  precioUnitarioNeto: number; // sin IVA, derivado de neto ÷ cantidad
+  neto: number;                // total de la línea SIN IVA (total_by_product_<clave>)
+  totalConIva: number;          // total de la línea CON IVA (total_by_product_with_iva_<clave>)
+  iva: number;                    // monto de IVA de la línea = totalConIva − neto
+  total: number;                   // total mostrado actualmente en el carrito (según show_price_with_iva)
+  ivaAplicado: boolean;            // product_hide_apply_iva_<clave> — la bandera real que el
+                                    // sistema usa para facturar/reportar, independiente de lo
+                                    // que el total "parezca" mostrar (ver el bug confirmado en
+                                    // pos.js:695, comentado en seleccionarIvaManualmente()).
 };
 
 // ─── Page Object ──────────────────────────────────────────────────────────────
@@ -237,6 +460,48 @@ export class PosPage {
   /** Indica si el modal "Abrir Caja" está visible en este momento (chequeo puntual, sin esperar). */
   async modalAbrirCajaVisible(): Promise<boolean> {
     return this.modalAbrirCaja.isVisible();
+  }
+
+  /**
+   * Navega al POS pasando primero por el Dashboard, en la misma pestaña, y
+   * resuelve el modal "Abrir Caja" si aparece. Pensado únicamente para el
+   * flujo de "Producto Rápido" — el resto de la suite sigue entrando
+   * directo vía irAlPos() (usado por cargarPosYCerrarModalSiAparece en
+   * pos.spec.ts), que no necesita este paso extra.
+   *
+   * Motivo (condición de carrera real de la aplicación, no un problema de
+   * automatización): dentro del mismo bloque `$(document).ready()` de
+   * pos.js que liga el evento "click" de varios controles del modal
+   * "Producto Rápido" —incluido el botón "Agregar"—, una línea anterior
+   * de ese mismo bloque invoca una función (`clear_dialog_select_sunat_
+   * detractions`) que, en una carga en frío del navegador, todavía no está
+   * definida: se declara en otro script que en ese instante no terminó de
+   * cargar. Eso dispara un `ReferenceError` no capturado que aborta el
+   * resto del bloque `ready()`, dejando esos controles sin su listener de
+   * "click" durante toda la vida de esa carga de página — confirmado
+   * inspeccionando el error real en consola y verificando con
+   * `getEventListeners()` (vía CDP) que el botón "Agregar" efectivamente
+   * queda sin ningún listener registrado, ni directo ni delegado. Un click
+   * real (humano o de Playwright) sobre ese botón, en esas condiciones, no
+   * tiene ningún efecto.
+   *
+   * El storageState de Playwright solo persiste cookies y localStorage,
+   * nunca la caché HTTP de recursos, así que cada test arranca con esa
+   * caché fría igual que un navegador nuevo. Visitar el Dashboard primero,
+   * en la misma pestaña, calienta la caché de los scripts compartidos: para
+   * cuando se navega al POS, la función ya está disponible y el bloque
+   * `ready()` completo corre sin abortar — confirmado experimentalmente de
+   * forma consistente (3/3 intentos con este orden, 0/2 sin él, en pruebas
+   * repetidas contra el ambiente real).
+   */
+  async cargarPosDesdeDashboard() {
+    await this.page.goto(DASHBOARD_URL, { waitUntil: 'load' });
+    await this.irAlPos();
+    await this.esperarEstadoInicial();
+    if (await this.modalAbrirCajaVisible()) {
+      await expect(this.modalAbrirCaja.getByText(CAJA_TEXTO)).toBeVisible();
+      await this.cerrarModalAbrirCaja();
+    }
   }
 
   /**
@@ -953,6 +1218,686 @@ export class PosPage {
     await expect(this.modalSeleccionarPrecio).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
   }
 
+  // ─── "Producto Rápido" ──────────────────────────────────────────────────────
+
+  /** Locator del modal "Producto Rápido". */
+  get modalProductoRapido() {
+    return this.page.locator(L.DIALOG_PRODUCTO_RAPIDO);
+  }
+
+  /** Locator del sub-modal "Búsqueda de código CABYS". */
+  get modalBusquedaCabys() {
+    return this.page.locator(L.DIALOG_BUSCAR_CABYS);
+  }
+
+  /**
+   * Expande el botón flotante (FAB) del POS y abre el modal "Producto
+   * Rápido". El toggle es un componente "mfb" cuya animación de expansión
+   * a veces no llega a tiempo con un único click —confirmado en vivo—, así
+   * que se reintenta hasta que el ítem hijo ("Producto Rápido") se vuelva
+   * realmente visible antes de clickearlo.
+   */
+  async abrirProductoRapido() {
+    const toggle = this.page.locator(L.FAB_TOGGLE);
+    const item = this.page.locator(L.FAB_ITEM_PRODUCTO_RAPIDO);
+
+    // El toggle expande el FAB con data-mfb-toggle="hover" — confirmado en vivo
+    // que puede volver a colapsarse entre que se confirma expandido y el click
+    // sobre el ítem, si de por medio se ejecuta otra acción (p. ej. revisar el
+    // modal de notificaciones) que mueve el mouse y pierde el estado "hover".
+    // Por eso el click sobre el ítem se hace en la MISMA vuelta, inmediatamente
+    // después de confirmarlo expandido, y todo el ciclo (expandir + click +
+    // confirmar que el modal abrió) se reintenta como una unidad si algo falla.
+    const MAX_INTENTOS = 10;
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      await this.cerrarModalNotificacionesSiAparece();
+      await toggle.click({ force: true });
+
+      const expandido = await item.waitFor({ state: 'visible', timeout: 1_200 }).then(() => true).catch(() => false);
+      if (expandido) {
+        const clickeado = await item.click({ force: true, timeout: 2_000 }).then(() => true).catch(() => false);
+        if (clickeado) {
+          const abrio = await this.modalProductoRapido.waitFor({ state: 'visible', timeout: 3_000 }).then(() => true).catch(() => false);
+          if (abrio) return;
+        }
+      }
+
+      await this.page.waitForTimeout(300);
+    }
+
+    throw new Error(`El botón flotante "Producto Rápido" no se pudo abrir tras ${MAX_INTENTOS} intentos.`);
+  }
+
+  /** Llena nombre y precio en el formulario de "Producto Rápido" ya abierto. */
+  async llenarDatosBasicosProductoRapido(nombre: string, precio: string) {
+    await this.page.locator(L.QUICK_PRODUCT_NOMBRE).fill(nombre);
+    await this.page.locator(L.QUICK_PRODUCT_PRECIO).fill(precio);
+  }
+
+  /**
+   * Indica si el campo CABYS está presente en este momento del formulario.
+   * No es un dato fijo: depende del país configurado para la compañía en
+   * este ambiente compartido de QA (confirmado en vivo pasando de
+   * visible/obligatorio con la compañía configurada como Costa Rica, a
+   * oculto con la misma compañía luego reconfigurada como Honduras, sin
+   * ningún cambio de este lado) — de ahí que este chequeo se haga en cada
+   * corrida en vez de asumir un estado fijo.
+   */
+  async existeCampoCabys(): Promise<boolean> {
+    return this.page.locator(L.QUICK_PRODUCT_BTN_CABYS).isVisible().catch(() => false);
+  }
+
+  /**
+   * Completa el CABYS únicamente si el campo aparece en este formulario;
+   * si no aparece, no lo toca. Devuelve si lo aplicó o no, para que quien
+   * llama decida el resto del flujo de IVA en consecuencia (ver
+   * validarIvaCoincideConCabys() para el caso "aplicado" y
+   * seleccionarIvaManualmente() para el caso "no aplicado").
+   */
+  async manejarCabysSiAplica(termino: string): Promise<boolean> {
+    if (!(await this.existeCampoCabys())) return false;
+    await this.buscarYAplicarCabys(termino);
+    return true;
+  }
+
+  /**
+   * Busca un código CABYS por texto en el sub-modal dedicado y aplica el
+   * primer resultado de la tabla (mismo criterio que el resto de la suite
+   * usa para catálogos sin nombre estable por el cual filtrar: tomar el
+   * primero disponible). Aplicar un CABYS autocompleta el tipo y la tasa de
+   * IVA del formulario —ver esperarIvaAutocompletado()—.
+   */
+  async buscarYAplicarCabys(termino: string) {
+    await this.cerrarModalNotificacionesSiAparece();
+    await this.page.locator(L.QUICK_PRODUCT_BTN_CABYS).click();
+    await expect(this.modalBusquedaCabys).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    await this.page.locator(L.CABYS_BUSCADOR_INPUT).fill(termino);
+    await this.cerrarModalNotificacionesSiAparece();
+    await this.page.locator(L.CABYS_BUSCADOR_BOTON).click();
+
+    const primeraFila = this.page.locator(L.CABYS_FILAS_RESULTADO).first();
+    await expect(primeraFila, `No hubo resultados de CABYS para "${termino}"`).toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+    await primeraFila.getByRole('link', { name: 'Aplicar' }).click();
+
+    await expect(this.modalBusquedaCabys).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /**
+   * Espera a que el checkbox de IVA quede marcado tras aplicar un CABYS.
+   * No es instantáneo (confirmado en vivo: ~200ms de desfase, un tick de
+   * JS, no una espera de red) así que se usa expect.poll() en vez de leer
+   * el estado inmediatamente después de aplicar el CABYS. Se cumple tanto
+   * para un CABYS con tasa positiva como con tasa "0% (Exento)": ambos son
+   * una clasificación de IVA válida, a diferencia de no tener CABYS.
+   */
+  async esperarIvaAutocompletado() {
+    await expect.poll(
+      () => this.page.locator(L.QUICK_PRODUCT_APLICAR_IVA).isChecked(),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    ).toBe(true);
+  }
+
+  /**
+   * Valida que la tasa de IVA realmente seleccionada en el formulario
+   * coincide con el IVA que el propio CABYS aplicado sugiere — no solo que
+   * "algo" quedó marcado. El texto de `#quick_product_cabys_tax` viene en
+   * dos formatos distintos según el CABYS (confirmado en vivo): como
+   * fracción ("0.13") o ya en porcentaje ("0%"), así que se normaliza antes
+   * de comparar contra el atributo `percent` de la opción de tasa
+   * realmente seleccionada.
+   */
+  async validarIvaCoincideConCabys() {
+    const cabysTaxTexto = (await this.page.locator(L.QUICK_PRODUCT_CABYS_TAX_SUGERIDO).textContent())?.trim() ?? '';
+    const cabysTaxPct = cabysTaxTexto.includes('%')
+      ? parseFloat(cabysTaxTexto)
+      : parseFloat(cabysTaxTexto) * 100;
+
+    const tasaSeleccionadaPct = await this.obtenerTasaIvaSeleccionadaPct();
+
+    expect(
+      tasaSeleccionadaPct,
+      `La tasa de IVA seleccionada (${tasaSeleccionadaPct}%) no coincide con el IVA definido por el CABYS aplicado (${cabysTaxPct}%)`
+    ).toBeCloseTo(cabysTaxPct, 1);
+  }
+
+  /** Lee el `percent` de la opción de tasa de IVA realmente seleccionada en el formulario. */
+  async obtenerTasaIvaSeleccionadaPct(): Promise<number> {
+    return this.page.locator(L.QUICK_PRODUCT_TASA_IVA).evaluate(
+      (el) => parseFloat((el as HTMLSelectElement).selectedOptions[0]?.getAttribute('percent') ?? 'NaN')
+    );
+  }
+
+  /** Lee el valor actual del campo "Precio con IVA" del formulario, como número. */
+  async obtenerPrecioConIvaFormulario(): Promise<number> {
+    const valor = await this.page.locator(L.QUICK_PRODUCT_PRECIO_CON_IVA).inputValue();
+    return parseFloat(valor) || 0;
+  }
+
+  /**
+   * Valida, ANTES de guardar, que el "Precio con IVA" del formulario
+   * refleja realmente el precio base más la tasa de IVA seleccionada
+   * (`precio_con_iva = precio + precio × tasa/100`, confirmado en Fase 1
+   * leyendo `quick_product_apply_tax()` en pos.js) — no solo que el
+   * checkbox quedó marcado. Devuelve el monto leído para que el test lo use
+   * después como referencia al validar el total en el carrito, ya que el
+   * formulario se limpia al guardar.
+   */
+  async validarMontoConIvaEnFormulario(precioBase: string): Promise<number> {
+    // El campo "Precio con IVA" retiene el último valor calculado aunque el
+    // checkbox se haya destildado después (confirmado en vivo: el sistema
+    // puede quedar con "Precio con IVA" mostrando un monto con impuesto
+    // mientras el checkbox real está apagado, y en ese estado el producto se
+    // guarda SIN IVA aunque el formulario "se vea" correcto) — por eso esta
+    // validación exige el checkbox marcado, no solo el número del campo.
+    await expect(
+      this.page.locator(L.QUICK_PRODUCT_APLICAR_IVA),
+      'El checkbox "Aplicar impuesto" no está marcado — el producto se guardaría sin IVA aunque "Precio con IVA" muestre un monto calculado'
+    ).toBeChecked();
+
+    const tasaPct = await this.obtenerTasaIvaSeleccionadaPct();
+    const precioConIva = await this.obtenerPrecioConIvaFormulario();
+    const esperado = parseFloat(precioBase) * (1 + tasaPct / 100);
+
+    expect(
+      precioConIva,
+      `"Precio con IVA" (${precioConIva}) no coincide con precio base (${precioBase}) + tasa (${tasaPct}%) = ${esperado}`
+    ).toBeCloseTo(esperado, 1);
+
+    return precioConIva;
+  }
+
+  /**
+   * Valida, DESPUÉS de guardar, que el total de la línea agregada en el
+   * carrito es el monto CON IVA (no el precio base sin impuesto) —
+   * confirma que lo que efectivamente se guardó y se va a facturar incluye
+   * el IVA, no solo que el formulario lo calculó bien antes de enviarlo.
+   */
+  async validarMontoCarritoIncluyeIva(clave: string, montoConIvaEsperado: number) {
+    const totalEnCarrito = await this.obtenerTotalProducto(clave);
+    expect(
+      totalEnCarrito,
+      `El total en el carrito (${totalEnCarrito}) no coincide con el monto con IVA esperado (${montoConIvaEsperado})`
+    ).toBeCloseTo(montoConIvaEsperado, 1);
+  }
+
+  /**
+   * Lee el IVA acumulado en el área de totales del POS (footer principal,
+   * fila "IVA") — un valor calculado y devuelto por el propio sistema para
+   * todo el carrito, distinto del total de una sola línea o del total de la
+   * factura en el modal de pago. Es la señal más confiable de que el
+   * producto quedó realmente registrado con impuesto: el campo "Precio con
+   * IVA" del formulario puede mostrar un monto calculado aunque el
+   * checkbox se haya destildado por su cuenta antes de guardar (ver
+   * seleccionarIvaManualmente()), pero este total lo calcula el sistema a
+   * partir de lo que efectivamente quedó guardado.
+   */
+  async obtenerTotalIvaGeneral(): Promise<number> {
+    const texto = await this.page.locator(L.TOTAL_IVA_GENERAL).textContent() ?? '$0.00';
+    return parseFloat(texto.replace(/[^0-9.]/g, '')) || 0;
+  }
+
+  /**
+   * Valida que el área de totales del POS refleje IVA mayor a cero tras
+   * agregar un producto con impuesto. Usa expect.poll() porque el total se
+   * recalcula de forma asíncrona apenas se agrega la fila al carrito, no de
+   * forma instantánea junto con el propio DOM de la fila.
+   */
+  async validarTotalIvaGeneralEsMayorACero() {
+    await expect.poll(
+      () => this.obtenerTotalIvaGeneral(),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    ).toBeGreaterThan(0);
+  }
+
+  /**
+   * Establece la cantidad en el formulario de "Producto Rápido" (por
+   * defecto es 1). Rellenar el input directamente en vez de usar los
+   * botones +/- es equivalente aquí: ambos terminan escribiendo el mismo
+   * valor en `#quick_product_quantity`, que es lo único que lee
+   * `quick_product_save()` al guardar.
+   */
+  async establecerCantidadProductoRapido(cantidad: number) {
+    await this.page.locator(L.QUICK_PRODUCT_CANTIDAD).fill(String(cantidad));
+  }
+
+  /**
+   * Determina de forma confiable si el carrito está mostrando actualmente
+   * el total "con IVA" de cada línea — checkbox #show_price_with_iva,
+   * arriba del carrito (encabezado de la tabla), NO el checkbox del
+   * formulario "Producto Rápido". Mismo patrón de evidencia que
+   * `obtenerEstadoCheckIva()`: lee la propiedad IDL `.checked` (única
+   * fuente real; este checkbox tampoco usa aria-checked, data-* ni clases
+   * de estado) e imprime el método y la evidencia usados.
+   */
+  async estaMostrandoPrecioConIva(): Promise<EstadoCheckIva> {
+    const activo = await this.page.locator(L.MOSTRAR_PRECIO_CON_IVA).isChecked();
+    const resultado: EstadoCheckIva = {
+      activo,
+      metodo: 'propiedad IDL .checked (Playwright: isChecked()) sobre #show_price_with_iva',
+      evidencia: `#show_price_with_iva.checked=${activo} — alterna display entre *_without_iva y *_with_iva de cada línea (confirmado: no recalcula ni afecta el resumen de totales)`,
+    };
+    console.log(`[estaMostrandoPrecioConIva] activo=${resultado.activo} | ${resultado.evidencia}`);
+    return resultado;
+  }
+
+  /**
+   * Cambia el estado de #show_price_with_iva con un click real de usuario
+   * — nunca vía evaluate()/JS. Confirmado en vivo (sin asumir) que el
+   * `<input>` real está oculto (boundingBox 0×0, isVisible()=false, mismo
+   * patrón de slider CSS que el checkbox del formulario) y que Playwright
+   * no puede clickearlo directamente: un `locator.click()` sobre el propio
+   * input agota el timeout de accionabilidad. El elemento que un usuario
+   * real efectivamente toca es el `<span class="span-tax">` hermano
+   * —confirmado con `elementFromPoint` en el punto exacto del click—, que
+   * responde a un click normal, sin `force` y sin tocar `.checked` por
+   * código: `isChecked()` cambia correctamente en ambas direcciones
+   * (false→true y true→false, confirmado que es un switch real).
+   *
+   * Solo clickea si hace falta (nunca a ciegas): un click sobre un switch
+   * ya en el estado deseado lo invertiría.
+   *
+   * `claves` son los productos ya presentes en el carrito cuyo total debe
+   * reflejar el nuevo estado antes de devolver el control. show_price_with_iva()
+   * solo alterna la clase "hide" entre las dos columnas paralelas ya
+   * calculadas de cada línea (`#total_by_product_<clave>` sin IVA y
+   * `#total_by_product_with_iva_<clave>` con IVA — confirmado en vivo, ver
+   * el comentario de `estaMostrandoPrecioConIva()`), así que la condición
+   * explícita real de "el carrito terminó de actualizarse" es que la
+   * columna correspondiente al estado pedido quede realmente visible para
+   * cada producto ya agregado — nunca una pausa arbitraria. Si el checkbox
+   * no cambia de estado o alguna columna no llega a mostrarse, las propias
+   * aserciones (`toBeChecked`/`toBeVisible`) hacen fallar el test de
+   * inmediato, con el elemento y el producto exactos en el mensaje.
+   */
+  async establecerMostrarPrecioConIva(activar: boolean, claves: string[] = []) {
+    const checkbox = this.page.locator(L.MOSTRAR_PRECIO_CON_IVA);
+    const estadoActual = await checkbox.isChecked();
+    if (estadoActual !== activar) {
+      const span = checkbox.locator('xpath=following-sibling::span[1]');
+      await span.click();
+    }
+
+    await expect(
+      checkbox,
+      `#show_price_with_iva no cambió a checked=${activar} tras el click sobre su span — el test no puede continuar con las validaciones de IVA en un estado desconocido`
+    ).toBeChecked({ checked: activar });
+
+    for (const clave of claves) {
+      const selectorColumnaEsperada = activar
+        ? `#total_by_product_with_iva_${clave}`
+        : `#total_by_product_${clave}`;
+      await expect(
+        this.page.locator(selectorColumnaEsperada),
+        `Tras fijar #show_price_with_iva=${activar}, la columna de totales esperada (${selectorColumnaEsperada}) del producto "${clave}" no quedó visible — el carrito no terminó de actualizarse`
+      ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    }
+  }
+
+  /**
+   * Lee todos los datos de una línea del carrito directamente del DOM real
+   * (nunca por índice fijo, siempre por la clave del producto) — ver el
+   * mapeo completo y la evidencia en vivo en el comentario del tipo
+   * `LineaCarrito`. El total se lee del elemento que el propio carrito está
+   * mostrando en este momento (según #show_price_with_iva), no de un id
+   * fijo — ver `estaMostrandoPrecioConIva()`.
+   */
+  async obtenerDatosLineaCarrito(clave: string): Promise<LineaCarrito> {
+    const mostrandoConIva = await this.estaMostrandoPrecioConIva();
+    const totalSelector = mostrandoConIva.activo
+      ? `#total_by_product_with_iva_${clave}`
+      : `#total_by_product_${clave}`;
+
+    // "neto" y "totalConIva" se leen SIEMPRE por su id fijo (no por
+    // totalSelector): ambos existen y están correctamente calculados en el
+    // DOM sin importar si #show_price_with_iva los muestra u oculta — ver
+    // el comentario del tipo LineaCarrito para la evidencia completa contra
+    // add_sn_product() en pos.js. #product_total_tax_<clave> ya NO se lee:
+    // pese al nombre, es un duplicado del total CON IVA, no el subtotal sin
+    // IVA.
+    const [nombre, cantidadTexto, netoTexto, totalConIvaTexto, totalTexto, applyIvaTexto] = await Promise.all([
+      this.page.locator(`#product_table_name_${clave}`).textContent(),
+      this.page.locator(`#input_product_quantity_${clave}`).inputValue(),
+      this.page.locator(`#total_by_product_${clave}`).textContent(),
+      this.page.locator(`#total_by_product_with_iva_${clave}`).textContent(),
+      this.page.locator(totalSelector).textContent(),
+      this.page.locator(`#product_hide_apply_iva_${clave}`).inputValue(),
+    ]);
+
+    console.log(
+      `[obtenerDatosLineaCarrito] clave=${clave} | neto(total_by_product)="${netoTexto?.trim()}" ` +
+      `| totalConIva(total_by_product_with_iva)="${totalConIvaTexto?.trim()}" ` +
+      `| total mostrado (${totalSelector})="${totalTexto?.trim()}" ` +
+      `| product_hide_apply_iva_${clave}="${applyIvaTexto}"`
+    );
+
+    const cantidad = parseFloat(cantidadTexto) || 0;
+    const neto = parseFloat((netoTexto ?? '0').replace(/[^0-9.-]/g, '')) || 0;
+    const totalConIva = parseFloat((totalConIvaTexto ?? '0').replace(/[^0-9.-]/g, '')) || 0;
+    const total = parseFloat((totalTexto ?? '0').replace(/[^0-9.-]/g, '')) || 0;
+    const iva = totalConIva - neto;
+    const precioUnitarioNeto = cantidad !== 0 ? neto / cantidad : 0;
+
+    return {
+      clave,
+      nombre: nombre?.trim() || clave,
+      cantidad,
+      precioUnitarioNeto,
+      neto,
+      totalConIva,
+      iva,
+      total,
+      ivaAplicado: applyIvaTexto === '1',
+    };
+  }
+
+  /**
+   * Valida una única línea del carrito: que el total mostrado sea
+   * (precio unitario × cantidad) + IVA, y que la bandera real de IVA
+   * aplicado (`product_hide_apply_iva_<clave>`) coincida con lo esperado —
+   * esto último es lo que detecta el caso real ya confirmado en este
+   * ambiente donde el total "se ve" con IVA calculado pero el sistema
+   * registra la línea como sin IVA aplicado (ver pos.js:695). El mensaje de
+   * error incluye producto, precio unitario, cantidad, IVA, total esperado
+   * y total obtenido.
+   */
+  async validarLineaCarrito(clave: string, ivaEsperadoActivo: boolean): Promise<LineaCarrito> {
+    const linea = await this.obtenerDatosLineaCarrito(clave);
+    const totalEsperado = (linea.precioUnitarioNeto * linea.cantidad) + linea.iva;
+
+    expect(
+      linea.total,
+      `Producto "${linea.nombre}" (clave ${linea.clave}): ` +
+      `precio unitario=${linea.precioUnitarioNeto.toFixed(2)}, cantidad=${linea.cantidad}, ` +
+      `IVA=${linea.iva.toFixed(2)}, total esperado=${totalEsperado.toFixed(2)}, total obtenido=${linea.total.toFixed(2)}`
+    ).toBeCloseTo(totalEsperado, 1);
+
+    expect(
+      linea.ivaAplicado,
+      `Producto "${linea.nombre}" (clave ${linea.clave}): se esperaba IVA ${ivaEsperadoActivo ? 'activado' : 'desactivado'} ` +
+      `pero el sistema registró product_hide_apply_iva_${linea.clave}="${linea.ivaAplicado ? '1' : '0'}"`
+    ).toBe(ivaEsperadoActivo);
+
+    return linea;
+  }
+
+  /**
+   * Recorre TODAS las claves indicadas (nunca un índice fijo ni "la
+   * primera") y valida cada línea con validarLineaCarrito(). Devuelve las
+   * líneas ya leídas para reutilizarlas al validar el resumen de impuestos,
+   * sin volver a golpear el DOM.
+   */
+  async validarLineasCarrito(claves: string[], ivaEsperadoActivo: boolean): Promise<LineaCarrito[]> {
+    const lineas: LineaCarrito[] = [];
+    for (const clave of claves) {
+      lineas.push(await this.validarLineaCarrito(clave, ivaEsperadoActivo));
+    }
+    return lineas;
+  }
+
+  /** Suma el IVA de las líneas dadas — reutilizado tanto para el cálculo como para el mensaje de error. */
+  calcularTotalImpuestosEsperado(lineas: LineaCarrito[]): number {
+    return lineas.reduce((acc, l) => acc + l.iva, 0);
+  }
+
+  /**
+   * Valida que la suma del IVA de todas las líneas dadas coincida
+   * exactamente con el campo "IVA" del resumen de totales del POS
+   * (`obtenerTotalIvaGeneral()`, el mismo footer, no el modal de pago).
+   */
+  async validarResumenImpuestos(lineas: LineaCarrito[]) {
+    const totalEsperado = this.calcularTotalImpuestosEsperado(lineas);
+    const totalMostrado = await this.obtenerTotalIvaGeneral();
+
+    expect(
+      totalMostrado,
+      `Suma de IVA por producto (${lineas.map(l => `"${l.nombre}"=${l.iva.toFixed(2)}`).join(' + ')} = ${totalEsperado.toFixed(2)}) ` +
+      `no coincide con el IVA del resumen de totales (${totalMostrado.toFixed(2)})`
+    ).toBeCloseTo(totalEsperado, 1);
+  }
+
+  /**
+   * Selecciona manualmente el primer tipo y la primera tasa de IVA reales
+   * disponibles (excluyendo el placeholder "Seleccionar...") vía los
+   * widgets "Chosen" — mismo criterio que ya usa el wizard de End. Pintura
+   * para parte/pieza/servicio: el catálogo de impuestos es configurable
+   * por compañía, sin nombre estable en el que apoyarse (confirmado en
+   * vivo: una misma instalación mostró "Impuesto al valor agregado" en un
+   * momento y "Condicion impuesto 1" / "Condicion impuesto 2" en otro, según
+   * el país configurado para la compañía), así que nunca se debe hardcodear
+   * un texto de opción.
+   *
+   * Solo tiene sentido llamarlo cuando el CABYS NO aparece en el formulario
+   * —si aparece, el IVA debe venir del CABYS, no de una selección manual—.
+   *
+   * Causa raíz confirmada (interceptando la propiedad `checked` del
+   * checkbox, con stack real, no una hipótesis): `pos.js:680-699` liga un
+   * `setTimeout(..., 300)` al evento `shown.bs.modal` del formulario que,
+   * si la compañía no tiene un impuesto por defecto configurado, ejecuta
+   * `$('#check_quick_product_apply_tax').prop('checked', false)`
+   * incondicionalmente, UNA sola vez por apertura del modal — sin importar
+   * lo que se haya seleccionado mientras tanto, y sin disparar ningún
+   * evento "change" (no hay señal que esperar). El "300ms" es nominal:
+   * confirmado en vivo disparando más de un segundo después de abierto el
+   * modal cuando el hilo principal está ocupado, pudiendo caer en medio de
+   * la propia selección manual o incluso en la breve ventana entre la
+   * última verificación y el click real en "Agregar" (las comprobaciones
+   * de accionabilidad de Playwright ya alcanzan a dar ese margen).
+   *
+   * Por tratarse de un timer de una sola vez con referencia temporal fija
+   * (la apertura del modal, no nuestras acciones), la defensa fiable no es
+   * perseguirlo después sino dejarlo pasar ANTES de tocar el checkbox por
+   * primera vez.
+   */
+  async seleccionarIvaManualmente() {
+    await this.page.waitForTimeout(5_000); // dejar pasar el timer de una sola vez de pos.js:680-699 antes de tocar el checkbox
+
+    await this.asegurarCheckboxIvaMarcado();
+    await this._seleccionarPrimeraOpcionChosen('#quick_product_tax_chosen');
+    await this._seleccionarPrimeraOpcionChosen('#quick_product_tax_rate_chosen');
+    await this.asegurarCheckboxIvaMarcado();
+  }
+
+  /**
+   * Presiona "Agregar" para guardar el producto rápido en el carrito.
+   *
+   * Requiere haber entrado al POS vía cargarPosDesdeDashboard(), no
+   * irAlPos() directo: este botón depende de un binding de jQuery que, en
+   * una carga en frío del navegador, puede quedar sin ligar por una
+   * condición de carrera real de la aplicación — ver el comentario de
+   * cargarPosDesdeDashboard() para la evidencia completa. Con esa
+   * precondición cumplida, un click real y sin force es suficiente.
+   */
+  async guardarProductoRapido() {
+    await this.page.locator(L.QUICK_PRODUCT_GUARDAR).click();
+  }
+
+  /**
+   * Igual que guardarProductoRapido(), pero arma la espera de la petición
+   * real (getPosProductSaleItem) ANTES del click —nunca después, para no
+   * perderse el evento si la respuesta llega muy rápido— y la devuelve para
+   * que el test la valide explícitamente a nivel de red, no solo por su
+   * efecto visual en el carrito.
+   */
+  async guardarProductoRapidoYObtenerRespuesta() {
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_GUARDAR_PRODUCTO),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await this.guardarProductoRapido();
+    return respuestaPromise;
+  }
+
+  // ─── Pestañas superiores del POS ────────────────────────────────────────────
+
+  /** Indica si la pestaña existe en el DOM en este momento — detecta pestañas ocultas por permisos/configuración sin fallar. */
+  async existePestanaPos(selector: string): Promise<boolean> {
+    return (await this.page.locator(selector).count()) > 0;
+  }
+
+  /**
+   * Visita una pestaña del POS ya confirmada existente: click real (sin
+   * force), espera la petición AJAX genérica que toda pestaña dispara al
+   * cambiar (`set_pos_type_option` — confirmado en vivo en las 8 pestañas
+   * probadas; es el único endpoint común a todas, a diferencia del
+   * endpoint propio de contenido que cada una dispara además y que sí
+   * varía), confirma que quedó activa (clase "btn_tab_active") y que su
+   * contenedor de contenido correspondiente quedó visible.
+   */
+  async visitarPestanaPos(pestana: PestanaPos) {
+    const tab = this.page.locator(pestana.selector);
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_CAMBIO_PESTANA_POS),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await tab.click();
+    await respuestaPromise;
+
+    await expect(
+      tab,
+      `La pestaña "${pestana.etiqueta}" (${pestana.selector}) no quedó activa tras el click`
+    ).toHaveClass(new RegExp(L.PESTANA_POS_CLASE_ACTIVA));
+
+    await expect(
+      this.page.locator(pestana.contenedorContenido),
+      `Tras activar "${pestana.etiqueta}", su contenedor de contenido (${pestana.contenedorContenido}) no quedó visible`
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    console.log(`[visitarPestanaPos] Pestaña visitada: "${pestana.etiqueta}" (${pestana.selector})`);
+  }
+
+  /**
+   * Localiza dinámicamente la pestaña "Apartados": a diferencia de las
+   * demás (todas con id técnico estable confirmado en pos.js), no hay
+   * ningún manejador de click propio para ella en este ambiente, así que
+   * no existe un id conocido que hardcodear — se busca por texto dentro
+   * del propio contenedor de pestañas. Devuelve null si no existe (oculta
+   * por permisos/configuración), sin asumir que siempre está presente.
+   */
+  async localizarPestanaApartados(): Promise<PestanaPos | null> {
+    const candidato = this.page.locator(L.PESTANAS_POS_CONTENEDOR).locator('a', { hasText: /apartado/i });
+    if ((await candidato.count()) === 0) return null;
+
+    const id = await candidato.first().getAttribute('id');
+    if (!id) return null;
+
+    return { selector: `#${id}`, etiqueta: 'Apartados', contenedorContenido: '#content_invoice_order_list' };
+  }
+
+  // ─── Selección de cliente ────────────────────────────────────────────────────
+
+  /**
+   * Busca clientes existentes con el término dado y selecciona el primer
+   * resultado. Búsqueda vacía (por defecto) devuelve el catálogo completo
+   * de la compañía — confirmado en vivo (24 resultados) — así que no
+   * depende de que exista un cliente con un nombre específico en este
+   * ambiente compartido de QA, mismo patrón de "primera opción disponible"
+   * que ya usa el resto de la suite para catálogos configurables por
+   * compañía (CABYS, tipo/tasa de IVA, parte/pieza/servicio de End.
+   * Pintura). Devuelve el nombre del cliente realmente seleccionado.
+   */
+  async seleccionarClienteExistente(terminoBusqueda = ''): Promise<string> {
+    await this.page.locator(L.CLIENTE_INPUT_BUSQUEDA).fill(terminoBusqueda);
+
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.CLIENTE_AJAX_BUSQUEDA),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await this.page.locator(L.CLIENTE_BTN_BUSCAR).click();
+    await respuestaPromise;
+
+    const sinResultados = await this.page.locator(L.CLIENTE_SIN_RESULTADOS).isVisible().catch(() => false);
+    if (sinResultados) {
+      throw new Error(`No se encontraron clientes con el término de búsqueda "${terminoBusqueda}"`);
+    }
+
+    const primerCliente = this.page.locator(L.CLIENTE_FILAS_RESULTADO).first();
+    await expect(
+      primerCliente,
+      `No apareció ningún resultado de cliente para "${terminoBusqueda}"`
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    // La búsqueda dispara, en el mismo instante en que renderiza las filas
+    // de resultado, una animación jQuery de 100ms que oculta .product_panel
+    // (get_customer_by_pos_option → $('.product_panel').hide(100)) — la
+    // inserción de las filas es síncrona/instantánea, así que el bloque
+    // anterior (primerCliente visible) puede resolver bien ANTES de que esa
+    // animación en cola termine. selectCustomerToPos() hace, en cambio, un
+    // $('.product_panel').show() síncrono e inmediato al elegir un cliente:
+    // si ese click cae dentro de esa ventana de ~100ms, el callback de
+    // finalización de la animación aún pendiente puede ejecutarse DESPUÉS
+    // del show() y revertirlo a oculto — condición de carrera real de la
+    // app, confirmada en vivo interceptando jQuery.fn.show/hide con stack
+    // traces reales (mismo patrón de causa raíz que el bug ya documentado
+    // de pos.js:695). Por eso se espera aquí, de forma explícita, a que la
+    // animación en cola termine de verdad (.product_panel oculto) antes de
+    // hacer click en "seleccionar" — así el show() posterior corre después
+    // de que la cola de animación quedó vacía, sin nada que lo revierta.
+    await expect(
+      this.page.locator(L.PANEL_PRODUCTOS),
+      'La animación de ocultar el catálogo de productos (disparada por la búsqueda) no terminó — no se puede seleccionar el cliente todavía sin arriesgar la condición de carrera ya documentada'
+    ).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    await primerCliente.locator(L.CLIENTE_BTN_SELECCIONAR_FILA).click();
+
+    await expect(
+      this.page.locator(L.CLIENTE_PANEL_RESULTADOS),
+      'El panel de selección de clientes no se cerró tras elegir uno'
+    ).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    await expect(
+      this.page.locator(L.CLIENTE_SELECT_OCULTO),
+      'El cliente seleccionado no quedó registrado en #customer_select'
+    ).not.toHaveValue('');
+
+    const nombreCliente = (await this.page.locator(L.CLIENTE_NOMBRE_SELECCIONADO).textContent())?.trim() ?? '';
+    expect(nombreCliente, 'El nombre del cliente seleccionado no quedó visible en el POS').not.toBe('');
+
+    await expect(
+      this.page.locator(L.PANEL_PRODUCTOS),
+      'El POS no volvió al catálogo de productos tras seleccionar el cliente'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    const idCliente = await this.page.locator(L.CLIENTE_SELECT_OCULTO).inputValue();
+    console.log(`[seleccionarClienteExistente] Cliente seleccionado: "${nombreCliente}" (id=${idCliente})`);
+
+    return nombreCliente;
+  }
+
+  /**
+   * Factura solo con el nombre del cliente, sin seleccionar uno registrado:
+   * abre "Agregar" → "Nombre del cliente" (dropdown Bootstrap dentro del
+   * panel de búsqueda), escribe el nombre y confirma con blur — el campo
+   * usa `onchange`, confirmado en vivo que un fill() sin blur no aplica el
+   * nombre. Valida contra #temporal_customer_name (el campo que
+   * efectivamente se lee al facturar), no contra #customer_selected_name
+   * (ver el comentario de CLIENTE_INPUT_NOMBRE_RAPIDO).
+   */
+  async ingresarNombreCliente(nombre: string) {
+    await this.page.locator(L.CLIENTE_DROPDOWN_AGREGAR).click();
+    await this.page.getByRole('link', { name: 'Nombre del cliente' }).click();
+    await expect(
+      this.page.locator(L.CLIENTE_CONTENEDOR_NOMBRE_RAPIDO),
+      'El campo "Nombre del cliente" no apareció tras seleccionar la opción del menú "Agregar"'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    const campoNombre = this.page.locator(L.CLIENTE_INPUT_NOMBRE_RAPIDO);
+    await campoNombre.fill(nombre);
+    await campoNombre.blur();
+
+    await expect(
+      campoNombre,
+      `El nombre del cliente no quedó aplicado: se esperaba "${nombre}"`
+    ).toHaveValue(nombre);
+
+    await expect(
+      this.page.locator(L.PANEL_PRODUCTOS),
+      'El POS no está listo para continuar con la facturación tras ingresar el nombre del cliente'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    console.log(`[ingresarNombreCliente] Nombre aplicado: "${nombre}"`);
+  }
+
   // ─── Métodos privados ────────────────────────────────────────────────────────
 
   /**
@@ -966,6 +1911,129 @@ export class PosPage {
     const opcion = this.page.locator(selector).first();
     await expect(opcion, `No hay ninguna ${descripcion} disponible en este paso del wizard "End. Pintura"`).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
     await opcion.click();
+  }
+
+  /**
+   * Abre un widget "Chosen" y selecciona su primera opción real, excluyendo
+   * el placeholder ya marcado "result-selected" (mismo criterio que
+   * PINTURA_VEHICULO_RESULTADO usa filtrando por texto: el primer <li> de
+   * un Chosen recién abierto es siempre el placeholder, nunca una opción
+   * real utilizable).
+   */
+  private async _seleccionarPrimeraOpcionChosen(contenedorChosenSelector: string) {
+    await this.page.locator(`${contenedorChosenSelector} .chosen-single`).click();
+    const opcion = this.page.locator(`${contenedorChosenSelector} .chosen-results li:not(.result-selected)`).first();
+    await expect(opcion, `El Chosen "${contenedorChosenSelector}" no tiene ninguna opción real disponible`).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await opcion.click();
+  }
+
+  /**
+   * Determina de forma confiable si el check "Incluir IVA" está activo en
+   * ESTE momento — nunca asumido por el escenario del test. Lee la
+   * propiedad IDL `.checked` (única fuente real dentro del propio checkbox,
+   * ver el comentario de `EstadoCheckIva`) e imprime en consola el estado
+   * detectado, el método usado y la evidencia cruda inspeccionada (atributo
+   * HTML, aria-checked, data-*, clases), para que quede constancia de que
+   * no se asumió nada.
+   *
+   * Importante: esta lectura es válida para ESTE instante. No garantiza qué
+   * quedará aplicado tras el guardado —ver el comentario de
+   * `EstadoCheckIva`—, así que las validaciones posteriores al guardado
+   * deben usar `#product_hide_apply_iva_<clave>` (LineaCarrito.ivaAplicado),
+   * no este resultado.
+   */
+  async obtenerEstadoCheckIva(): Promise<EstadoCheckIva> {
+    const detalle = await this.page.locator(L.QUICK_PRODUCT_APLICAR_IVA).evaluate((el: HTMLInputElement) => ({
+      checkedProperty: el.checked,
+      checkedAttribute: el.getAttribute('checked'),
+      ariaChecked: el.getAttribute('aria-checked'),
+      dataAttrs: [...el.attributes].filter(a => a.name.startsWith('data-')).map(a => `${a.name}="${a.value}"`),
+      classList: [...el.classList],
+    }));
+
+    const resultado: EstadoCheckIva = {
+      activo: detalle.checkedProperty,
+      metodo: 'propiedad IDL .checked (Playwright: isChecked())',
+      evidencia:
+        `checkedProperty(.checked)=${detalle.checkedProperty}, ` +
+        `checkedAttribute(getAttribute)=${detalle.checkedAttribute ?? 'null'}, ` +
+        `aria-checked=${detalle.ariaChecked ?? 'null'}, ` +
+        `data-*=[${detalle.dataAttrs.join(', ') || 'ninguno'}], ` +
+        `classList=[${detalle.classList.join(', ') || 'ninguna'}]`,
+    };
+
+    console.log(
+      `[obtenerEstadoCheckIva] activo=${resultado.activo} | método=${resultado.metodo} | evidencia: ${resultado.evidencia}`
+    );
+
+    return resultado;
+  }
+
+  /**
+   * Asegura que el checkbox "Aplicar impuesto" quede marcado, clickeándolo
+   * solo si hace falta (nunca a ciegas: un click sobre un checkbox ya
+   * marcado lo destildaría). Reintenta con `expect.poll` porque el propio
+   * click puede no sostenerse al primer intento.
+   */
+  async asegurarCheckboxIvaMarcado() {
+    await expect.poll(async () => {
+      const yaMarcado = await this.page.locator(L.QUICK_PRODUCT_APLICAR_IVA).isChecked();
+      if (!yaMarcado) {
+        await this.page.evaluate((id) => (document.getElementById(id) as HTMLInputElement).click(), 'check_quick_product_apply_tax');
+      }
+      return this.page.locator(L.QUICK_PRODUCT_APLICAR_IVA).isChecked();
+    }, { timeout: TIMEOUTS.PAYMENT_MODAL }).toBe(true);
+  }
+
+  /**
+   * Re-verifica y, si hace falta, vuelve a dejar el checkbox de IVA marcado
+   * y el tipo/tasa realmente seleccionados (no en el placeholder "0").
+   *
+   * Causa raíz confirmada interceptando la propiedad `checked` del checkbox
+   * (captura de stack real, no una hipótesis): pos.js:680-699 liga un
+   * `setTimeout(..., 300)` al evento `shown.bs.modal` del formulario que,
+   * si la compañía no tiene un impuesto por defecto configurado, ejecuta
+   * `$('#check_quick_product_apply_tax').prop('checked', false)`
+   * incondicionalmente — una sola vez por apertura del modal, sin importar
+   * lo que el usuario haya seleccionado mientras tanto. `.prop()` no
+   * dispara ningún evento "change", así que no hay señal que esperar. El
+   * "300ms" es nominal: confirmado en vivo disparando más de un segundo
+   * después de abierto el modal cuando el hilo principal está ocupado
+   * (carga de scripts), pudiendo caer en medio de la propia selección
+   * manual de IVA del test.
+   *
+   * Como es un timer de una sola vez (no recurrente), la defensa no es
+   * perseguirlo indefinidamente sino corregir, esperar un margen real
+   * mayor a los 300ms nominales, y corregir de nuevo — para esa segunda
+   * pasada, el timer ya disparó y no hay una tercera corrección pendiente.
+   */
+  async asegurarIvaManualConfigurado() {
+    const corregirSiHizoFalta = async () => {
+      await this.asegurarCheckboxIvaMarcado();
+      const tipoValor = await this.page.locator(L.QUICK_PRODUCT_TIPO_IVA).inputValue();
+      if (parseInt(tipoValor, 10) === 0) {
+        await this._seleccionarPrimeraOpcionChosen('#quick_product_tax_chosen');
+      }
+      const tasaValor = await this.page.locator(L.QUICK_PRODUCT_TASA_IVA).inputValue();
+      if (parseInt(tasaValor, 10) === 0) {
+        await this._seleccionarPrimeraOpcionChosen('#quick_product_tax_rate_chosen');
+      }
+    };
+
+    await corregirSiHizoFalta();
+    await this.page.waitForTimeout(800); // margen real sobre los 300ms nominales del timer de pos.js
+    await corregirSiHizoFalta();
+
+    // Verificación final: si algo se reseteó, esto también reseteó "Precio
+    // con IVA" (lo recalcula quick_product_apply_tax() al reafirmar el
+    // checkbox) — validar que quedó realmente mayor al precio base, no
+    // igual a él (que sería 0% de tasa efectiva).
+    const precio = parseFloat(await this.page.locator(L.QUICK_PRODUCT_PRECIO).inputValue());
+    const precioConIva = await this.obtenerPrecioConIvaFormulario();
+    expect(
+      precioConIva,
+      `"Precio con IVA" (${precioConIva}) quedó igual al precio base (${precio}) tras reafirmar el IVA — la tasa se reseteó a 0%`
+    ).toBeGreaterThan(precio);
   }
 
   private async _llamarSetProductTotal(clave: string, porcentaje: string) {
