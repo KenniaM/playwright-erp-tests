@@ -65,6 +65,13 @@ const L = {
   // abierta — descubierto inspeccionando el DOM real, no asumido.
   MENU_CAJA_BTN:        '#menu_cash',
   MENU_CAJA_ITEM_F12:   'Abrir/Cerrar Caja',
+  // El <ul> del menú "Caja" (componente MDL, mismo patrón que el menú de tres
+  // puntos): al upgradearse queda envuelto en un div.mdl-menu__container, que es
+  // el que gana la clase "is-visible" mientras el menú está desplegado —
+  // confirmado inspeccionando el DOM real en vivo (el <ul> y el <li> nunca usan
+  // aria-expanded). #menu_cash es el botón que dispara el toggle, no el que
+  // refleja el estado.
+  MENU_CAJA_UL:          'ul.mdl-menu[for="menu_cash"]',
 
   // Modal "Detalle de Cierre" (cerrar caja)
   DIALOG_CERRAR_CAJA:      '#dialog_cash_closing',
@@ -259,24 +266,56 @@ export class PosPage {
     }
   }
 
-  /** Abre el menú "Caja" del encabezado del POS. */
-  async abrirMenuCaja() {
-    // El aviso de permisos de notificación del navegador puede quedar sobre el
-    // encabezado e interceptar el click; se descarta aquí como parte de la propia
-    // acción, sin importar el estado de la caja.
-    await this.cerrarModalNotificacionesSiAparece();
+  /**
+   * Indica si el menú "Caja" está actualmente desplegado, leyendo el estado real
+   * del DOM (clase "is-visible" en el div.mdl-menu__container que envuelve el
+   * <ul>) en vez de asumirlo — confirmado en vivo que este es el indicador real;
+   * ni el <ul> ni el <li> usan aria-expanded.
+   */
+  async menuCajaEstaAbierto(): Promise<boolean> {
+    return this.page.evaluate((selector) => {
+      const ul = document.querySelector(selector);
+      const container = ul?.closest('.mdl-menu__container');
+      return container?.classList.contains('is-visible') ?? false;
+    }, L.MENU_CAJA_UL);
+  }
 
-    await this.page.locator(L.MENU_CAJA_BTN).click();
+  /**
+   * Abre el menú "Caja" del encabezado del POS. #menu_cash es un botón de
+   * alternancia (toggle), no una acción idempotente de "asegurar abierto": si el
+   * menú ya está desplegado (p. ej. un click anterior sí llegó a ejecutarse pese
+   * a haber sido reportado como fallido), volver a pulsarlo lo cerraría en vez de
+   * dejarlo abierto — confirmado en vivo. Por eso se comprueba el estado real
+   * antes de decidir si hace falta el click.
+   */
+  async abrirMenuCaja() {
+    // Los overlays conocidos (aviso de notificaciones, cualquier toast "noty")
+    // pueden quedar sobre el encabezado e interceptar el click, sin importar el
+    // estado de la caja.
+    await this.cerrarModalNotificacionesSiAparece();
+    await this.cerrarTodosLosToastsSiAparecen();
+
+    if (!(await this.menuCajaEstaAbierto())) {
+      await this.page.locator(L.MENU_CAJA_BTN).click();
+    }
   }
 
   /**
    * Selecciona "(F12) Abrir/Cerrar Caja" del menú "Caja" ya desplegado. Este único
    * ítem muestra el modal "Abrir Caja" si la caja está cerrada, o "Detalle de
    * Cierre" si está abierta — el sistema decide cuál, no el test.
+   *
+   * El click se acota a 5 s (en vez de heredar el timeout completo del test):
+   * si un overlay transitorio del encabezado (banner de notificaciones, un
+   * toast) está tapando el <li> en ese instante, un click sin límite propio
+   * puede quedar bloqueado hasta agotar los 300 s del test entero — confirmado
+   * en vivo. Con un límite corto, el bucle de reintento que llama a este método
+   * puede volver a intentar en vez de quedar colgado en un único click.
    */
   async seleccionarAbrirCerrarCaja() {
     await this.cerrarModalNotificacionesSiAparece();
-    await this.page.locator('li', { hasText: L.MENU_CAJA_ITEM_F12 }).click();
+    await this.cerrarTodosLosToastsSiAparecen();
+    await this.page.locator('li', { hasText: L.MENU_CAJA_ITEM_F12 }).click({ timeout: 5_000 });
   }
 
   /**
@@ -478,6 +517,25 @@ export class PosPage {
     if (aparecio) {
       await aviso.click().catch(() => {});
       await aviso.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => {});
+    }
+  }
+
+  /**
+   * Cierra cualquier toast "noty" visible en el encabezado (aviso de consecutivo
+   * fuera de rango u otros que el sistema pueda mostrar), sin filtrar por texto
+   * como sí hace `cerrarAvisoConsecutivoSiAparece`. Son overlays transitorios que
+   * pueden reaparecer por su cuenta y tapar el menú "Caja" —confirmado en
+   * vivo—, así que ni el click ni la comprobación de que desapareció usan
+   * aserciones duras. Acotado a un puñado de vueltas para no quedar en un bucle
+   * infinito si algo reaparece de forma continua.
+   */
+  async cerrarTodosLosToastsSiAparecen() {
+    const toast = this.page.locator('.noty_bar').first();
+    for (let i = 0; i < 5; i++) {
+      const visible = await toast.isVisible().catch(() => false);
+      if (!visible) return;
+      await toast.click().catch(() => {});
+      await toast.waitFor({ state: 'hidden', timeout: 3_000 }).catch(() => {});
     }
   }
 
