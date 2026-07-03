@@ -111,6 +111,30 @@ const L = {
   TAB_SERVICIOS:       '#ck_view_services',
   TAB_PINTURA:         '#ck_view_straightening_and_paint',
   TAB_ACTIVE_CLASS:    'btn_sale_selected',
+
+  // Wizard "End. Pintura": Vehículo → Parte → Pieza → Servicio → modal de precio.
+  // El <select> real de vehículo está oculto (display:none); el widget "Chosen"
+  // (jQuery) que lo reemplaza visualmente es lo único clickeable — confirmado
+  // inspeccionando el DOM en vivo. El primer <li> de sus resultados es siempre
+  // el placeholder "Selecc. vehículo" ya marcado result-selected, así que hay
+  // que filtrar por texto, nunca tomar el primero.
+  PINTURA_VEHICULO_TRIGGER:   '#select_type_vehicle_chosen .chosen-single',
+  PINTURA_VEHICULO_RESULTADO: '#select_type_vehicle_chosen .chosen-results li',
+  // Parte, pieza y servicio son catálogo configurable por la empresa (tienen su
+  // propio botón "add" hacia el administrador), no una taxonomía fija de la
+  // interfaz — a diferencia del tipo de vehículo, no hay nombre estable en el
+  // que apoyarse, así que se selecciona la primera opción disponible.
+  PINTURA_PARTE:    '.part_vehicle',
+  PINTURA_PIEZA:    '.piece-or-service.piece',
+  PINTURA_SERVICIO: '.piece-or-service.service',
+
+  // Modal "Selecciona un precio" (Bootstrap estándar, mismo patrón que
+  // L.MODAL_ABIERTO). "div_price_new" es una tarjeta fija de la interfaz
+  // ("Agregar precio a este servicio", crea un precio nuevo) que nunca debe
+  // tratarse como una opción de precio existente — se excluye por selector,
+  // no por texto (su rótulo es configurable por la empresa).
+  DIALOG_SELECCIONAR_PRECIO: '#dialog_select_prices',
+  PINTURA_PRECIO_OPCION:     '#modal_prices_body [id^="div_price_"]:not(#div_price_new)',
 } as const;
 
 // Texto que identifica la caja cerrada en el modal "Abrir Caja". Exportado para
@@ -143,6 +167,19 @@ export const METODO: Record<string, MetodoPago> = {
 // Efectivo permite superar el total (el sistema calcula el vuelto).
 export const MONTO_EFECTIVO = '100';
 export const DESCUENTO_INDIVIDUAL_PCT = '5';
+
+// Nombre de un servicio real y único en el catálogo del tab "Servicios" —
+// confirmado contando coincidencias exactas en el DOM en vivo (30 servicios
+// visibles, "0-ST-01" aparece una sola vez). Varios servicios del catálogo
+// comparten nombre (p. ej. "4x4 no funciona" aparece 3 veces), así que no
+// cualquier nombre sirve para una búsqueda por texto exacto.
+export const NOMBRE_SERVICIO = '0-ST-01';
+
+// Tipo de vehículo para el wizard "End. Pintura": a diferencia de parte/pieza/
+// servicio (catálogo configurable por la empresa), el tipo de vehículo es una
+// lista fija del <select> de la interfaz (Hatchback, Crossover, Minivan, SUV,
+// Automóvil, Pick-up) — confirmado inspeccionando sus <option> en vivo.
+export const VEHICULO_PINTURA_TIPO = 'Hatchback';
 
 // ─── Tipos de resultado del descuento individual ───────────────────────────────
 
@@ -858,7 +895,78 @@ export class PosPage {
     return clase?.includes(L.TAB_ACTIVE_CLASS) ?? false;
   }
 
+  // ─── Wizard "End. Pintura": Vehículo → Parte → Pieza → Servicio → Precio ──────
+
+  /** Locator del modal "Selecciona un precio" que abre un servicio de End. Pintura. */
+  get modalSeleccionarPrecio() {
+    return this.page.locator(L.DIALOG_SELECCIONAR_PRECIO);
+  }
+
+  /**
+   * Selecciona el tipo de vehículo en el wizard "End. Pintura". El <select> real
+   * está oculto (display:none); el widget "Chosen" que lo reemplaza visualmente
+   * es lo único clickeable, confirmado inspeccionando el DOM en vivo — de ahí
+   * que se opere sobre `.chosen-single`/`.chosen-results` en vez de `selectOption()`.
+   */
+  async seleccionarVehiculoPintura(tipo: string) {
+    await this.page.locator(L.PINTURA_VEHICULO_TRIGGER).click();
+    await this.page.locator(L.PINTURA_VEHICULO_RESULTADO, { hasText: tipo }).click();
+  }
+
+  /**
+   * Selecciona la primera parte disponible para el vehículo ya elegido (p. ej.
+   * "Puerta"). Falla con un mensaje explícito si no aparece ninguna, en vez de
+   * dejar que un click a ciegas produzca un timeout genérico más adelante.
+   */
+  async seleccionarPrimeraParte() {
+    await this._clickPrimeraOpcionDisponible(L.PINTURA_PARTE, 'parte');
+  }
+
+  /** Selecciona la primera pieza disponible para la parte ya elegida. */
+  async seleccionarPrimeraPieza() {
+    await this._clickPrimeraOpcionDisponible(L.PINTURA_PIEZA, 'pieza');
+  }
+
+  /**
+   * Selecciona el primer servicio disponible para la pieza ya elegida. Este
+   * paso abre el modal "Selecciona un precio" — no se espera aquí porque cuál
+   * de los dos (precio único auto-aplicado o modal con opciones) depende de
+   * datos del servicio, y es responsabilidad de quien llama decidir qué esperar.
+   */
+  async seleccionarPrimerServicioPintura() {
+    await this._clickPrimeraOpcionDisponible(L.PINTURA_SERVICIO, 'servicio');
+  }
+
+  /**
+   * Selecciona el primer precio real disponible en el modal "Selecciona un
+   * precio" y espera a que el modal se cierre. Excluye por selector la tarjeta
+   * "Agregar precio a este servicio" (crea un precio nuevo, no selecciona uno
+   * existente) — esa tarjeta es fija en la interfaz, su rótulo no lo es.
+   */
+  async seleccionarPrimerPrecioDisponible() {
+    await expect(this.modalSeleccionarPrecio).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    const precio = this.page.locator(L.PINTURA_PRECIO_OPCION).first();
+    await expect(precio, 'No hay ningún precio disponible para este servicio').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await precio.click();
+
+    await expect(this.modalSeleccionarPrecio).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
   // ─── Métodos privados ────────────────────────────────────────────────────────
+
+  /**
+   * Hace click en la primera opción visible que resuelva el selector dado,
+   * validando primero que exista al menos una — usado por los pasos de
+   * parte/pieza/servicio del wizard "End. Pintura", que comparten la misma
+   * necesidad (catálogo sin nombre estable, tomar la primera disponible) y el
+   * mismo tipo de fallo a diagnosticar si el catálogo viniera vacío.
+   */
+  private async _clickPrimeraOpcionDisponible(selector: string, descripcion: string) {
+    const opcion = this.page.locator(selector).first();
+    await expect(opcion, `No hay ninguna ${descripcion} disponible en este paso del wizard "End. Pintura"`).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await opcion.click();
+  }
 
   private async _llamarSetProductTotal(clave: string, porcentaje: string) {
     await this.page.evaluate(

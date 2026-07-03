@@ -1,5 +1,5 @@
 import { test, expect, Locator, Page } from '@playwright/test';
-import { PosPage, METODO, MONTO_EFECTIVO, DESCUENTO_INDIVIDUAL_PCT, CAJA_TEXTO, TIMEOUTS, ResultadoDescuento } from './pos.page';
+import { PosPage, METODO, MONTO_EFECTIVO, DESCUENTO_INDIVIDUAL_PCT, CAJA_TEXTO, TIMEOUTS, ResultadoDescuento, NOMBRE_SERVICIO, VEHICULO_PINTURA_TIPO } from './pos.page';
 
 /**
  * Carga el POS y decide qué hacer con el modal "Abrir Caja" si aparece: lo valida y
@@ -269,6 +269,102 @@ test('facturar dos productos con descuento individual y pago mixto (tarjeta + ef
   });
 
   await test.step('Validar resultado final: factura generada y carrito vacío', async () => {
+    await pos.validarCarritoVacio();
+  });
+});
+
+test('facturar un servicio del tab Servicios en POS', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const pos = new PosPage(page);
+
+  await test.step('Abrir el POS y cerrar overlays conocidos si aparecen', async () => {
+    await cargarPosYCerrarModalSiAparece(pos);
+    await pos.cerrarModalNotificacionesSiAparece();
+    await pos.cerrarAvisoConsecutivoSiAparece();
+    await pos.cerrarTodosLosToastsSiAparecen();
+  });
+
+  await test.step('Cambiar al tab Servicios y validar que quedó activo', async () => {
+    await pos.tabServicios.click();
+    await esperarQuedaActivo(() => pos.tabEstaActivo(pos.tabServicios));
+  });
+
+  let clavesAntes: string[] = [];
+  await test.step('Seleccionar un servicio por nombre y validar que se agregó al carrito', async () => {
+    // El tab Servicios repuebla la misma grilla `.product_box_name` que usan los
+    // productos (mismo onclick "add_to_table", confirmado inspeccionando el DOM
+    // en vivo), así que se reutiliza agregarProductoPorNombre tal cual en vez de
+    // duplicar su lógica de búsqueda por nombre exacto.
+    clavesAntes = await pos.obtenerClavesProductos();
+    await pos.agregarProductoPorNombre(NOMBRE_SERVICIO);
+    await expect.poll(async () => (await pos.obtenerClavesProductos()).length).toBeGreaterThan(clavesAntes.length);
+  });
+
+  await test.step('Abrir modal de pago', async () => {
+    await abrirModalDePago(pos);
+  });
+
+  await test.step('Pagar en efectivo', async () => {
+    await pos.seleccionarPagoEfectivo(MONTO_EFECTIVO);
+  });
+
+  await test.step('Confirmar factura y cerrar impresión', async () => {
+    await confirmarPagoAbriendoCajaSiEsNecesario(pos, page);
+  });
+
+  await test.step('Validar carrito vacío', async () => {
+    await pos.validarCarritoVacio();
+  });
+});
+
+test('facturar un servicio de End. Pintura en POS', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const pos = new PosPage(page);
+
+  await test.step('Abrir el POS y cerrar overlays conocidos si aparecen', async () => {
+    await cargarPosYCerrarModalSiAparece(pos);
+    await pos.cerrarModalNotificacionesSiAparece();
+    await pos.cerrarAvisoConsecutivoSiAparece();
+    await pos.cerrarTodosLosToastsSiAparecen();
+  });
+
+  await test.step('Cambiar al tab End. Pintura y validar que quedó activo', async () => {
+    await pos.tabPintura.click();
+    await esperarQuedaActivo(() => pos.tabEstaActivo(pos.tabPintura));
+  });
+
+  await test.step('Recorrer el wizard: vehículo → parte → pieza → servicio', async () => {
+    // El tipo de vehículo es una lista fija de la interfaz (se selecciona por
+    // nombre); parte, pieza y servicio son catálogo configurable por la empresa
+    // sin nombre estable, así que se toma la primera opción disponible en cada
+    // paso — mismo criterio que ya usa agregarPrimerProductoDePrecioFijo cuando
+    // no hay un nombre por el cual buscar.
+    await pos.seleccionarVehiculoPintura(VEHICULO_PINTURA_TIPO);
+    await pos.seleccionarPrimeraParte();
+    await pos.seleccionarPrimeraPieza();
+    await pos.seleccionarPrimerServicioPintura();
+  });
+
+  let clavesAntes: string[] = [];
+  await test.step('Seleccionar un precio en el modal y validar que el servicio se agregó al carrito', async () => {
+    clavesAntes = await pos.obtenerClavesProductos();
+    await pos.seleccionarPrimerPrecioDisponible();
+    await expect.poll(async () => (await pos.obtenerClavesProductos()).length).toBeGreaterThan(clavesAntes.length);
+  });
+
+  await test.step('Abrir modal de pago', async () => {
+    await abrirModalDePago(pos);
+  });
+
+  await test.step('Pagar en efectivo', async () => {
+    await pos.seleccionarPagoEfectivo(MONTO_EFECTIVO);
+  });
+
+  await test.step('Confirmar factura y cerrar impresión', async () => {
+    await confirmarPagoAbriendoCajaSiEsNecesario(pos, page);
+  });
+
+  await test.step('Validar carrito vacío', async () => {
     await pos.validarCarritoVacio();
   });
 });
