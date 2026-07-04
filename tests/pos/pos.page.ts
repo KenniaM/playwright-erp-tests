@@ -227,6 +227,92 @@ const L = {
   // exitoso.
   AJAX_GUARDAR_COMBO: 'save_company_combo',
 
+  // ─── "Crear Producto" (primera tarjeta del grid de productos del POS) ──────
+  // Confirmado en vivo: NO es el mismo flujo que "Inventario → Crear
+  // Producto" del menú lateral (esa es una página completamente distinta,
+  // /prod/product, con su propio wizard) — este es un modal embebido en el
+  // propio POS (wizard jQuery Steps de 3 pasos), abierto desde la primera
+  // tarjeta especial del grid de productos (clase product_box_new_item,
+  // texto "Crear Producto", onclick="add_product_modal(...)").
+  PRODUCTO_TARJETA_CREAR:     '.product_box_new_item',
+  DIALOG_CREAR_PRODUCTO:      '#dialog_add_quick_product',
+  PRODUCTO_NOMBRE:            '#product_name_app',
+  PRODUCTO_MARCA:             '#product_brand_app',
+  PRODUCTO_PROVEEDOR_CODIGO:  '#product_provider_code_app',
+  PRODUCTO_CODIGO_BARRAS:     '#product_bar_code_app',
+  // Categoría/Subcategoría/Proveedor/Tipo de Unidad/Sección/Sub sección son
+  // todos widgets "Chosen" (mismo patrón que el resto de la suite) —
+  // confirmado en vivo que sus contenedores "_chosen" existen y responden al
+  // mismo clic-y-elegir-primera-opción ya usado para IVA/tasa en Producto
+  // Rápido y Combo.
+  PRODUCTO_CATEGORIA_CHOSEN:    '#category_select_spk_app_chosen',
+  PRODUCTO_SUBCATEGORIA_CHOSEN: '#subcategory_select_spk_app_chosen',
+  PRODUCTO_PROVEEDOR_CHOSEN:    '#provider_select_spk_app_chosen',
+  PRODUCTO_TIPO_UNIDAD_CHOSEN:  '#product_unit_type_app_chosen',
+  PRODUCTO_SECCION_CHOSEN:      '#product_section_app_chosen',
+  PRODUCTO_SUBSECCION_CHOSEN:   '#product_sub_section_app_chosen',
+
+  // Botones de navegación del wizard (jQuery Steps): cada uno es un <a> con
+  // href="#accion" — "Guardar" y "Siguiente" ya persisten el paso actual vía
+  // AJAX (saveProductStepOne / updateProductSteptwo), y "Finalizar" —visible
+  // únicamente en el último paso— dispara updateProductStepthree y cierra el
+  // modal. Confirmado en vivo interceptando la red en cada click.
+  PRODUCTO_WIZARD_SIGUIENTE: '#dialog_add_quick_product .actions a[href="#next"]',
+  PRODUCTO_WIZARD_FINALIZAR: '#dialog_add_quick_product .actions a[href="#finish"]',
+
+  // Paso "Costos": campos "simples" (visibles por defecto, sin fraccionar).
+  PRODUCTO_COSTO:            '#product_cost_app',
+  PRODUCTO_PRECIO_VENTA:     '#product_price_app',
+  PRODUCTO_CANTIDAD:         '#product_quantity_app',
+  PRODUCTO_STOCK_MINIMO:     '#product_stock_min_app',
+  PRODUCTO_DESCUENTO_PROVEEDOR: '#product_discount_app',
+  PRODUCTO_DESCUENTO_MAXIMO: '#product_max_discount_app',
+
+  // Checkbox "¿Aplica Impuesto?" — al marcarlo revela un select de tipo y
+  // uno de tasa (ambos <select> nativos, SIN Chosen — confirmado en vivo con
+  // page.selectOption() funcionando directo, a diferencia de categoría/
+  // proveedor/etc. de este mismo formulario). La opción de tasa trae un
+  // atributo `percent` real (ej. percent="10.00000"), mismo patrón que ya
+  // usan Producto Rápido y Combo.
+  PRODUCTO_APLICAR_IVA:      '#apply_tax_check_app',
+  PRODUCTO_TIPO_IVA:         '#add_quick_product_product_tax_list_1',
+  PRODUCTO_TASA_IVA:         '#add_quick_product_product_tax_rate_list_1',
+
+  // Checkbox "¿Fraccionar?" — al marcarlo, el sistema REEMPLAZA los campos
+  // simples de precio (product_utility_app/product_discount_app/
+  // product_price_app/product_quantity_app) por dos grupos nuevos: "_box_app"
+  // (precio por caja) y "_fragment_app" (precio por fracción) — confirmado
+  // en vivo comparando el DOM antes/después de marcar el checkbox, no
+  // asumido. product_price_box_app y product_price_fragment_app son los
+  // únicos obligatorios de ambos grupos.
+  PRODUCTO_FRACCIONAR:              '#is_fragment_app',
+  PRODUCTO_PRECIO_CAJA:             '#product_price_box_app',
+  PRODUCTO_CANTIDAD_CAJA:           '#product_quantity_box',
+  PRODUCTO_FRACCIONES_POR_UNIDAD:   '#fragments_per_unit_app',
+  PRODUCTO_PRECIO_FRACCION:         '#product_price_fragment_app',
+
+  // Botón "CABYS" propio de este formulario — existe siempre en el DOM
+  // (confirmado en vivo, count()==1) pero solo queda visible si el país
+  // configurado para la compañía lo exige (mismo comportamiento condicional
+  // ya documentado para Producto Rápido/Combo — en este ambiente compartido
+  // actualmente no aparece). Reutiliza el sub-modal COMPARTIDO de CABYS
+  // (#dialog_add_cabys_code, el mismo que usa Producto Rápido) — confirmado
+  // en vivo que NO abre uno propio como sí hace Combo.
+  PRODUCTO_BTN_CABYS:        '#quick_pos_product_cabys_content a[href*="validate_pos_cabys_code"]',
+  PRODUCTO_CABYS_TAX_SUGERIDO: '#product_cabys_tax',
+
+  // Paso "Desc. Producto".
+  PRODUCTO_TAMANO:       '#product_size_app',
+  PRODUCTO_DESCRIPCION:  '#product_description_app',
+
+  // Peticiones AJAX reales de cada paso del wizard (confirmadas en vivo
+  // interceptando la red) — saveProductStepOne es la que efectivamente crea
+  // el producto (responde con product_id); las otras dos solo actualizan
+  // pasos posteriores del mismo producto ya creado.
+  AJAX_GUARDAR_PRODUCTO_PASO1: 'saveProductStepOne',
+  AJAX_GUARDAR_PRODUCTO_PASO2: 'updateProductSteptwo',
+  AJAX_GUARDAR_PRODUCTO_PASO3: 'updateProductStepthree',
+
   // Área de totales del POS (footer principal, NO el modal de pago): fila
   // etiquetada "IVA" que acumula el impuesto de todo el carrito. Confirmado
   // en el HTML real que es un elemento distinto de TOTAL_MODAL (el total de
@@ -275,6 +361,26 @@ const L = {
   CLIENTE_NOMBRE_SELECCIONADO: '#customer_selected_name',
   CLIENTE_SELECT_OCULTO: '#customer_select',
   PANEL_PRODUCTOS: '.product_panel',
+
+  // Buscador real de productos del grid del POS (icono de cubo, placeholder
+  // "Buscar...."). Confirmado en vivo que la vista por defecto ("TODOS" u
+  // otra categoría) está limitada a un cupo fijo de tarjetas ordenadas
+  // alfabéticamente — un producto recién creado con un nombre que ordena
+  // después de ese cupo (p. ej. "Producto Sencillo...", "Producto
+  // Fraccionado...") puede no aparecer NUNCA en esa vista por defecto por
+  // más que se espere, aunque exista realmente (confirmado interceptando
+  // getPosProductSearch: el backend nunca lo incluye en esa respuesta).
+  // Escribir aquí y presionar Enter sí dispara una consulta real al
+  // backend que lo encuentra sin importar el orden alfabético.
+  PRODUCTO_BUSCADOR_GRID: '#product_search',
+
+  // Modal "Seleccionar Cantidad" que aparece al hacer click en un producto
+  // Fraccionado desde el grid del POS (no aparece para productos simples) —
+  // pide cuántas cajas completas y cuántas fracciones sueltas agregar.
+  DIALOG_CANTIDAD_FRACCIONADA: '#dialog_product_fragmented_quantity_view',
+  PRODUCTO_FRACCIONADO_CANTIDAD_CAJAS: '#prod_unit_q',
+  PRODUCTO_FRACCIONADO_CANTIDAD_FRACCIONES: '#prod_frag_q',
+  PRODUCTO_FRACCIONADO_BTN_AGREGAR: '#btn_set_product_fragment_quantity',
 
   // "Agregar" → "Nombre del cliente": factura solo con un nombre, sin
   // seleccionar un cliente registrado. editQuickCustomerName() y
@@ -956,6 +1062,21 @@ export class PosPage {
   }
 
   /**
+   * Escribe en el buscador real del grid del POS (`#product_search`) y
+   * presiona Enter, disparando una consulta real al backend
+   * (getPosProductSearch) — necesario para encontrar productos recién
+   * creados cuya posición alfabética los deja fuera del cupo fijo que
+   * muestra la vista por defecto de una categoría (confirmado en vivo: ver
+   * el comentario de L.PRODUCTO_BUSCADOR_GRID). Sin esto, productoPorNombre()
+   * podría no encontrar NUNCA un producto que sí existe.
+   */
+  async buscarProductoEnGrid(termino: string) {
+    const buscador = this.page.locator(L.PRODUCTO_BUSCADOR_GRID);
+    await buscador.fill(termino);
+    await buscador.press('Enter');
+  }
+
+  /**
    * Localiza la card de un producto en el grid por su nombre exacto, no por
    * posición: el catálogo puede reordenarse en cualquier momento con solo
    * agregar productos nuevos (confirmado: un producto nuevo desplazó a todos
@@ -978,6 +1099,40 @@ export class PosPage {
     await expect(producto, `No se encontró exactamente un producto llamado "${nombre}" en el catálogo`).toHaveCount(1, { timeout: TIMEOUTS.PRODUCTS_LOAD });
     await this.page.waitForTimeout(PAUSES.VER_PRODUCTOS);
     await producto.click();
+    await this.page.waitForTimeout(PAUSES.VER_CARRITO);
+  }
+
+  /**
+   * Agrega al carrito un producto Fraccionado identificado por su nombre
+   * exacto. A diferencia de un producto simple, clickearlo abre el modal
+   * "Seleccionar Cantidad" (`#dialog_product_fragmented_quantity_view`, NO
+   * aparece para productos sin fraccionar — confirmado en vivo) pidiendo
+   * cuántas cajas completas y cuántas fracciones sueltas agregar; hay que
+   * completarlo y confirmar con "Agregar" para que el producto realmente
+   * entre al carrito.
+   *
+   * El click se hace vía evaluate() (DOM nativo), no `locator.click()`:
+   * confirmado en vivo que ese modal aparece como efecto INMEDIATO del
+   * click, y el propio chequeo de estabilidad de Playwright después de
+   * clickear detecta el modal recién abierto tapando el mismo elemento,
+   * reintentando el click indefinidamente sin nunca darlo por exitoso —
+   * mismo motivo por el que "Crear Combo" ya clickea sus resultados de
+   * búsqueda vía evaluate() en vez de un click normal.
+   */
+  async agregarProductoFraccionadoPorNombre(nombre: string, cantidadFracciones: string) {
+    const producto = this.productoPorNombre(nombre);
+    await expect(producto, `No se encontró exactamente un producto llamado "${nombre}" en el catálogo`).toHaveCount(1, { timeout: TIMEOUTS.PRODUCTS_LOAD });
+    await this.page.waitForTimeout(PAUSES.VER_PRODUCTOS);
+    await producto.evaluate((el: HTMLElement) => el.click());
+
+    await expect(
+      this.page.locator(L.DIALOG_CANTIDAD_FRACCIONADA),
+      'El modal "Seleccionar Cantidad" no apareció tras clickear el producto Fraccionado'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    await this.page.locator(L.PRODUCTO_FRACCIONADO_CANTIDAD_FRACCIONES).fill(cantidadFracciones);
+    await this.page.locator(L.PRODUCTO_FRACCIONADO_BTN_AGREGAR).click();
+    await expect(this.page.locator(L.DIALOG_CANTIDAD_FRACCIONADA)).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
     await this.page.waitForTimeout(PAUSES.VER_CARRITO);
   }
 
@@ -1441,6 +1596,24 @@ export class PosPage {
       input: this.page.locator(L.COMBO_CABYS_BUSCADOR_INPUT),
       botonBuscar: this.page.locator(L.COMBO_CABYS_BUSCADOR_BOTON),
       filas: this.page.locator(L.COMBO_CABYS_FILAS_RESULTADO),
+    };
+  }
+
+  /**
+   * Configuración del sub-modal de búsqueda de CABYS de "Crear Producto" —
+   * a diferencia de "Crear Combo" (que abre uno propio y separado), este
+   * formulario SÍ reutiliza el mismo sub-modal compartido de "Producto
+   * Rápido" (#dialog_add_cabys_code) — confirmado en vivo interceptando qué
+   * modal queda visible tras el click; solo el botón que lo dispara es
+   * propio de este formulario.
+   */
+  get configCabysProducto(): ConfigBusquedaCabys {
+    return {
+      boton: this.page.locator(L.PRODUCTO_BTN_CABYS),
+      modal: this.modalBusquedaCabys,
+      input: this.page.locator(L.CABYS_BUSCADOR_INPUT),
+      botonBuscar: this.page.locator(L.CABYS_BUSCADOR_BOTON),
+      filas: this.page.locator(L.CABYS_FILAS_RESULTADO),
     };
   }
 
@@ -2062,6 +2235,242 @@ export class PosPage {
     return respuestaPromise;
   }
 
+  // ─── "Crear Producto" (primera tarjeta del grid de productos del POS) ──────
+  //
+  // Confirmado en vivo que este flujo NO es el mismo que "Inventario → Crear
+  // Producto" del menú lateral (esa es una página completamente distinta,
+  // /prod/product, con su propio wizard de 6 pasos) — este es un modal
+  // embebido en el propio POS, con la misma arquitectura de wizard jQuery
+  // Steps de 3 pasos que ya usa "Crear Combo" (Anterior/Guardar/Siguiente/
+  // Finalizar/Cancelar), abierto desde la primera tarjeta especial del grid
+  // de productos (`.product_box_new_item`, onclick="add_product_modal(...)").
+
+  /** Locator del modal "Crear Producto". */
+  get modalCrearProducto() {
+    return this.page.locator(L.DIALOG_CREAR_PRODUCTO);
+  }
+
+  /**
+   * Locator del botón "CABYS" propio de "Crear Producto". Existe siempre en
+   * el DOM (confirmado en vivo, count()==1) pero solo queda visible si el
+   * país configurado para la compañía lo exige — mismo comportamiento
+   * condicional ya documentado para Producto Rápido/Combo.
+   */
+  get botonCabysProducto() {
+    return this.page.locator(L.PRODUCTO_BTN_CABYS);
+  }
+
+  /** Locator del checkbox "¿Aplica Impuesto?" propio de "Crear Producto". */
+  get checkboxIvaProducto() {
+    return this.page.locator(L.PRODUCTO_APLICAR_IVA);
+  }
+
+  /**
+   * Abre el modal "Crear Producto" desde la primera tarjeta del grid de
+   * productos del POS. A diferencia del FAB (Producto Rápido/Combo), esta
+   * tarjeta es parte del grid normal — un click simple basta, sin el ciclo
+   * de expansión/reintento que sí necesita el FAB.
+   */
+  async abrirCrearProducto() {
+    await this.cerrarModalNotificacionesSiAparece();
+    await this.page.locator(L.PRODUCTO_TARJETA_CREAR).click();
+    await expect(
+      this.modalCrearProducto,
+      'El modal "Crear Producto" no apareció tras clickear la tarjeta "Crear Producto" del grid'
+    ).toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+  }
+
+  /** Llena únicamente el nombre del producto (paso "Inf. General") — lo único obligatorio de ese paso. */
+  async llenarNombreProducto(nombre: string) {
+    await this.page.locator(L.PRODUCTO_NOMBRE).fill(nombre);
+  }
+
+  /**
+   * Llena los campos adicionales de "Inf. General" para un producto Completo
+   * o Fraccionado: marca, categoría/subcategoría/proveedor (Chosen, primera
+   * opción real disponible — mismo criterio que el resto de la suite para
+   * catálogos sin nombre estable), código de proveedor y código de barras.
+   * Categoría y Proveedor NO son realmente obligatorios para guardar
+   * (confirmado en vivo: el paso avanza igual sin seleccionarlos), pero el
+   * escenario "Completo"/"Fraccionado" los llena de todos modos porque el
+   * usuario los pidió explícitamente en la lista de campos.
+   */
+  async llenarDatosCompletosProducto(marca: string, codigoProveedor: string, codigoBarras: string) {
+    await this.page.locator(L.PRODUCTO_MARCA).fill(marca);
+    await this._seleccionarPrimeraOpcionChosen(L.PRODUCTO_CATEGORIA_CHOSEN);
+    await this._seleccionarPrimeraOpcionChosenSiHayOpciones(L.PRODUCTO_SUBCATEGORIA_CHOSEN);
+    await this._seleccionarPrimeraOpcionChosen(L.PRODUCTO_PROVEEDOR_CHOSEN);
+    await this.page.locator(L.PRODUCTO_PROVEEDOR_CODIGO).fill(codigoProveedor);
+    await this.page.locator(L.PRODUCTO_CODIGO_BARRAS).fill(codigoBarras);
+  }
+
+  /**
+   * Avanza del paso "Inf. General" al paso "Costos" y espera la respuesta
+   * real de red que efectivamente crea el producto (saveProductStepOne,
+   * responde con `product_id`) — confirmado en vivo interceptando la red,
+   * no solo el efecto visual del wizard.
+   */
+  async avanzarPasoInfoGeneralProducto() {
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_GUARDAR_PRODUCTO_PASO1),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await this.page.locator(L.PRODUCTO_WIZARD_SIGUIENTE).click();
+    const respuesta = await respuestaPromise;
+    const cuerpo = await respuesta.json();
+    expect(cuerpo.status, `saveProductStepOne no respondió status=1: ${JSON.stringify(cuerpo)}`).toBe(1);
+    await expect(this.page.locator(L.PRODUCTO_COSTO)).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /** Llena únicamente el Costo (paso "Costos") — el único campo común entre el modo simple y el fraccionado, ver L.PRODUCTO_FRACCIONAR. */
+  async llenarCostoProducto(costo: string) {
+    await this.page.locator(L.PRODUCTO_COSTO).fill(costo);
+  }
+
+  /** Llena costo, precio de venta y cantidad (paso "Costos", producto Sencillo/Completo — sin fraccionar). */
+  async llenarCostosBasicosProducto(costo: string, precioVenta: string, cantidad: string) {
+    await this.llenarCostoProducto(costo);
+    await this.page.locator(L.PRODUCTO_PRECIO_VENTA).fill(precioVenta);
+    await this.page.locator(L.PRODUCTO_CANTIDAD).fill(cantidad);
+  }
+
+  /**
+   * Llena los campos adicionales de "Costos" para un producto Completo o
+   * Fraccionado: stock mínimo, descuento de proveedor, descuento máximo,
+   * tipo de unidad y sección/sub sección (Chosen, primera opción real).
+   */
+  async llenarCostosCompletosProducto(stockMinimo: string, descuentoProveedor: string, descuentoMaximo: string) {
+    await this.page.locator(L.PRODUCTO_STOCK_MINIMO).fill(stockMinimo);
+    await this.page.locator(L.PRODUCTO_DESCUENTO_PROVEEDOR).fill(descuentoProveedor);
+    await this.page.locator(L.PRODUCTO_DESCUENTO_MAXIMO).fill(descuentoMaximo);
+    await this._seleccionarPrimeraOpcionChosen(L.PRODUCTO_TIPO_UNIDAD_CHOSEN);
+    await this._seleccionarPrimeraOpcionChosen(L.PRODUCTO_SECCION_CHOSEN);
+    await this._seleccionarPrimeraOpcionChosenSiHayOpciones(L.PRODUCTO_SUBSECCION_CHOSEN);
+  }
+
+  /**
+   * Activa el checkbox "¿Aplica Impuesto?" de "Crear Producto". Reutiliza el
+   * mismo helper genérico que ya usan Producto Rápido y Combo.
+   */
+  async activarIvaProducto() {
+    await this._asegurarCheckboxEstado(this.checkboxIvaProducto, 'apply_tax_check_app', true);
+  }
+
+  /** Desactiva el checkbox "¿Aplica Impuesto?" de "Crear Producto" — contraparte de activarIvaProducto(). */
+  async desactivarIvaProducto() {
+    await this._asegurarCheckboxEstado(this.checkboxIvaProducto, 'apply_tax_check_app', false);
+  }
+
+  /**
+   * Selecciona manualmente el primer tipo y la primera tasa de IVA reales
+   * disponibles en "Crear Producto" (excluyendo el placeholder "Seleccione
+   * una opción"). A diferencia de Producto Rápido/Combo, estos son
+   * `<select>` NATIVOS sin Chosen (ver L.PRODUCTO_TIPO_IVA/PRODUCTO_TASA_IVA),
+   * así que se usa `selectOption({index: 1})` directo en vez del clic-y-
+   * elegir de un widget Chosen.
+   *
+   * Confirmado en vivo que hace falta: activar el checkbox NO deja ninguna
+   * opción real preseleccionada (a diferencia de "Crear Combo", donde sí
+   * queda una opción real apenas se marca el checkbox) — dejarlo así
+   * bloqueaba silenciosamente el avance del wizard al presionar "Siguiente"
+   * (sin error visible, solo nunca llegaba la petición de red esperada).
+   * Solo tiene sentido llamarlo cuando el CABYS NO se aplicó — si se aplicó,
+   * el IVA debe venir de él, no de una selección manual.
+   */
+  async seleccionarIvaManualmenteProducto() {
+    await this.page.locator(L.PRODUCTO_TIPO_IVA).selectOption({ index: 1 });
+    await this.page.locator(L.PRODUCTO_TASA_IVA).selectOption({ index: 1 });
+  }
+
+  /**
+   * Activa el checkbox "¿Fraccionar?" de "Crear Producto". Al marcarlo, el
+   * sistema reemplaza los campos simples de precio por los grupos "por
+   * caja" y "por fracción" — confirmado en vivo comparando el DOM antes/
+   * después (ver el comentario de L.PRODUCTO_FRACCIONAR).
+   */
+  async activarFraccionarProducto() {
+    await this._asegurarCheckboxEstado(this.page.locator(L.PRODUCTO_FRACCIONAR), 'is_fragment_app', true);
+    await expect(this.page.locator(L.PRODUCTO_PRECIO_CAJA)).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /**
+   * Llena los campos obligatorios que aparecen al activar "¿Fraccionar?":
+   * precio por caja y precio por fracción (los únicos con `required` real,
+   * confirmado en vivo comparando el DOM antes/después del checkbox — no
+   * asumido), más cantidad por caja y fracciones por unidad para que los
+   * precios tengan sentido de negocio.
+   */
+  async llenarCostosFraccionadoProducto(precioCaja: string, precioFraccion: string, cantidadCaja: string, fraccionesPorUnidad: string) {
+    await this.page.locator(L.PRODUCTO_PRECIO_CAJA).fill(precioCaja);
+    await this.page.locator(L.PRODUCTO_CANTIDAD_CAJA).fill(cantidadCaja);
+    await this.page.locator(L.PRODUCTO_FRACCIONES_POR_UNIDAD).fill(fraccionesPorUnidad);
+    await this.page.locator(L.PRODUCTO_PRECIO_FRACCION).fill(precioFraccion);
+  }
+
+  /** Lee el `percent` de la opción de tasa de IVA realmente seleccionada en "Crear Producto" (select nativo, sin Chosen). */
+  async obtenerTasaIvaSeleccionadaProductoPct(): Promise<number> {
+    return this.page.locator(L.PRODUCTO_TASA_IVA).evaluate(
+      (el) => parseFloat((el as HTMLSelectElement).selectedOptions[0]?.getAttribute('percent') ?? 'NaN')
+    );
+  }
+
+  /**
+   * Valida que la tasa de IVA realmente seleccionada en "Crear Producto"
+   * coincide con el IVA que el propio CABYS aplicado sugiere — mismo
+   * criterio que validarIvaCoincideConCabysCombo(). Usa expect.poll() por
+   * la misma razón (la sincronización tras aplicar el CABYS no es
+   * necesariamente instantánea en los otros formularios de esta suite).
+   */
+  async validarIvaCoincideConCabysProducto() {
+    const cabysTaxTexto = (await this.page.locator(L.PRODUCTO_CABYS_TAX_SUGERIDO).textContent())?.trim() ?? '';
+    const cabysTaxPct = this._normalizarPorcentajeCabys(cabysTaxTexto);
+
+    await expect.poll(
+      () => this.obtenerTasaIvaSeleccionadaProductoPct(),
+      {
+        timeout: TIMEOUTS.PAYMENT_MODAL,
+        message: `La tasa de IVA seleccionada en "Crear Producto" no coincidió con el IVA definido por el CABYS aplicado (${cabysTaxPct}%)`,
+      }
+    ).toBeCloseTo(cabysTaxPct, 1);
+  }
+
+  /**
+   * Avanza del paso "Costos" al paso "Desc. Producto" y espera la respuesta
+   * real de red (updateProductSteptwo) — confirmado en vivo interceptando
+   * la red.
+   */
+  async avanzarPasoCostosProducto() {
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_GUARDAR_PRODUCTO_PASO2),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await this.page.locator(L.PRODUCTO_WIZARD_SIGUIENTE).click();
+    await respuestaPromise;
+    await expect(this.page.locator(L.PRODUCTO_DESCRIPCION)).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /** Llena tamaño y descripción (paso "Desc. Producto", producto Completo/Fraccionado). */
+  async llenarDescripcionProducto(tamano: string, descripcion: string) {
+    await this.page.locator(L.PRODUCTO_TAMANO).fill(tamano);
+    await this.page.locator(L.PRODUCTO_DESCRIPCION).fill(descripcion);
+  }
+
+  /**
+   * Presiona "Finalizar" (solo visible en el último paso) y espera la
+   * respuesta real de red que cierra el wizard (updateProductStepthree) —
+   * confirmado en vivo que tras esta petición el modal se cierra solo.
+   */
+  async finalizarCrearProducto() {
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_GUARDAR_PRODUCTO_PASO3),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await this.page.locator(L.PRODUCTO_WIZARD_FINALIZAR).click();
+    const respuesta = await respuestaPromise;
+    expect(respuesta.ok(), `La petición a updateProductStepthree no respondió OK (status ${respuesta.status()})`).toBe(true);
+    await expect(this.modalCrearProducto).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
   // ─── Pestañas superiores del POS ────────────────────────────────────────────
 
   /** Indica si la pestaña existe en el DOM en este momento — detecta pestañas ocultas por permisos/configuración sin fallar. */
@@ -2255,10 +2664,38 @@ export class PosPage {
    * real utilizable).
    */
   private async _seleccionarPrimeraOpcionChosen(contenedorChosenSelector: string) {
-    await this.page.locator(`${contenedorChosenSelector} .chosen-single`).click();
+    const trigger = this.page.locator(`${contenedorChosenSelector} .chosen-single`);
+    // El menú desplegado de Chosen se posiciona relativo al trigger: si el
+    // trigger queda fuera del viewport (confirmado en vivo en formularios
+    // largos, p. ej. "Crear Producto" con "¿Fraccionar?" activado, que hace
+    // el modal mucho más alto), el resultado también nace fuera del
+    // viewport y el auto-scroll de Playwright nunca llega a alcanzarlo.
+    await trigger.scrollIntoViewIfNeeded();
+    await trigger.click();
     const opcion = this.page.locator(`${contenedorChosenSelector} .chosen-results li:not(.result-selected)`).first();
     await expect(opcion, `El Chosen "${contenedorChosenSelector}" no tiene ninguna opción real disponible`).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
     await opcion.click();
+  }
+
+  /**
+   * Variante de _seleccionarPrimeraOpcionChosen() para catálogos dependientes
+   * (p. ej. Subcategoría depende de la Categoría elegida, Sub sección de la
+   * Sección) que pueden legítimamente no tener ninguna opción real todavía —
+   * en vez de fallar, simplemente no selecciona nada y lo deja en su
+   * placeholder por defecto.
+   */
+  private async _seleccionarPrimeraOpcionChosenSiHayOpciones(contenedorChosenSelector: string) {
+    const trigger = this.page.locator(`${contenedorChosenSelector} .chosen-single`);
+    await trigger.scrollIntoViewIfNeeded();
+    await trigger.click();
+    const opcion = this.page.locator(`${contenedorChosenSelector} .chosen-results li:not(.result-selected)`).first();
+    const hayOpcion = await opcion.isVisible({ timeout: 3_000 }).catch(() => false);
+    if (hayOpcion) {
+      await opcion.click();
+    } else {
+      // Cerrar el Chosen desplegado sin elegir nada, presionando Escape.
+      await this.page.keyboard.press('Escape');
+    }
   }
 
   /**

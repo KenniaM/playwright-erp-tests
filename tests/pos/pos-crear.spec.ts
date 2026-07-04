@@ -1,6 +1,17 @@
 import { test, expect, Page } from '@playwright/test';
 import { PosPage, TIMEOUTS, CABYS_BUSQUEDA, CABYS_BUSQUEDA_SIN_IVA, MONTO_EFECTIVO, PRECIO_PRODUCTO_RAPIDO, COMBO_BUSQUEDA_PRODUCTO, LineaCarrito } from './pos.page';
 
+// Precios base para las pruebas de "Crear Producto" — arbitrarios pero
+// consistentes entre escenarios, igual que PRECIO_PRODUCTO_RAPIDO para
+// Producto Rápido.
+const PRODUCTO_COSTO = '1000';
+const PRODUCTO_PRECIO_VENTA = '2000';
+const PRODUCTO_CANTIDAD = '10';
+const PRODUCTO_PRECIO_CAJA = '9000';
+const PRODUCTO_CANTIDAD_CAJA = '12';
+const PRODUCTO_FRACCIONES_POR_UNIDAD = '10';
+const PRODUCTO_PRECIO_FRACCION = '850';
+
 /**
  * Presiona el primer "Facturar" (abre el modal de pago). Este botón nunca requiere
  * abrir la caja —eso solo puede ocurrir al confirmar el pago, más adelante— así que
@@ -561,5 +572,404 @@ test('crear un Combo sin IVA desde el POS y validar que se agrega correctamente 
     expect(linea.nombre, 'El nombre de la línea agregada al carrito no coincide con el combo creado').toBe(nombreCombo);
     expect(linea.iva, 'Un combo "sin IVA" no debería cobrar IVA real en la línea').toBeCloseTo(0, 1);
     await expect(page.locator('.noty_bar', { hasText: /error/i })).toHaveCount(0);
+  });
+});
+
+/**
+ * Configura el IVA y CABYS de "Crear Producto" en el paso "Costos", con
+ * exactamente la misma lógica ya probada para "Crear Combo"
+ * (crearComboConIva/crearComboSinIva en este mismo archivo):
+ *
+ * - "Con IVA": el checkbox se activa PRIMERO y se verifica que quedó
+ *   marcado, y solo después se maneja CABYS (si el formulario lo ofrece en
+ *   este ambiente). Si CABYS se aplica, se valida que la tasa seleccionada
+ *   coincida exactamente con la que el propio CABYS sugiere.
+ * - "Sin IVA": el checkbox se deja desactivado (por defecto) y se maneja
+ *   CABYS igual. Si CABYS se aplica, se re-desactiva el checkbox después —
+ *   defensivo: no se pudo confirmar en vivo si aplicar un CABYS activa este
+ *   checkbox por su cuenta (a diferencia de "Crear Combo", donde sí se
+ *   confirmó ese efecto secundario con ~500ms de desfase — ver
+ *   esperarIvaAutocompletadoCombo() en pos.page.ts), porque CABYS no está
+ *   habilitado para "Crear Producto" en este ambiente compartido de QA (el
+ *   botón existe en el DOM pero no es visible — ver el comentario de
+ *   L.PRODUCTO_BTN_CABYS en pos.page.ts). Si en otro ambiente sí ocurriera
+ *   ese mismo efecto secundario, este re-forzado a desactivado lo revierte
+ *   igual.
+ *
+ * A diferencia de "Crear Combo" (donde activar el checkbox ya deja una
+ * opción real seleccionada), en "Crear Producto" activar el checkbox NO
+ * selecciona ningún tipo/tarifa de IVA real — quedan en su placeholder
+ * vacío. Confirmado en vivo que dejarlos así bloquea silenciosamente el
+ * avance del wizard (el botón "Siguiente" no dispara ninguna petición),
+ * así que cuando CABYS no se aplica, hace falta seleccionarlos manualmente
+ * (seleccionarIvaManualmenteProducto()) — mismo criterio que ya usa
+ * seleccionarIvaManualmente() para Producto Rápido.
+ *
+ * Devuelve si CABYS terminó aplicado, para que el test lo registre.
+ */
+async function configurarIvaProducto(pos: PosPage, activarIva: boolean): Promise<boolean> {
+  if (activarIva) {
+    await pos.activarIvaProducto();
+    await expect(
+      pos.checkboxIvaProducto,
+      'El checkbox "¿Aplica Impuesto?" de "Crear Producto" no quedó activado'
+    ).toBeChecked();
+  }
+
+  const cabysAplicado = await pos.manejarCabysSiAplica(CABYS_BUSQUEDA, pos.configCabysProducto);
+
+  if (activarIva && cabysAplicado) {
+    await pos.validarIvaCoincideConCabysProducto();
+  } else if (activarIva && !cabysAplicado) {
+    await pos.seleccionarIvaManualmenteProducto();
+  }
+
+  if (!activarIva && cabysAplicado) {
+    await pos.desactivarIvaProducto();
+  }
+
+  if (!activarIva) {
+    await expect(
+      pos.checkboxIvaProducto,
+      'El checkbox "¿Aplica Impuesto?" de "Crear Producto" no quedó desactivado'
+    ).not.toBeChecked();
+  }
+
+  return cabysAplicado;
+}
+
+/**
+ * Busca el producto recién creado por nombre exacto en el grid del POS
+ * (reutilizando productoPorNombre/agregarProductoPorNombre, igual que el
+ * resto de la suite) y devuelve la clave de la línea que se agregó al
+ * carrito. Recarga el POS primero (vía cargarPosDesdeDashboard) para
+ * garantizar que el grid refleje el producto recién guardado.
+ *
+ * Usa el buscador real del grid (buscarProductoEnGrid) en vez de solo
+ * cambiar de categoría — confirmado en vivo que la vista por defecto de
+ * cualquier categoría (incluida "TODOS") está limitada a un cupo fijo de
+ * tarjetas ordenadas alfabéticamente: un producto recién creado cuyo
+ * nombre ordena después de ese cupo (confirmado interceptando la red:
+ * "Producto Sencillo..."/"Producto Fraccionado..." nunca aparecían en la
+ * respuesta del backend bajo "TODOS", sin importar cuánto se esperara)
+ * simplemente no aparece ahí aunque exista — el buscador sí lo encuentra.
+ *
+ * Para un producto Fraccionado, clickearlo abre un modal adicional
+ * ("Seleccionar Cantidad", ver agregarProductoFraccionadoPorNombre() en
+ * pos.page.ts) que no aparece para productos simples — confirmado en vivo.
+ *
+ * `clavesAntes` se captura ANTES de buscarProductoEnGrid(), no después:
+ * confirmado en vivo que buscar por el nombre EXACTO y único de un producto
+ * recién creado (una sola coincidencia) ya lo agrega solo al carrito como
+ * efecto del propio Enter, antes de clickear nada — capturarlo después del
+ * buscador ya incluiría esa línea, y la comparación de "apareció una clave
+ * nueva" nunca detectaría nada (el click posterior solo incrementaría la
+ * cantidad de esa misma línea, no crearía una clave distinta).
+ */
+async function buscarProductoYAgregarAlCarrito(pos: PosPage, nombre: string, esFraccionado = false): Promise<string> {
+  await pos.cargarPosDesdeDashboard();
+  await pos.cerrarModalNotificacionesSiAparece();
+  await pos.cerrarAvisoConsecutivoSiAparece();
+  await pos.cerrarTodosLosToastsSiAparecen();
+
+  const clavesAntes = await pos.obtenerClavesProductos();
+  await pos.buscarProductoEnGrid(nombre);
+
+  if (esFraccionado) {
+    await pos.agregarProductoFraccionadoPorNombre(nombre, '1');
+  } else {
+    await pos.agregarProductoPorNombre(nombre);
+  }
+  await expect.poll(
+    async () => (await pos.obtenerClavesProductos()).length,
+    { timeout: TIMEOUTS.PRODUCTS_LOAD }
+  ).toBeGreaterThan(clavesAntes.length);
+  const clavesDespues = await pos.obtenerClavesProductos();
+  return clavesDespues.find(c => !clavesAntes.includes(c))!;
+}
+
+/**
+ * Valida, para cualquiera de los seis escenarios de "Crear Producto", que la
+ * línea agregada al carrito tiene el nombre correcto, el IVA esperado y que
+ * no quedó ningún mensaje de error visible — mismo criterio ya usado para
+ * Producto Rápido y Combo.
+ *
+ * Un producto Fraccionado aparece en el carrito con el prefijo "Frac. "
+ * delante de su nombre (confirmado en vivo) — se contempla explícitamente
+ * en vez de asumir el mismo formato que un producto simple.
+ */
+async function validarProductoEnCarrito(pos: PosPage, page: Page, clave: string, nombreEsperado: string, ivaEsperado: boolean, esFraccionado = false) {
+  await pos.establecerMostrarPrecioConIva(true, [clave]);
+  const linea = await pos.validarLineaCarrito(clave, ivaEsperado);
+  const nombreEsperadoEnCarrito = esFraccionado ? `Frac. ${nombreEsperado}` : nombreEsperado;
+  expect(linea.nombre, 'El nombre de la línea agregada al carrito no coincide con el producto creado').toBe(nombreEsperadoEnCarrito);
+  await expect(page.locator('.noty_bar', { hasText: /error/i })).toHaveCount(0);
+}
+
+test('crear un Producto Sencillo con IVA desde el POS y validar que se agrega correctamente al carrito', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const pos = new PosPage(page);
+  const nombreProducto = `Producto Sencillo QA con IVA ${Date.now()}`;
+
+  await test.step('Cargar el POS pasando por el Dashboard (evita la condición de carrera del binding de "Agregar")', async () => {
+    await pos.cargarPosDesdeDashboard();
+    await pos.cerrarModalNotificacionesSiAparece();
+    await pos.cerrarAvisoConsecutivoSiAparece();
+    await pos.cerrarTodosLosToastsSiAparecen();
+  });
+
+  let cabysAplicado = false;
+  await test.step('Abrir "Crear Producto" y llenar únicamente Nombre (paso "Inf. General")', async () => {
+    await pos.abrirCrearProducto();
+    await pos.llenarNombreProducto(nombreProducto);
+    await pos.avanzarPasoInfoGeneralProducto();
+  });
+
+  await test.step('Activar IVA, verificarlo, y agregar CABYS si el formulario lo ofrece (validando que su tasa coincide con la seleccionada)', async () => {
+    cabysAplicado = await configurarIvaProducto(pos, true);
+    console.log(`[crear un Producto Sencillo con IVA] cabysAplicado=${cabysAplicado}`);
+  });
+
+  await test.step('Llenar únicamente Costo, Precio de venta y Cantidad, y finalizar', async () => {
+    await pos.llenarCostosBasicosProducto(PRODUCTO_COSTO, PRODUCTO_PRECIO_VENTA, PRODUCTO_CANTIDAD);
+    await pos.avanzarPasoCostosProducto();
+    await pos.finalizarCrearProducto();
+  });
+
+  let claveProducto = '';
+  await test.step('Buscar el producto en el catálogo del POS y agregarlo al carrito', async () => {
+    claveProducto = await buscarProductoYAgregarAlCarrito(pos, nombreProducto);
+  });
+
+  await test.step('Validar que el producto se agregó con IVA aplicado, el nombre coincide y no hay errores', async () => {
+    await validarProductoEnCarrito(pos, page, claveProducto, nombreProducto, true);
+  });
+});
+
+test('crear un Producto Sencillo sin IVA desde el POS y validar que se agrega correctamente al carrito', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const pos = new PosPage(page);
+  const nombreProducto = `Producto Sencillo QA sin IVA ${Date.now()}`;
+
+  await test.step('Cargar el POS pasando por el Dashboard (evita la condición de carrera del binding de "Agregar")', async () => {
+    await pos.cargarPosDesdeDashboard();
+    await pos.cerrarModalNotificacionesSiAparece();
+    await pos.cerrarAvisoConsecutivoSiAparece();
+    await pos.cerrarTodosLosToastsSiAparecen();
+  });
+
+  let cabysAplicado = false;
+  await test.step('Abrir "Crear Producto" y llenar únicamente Nombre (paso "Inf. General")', async () => {
+    await pos.abrirCrearProducto();
+    await pos.llenarNombreProducto(nombreProducto);
+    await pos.avanzarPasoInfoGeneralProducto();
+  });
+
+  await test.step('Dejar el IVA desactivado, verificarlo, y agregar CABYS si el formulario lo ofrece (re-desactivando IVA después)', async () => {
+    cabysAplicado = await configurarIvaProducto(pos, false);
+    console.log(`[crear un Producto Sencillo sin IVA] cabysAplicado=${cabysAplicado}`);
+  });
+
+  await test.step('Llenar únicamente Costo, Precio de venta y Cantidad, y finalizar', async () => {
+    await pos.llenarCostosBasicosProducto(PRODUCTO_COSTO, PRODUCTO_PRECIO_VENTA, PRODUCTO_CANTIDAD);
+    await pos.avanzarPasoCostosProducto();
+    await pos.finalizarCrearProducto();
+  });
+
+  let claveProducto = '';
+  await test.step('Buscar el producto en el catálogo del POS y agregarlo al carrito', async () => {
+    claveProducto = await buscarProductoYAgregarAlCarrito(pos, nombreProducto);
+  });
+
+  await test.step('Validar que el producto quedó realmente sin IVA, el nombre coincide y no hay errores', async () => {
+    await validarProductoEnCarrito(pos, page, claveProducto, nombreProducto, false);
+  });
+});
+
+test('crear un Producto Completo con IVA desde el POS y validar que se agrega correctamente al carrito', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const pos = new PosPage(page);
+  const nombreProducto = `Producto Completo QA con IVA ${Date.now()}`;
+
+  await test.step('Cargar el POS pasando por el Dashboard (evita la condición de carrera del binding de "Agregar")', async () => {
+    await pos.cargarPosDesdeDashboard();
+    await pos.cerrarModalNotificacionesSiAparece();
+    await pos.cerrarAvisoConsecutivoSiAparece();
+    await pos.cerrarTodosLosToastsSiAparecen();
+  });
+
+  let cabysAplicado = false;
+  await test.step('Abrir "Crear Producto" y llenar Nombre, Marca, Categoría, Subcategoría, Proveedor, Código de proveedor y Código de barras', async () => {
+    await pos.abrirCrearProducto();
+    await pos.llenarNombreProducto(nombreProducto);
+    await pos.llenarDatosCompletosProducto('Marca QA', 'PROV-CODE-QA', `BARCODE-QA-${Date.now()}`);
+    await pos.avanzarPasoInfoGeneralProducto();
+  });
+
+  await test.step('Activar IVA, verificarlo, y agregar CABYS si el formulario lo ofrece (validando que su tasa coincide con la seleccionada)', async () => {
+    cabysAplicado = await configurarIvaProducto(pos, true);
+    console.log(`[crear un Producto Completo con IVA] cabysAplicado=${cabysAplicado}`);
+  });
+
+  await test.step('Llenar Costo, Precio de venta, Cantidad, Stock mínimo, Descuento de proveedor, Descuento máximo, Tipo de unidad, Sección y Subsección', async () => {
+    await pos.llenarCostosBasicosProducto(PRODUCTO_COSTO, PRODUCTO_PRECIO_VENTA, PRODUCTO_CANTIDAD);
+    await pos.llenarCostosCompletosProducto('2', '5', '10');
+    await pos.avanzarPasoCostosProducto();
+  });
+
+  await test.step('Llenar Tamaño y Descripción, y finalizar', async () => {
+    await pos.llenarDescripcionProducto('Talla M', 'Descripción generada por prueba automatizada QA');
+    await pos.finalizarCrearProducto();
+  });
+
+  let claveProducto = '';
+  await test.step('Buscar el producto en el catálogo del POS y agregarlo al carrito', async () => {
+    claveProducto = await buscarProductoYAgregarAlCarrito(pos, nombreProducto);
+  });
+
+  await test.step('Validar que el producto se agregó con IVA aplicado, el nombre coincide y no hay errores', async () => {
+    await validarProductoEnCarrito(pos, page, claveProducto, nombreProducto, true);
+  });
+});
+
+test('crear un Producto Completo sin IVA desde el POS y validar que se agrega correctamente al carrito', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const pos = new PosPage(page);
+  const nombreProducto = `Producto Completo QA sin IVA ${Date.now()}`;
+
+  await test.step('Cargar el POS pasando por el Dashboard (evita la condición de carrera del binding de "Agregar")', async () => {
+    await pos.cargarPosDesdeDashboard();
+    await pos.cerrarModalNotificacionesSiAparece();
+    await pos.cerrarAvisoConsecutivoSiAparece();
+    await pos.cerrarTodosLosToastsSiAparecen();
+  });
+
+  let cabysAplicado = false;
+  await test.step('Abrir "Crear Producto" y llenar Nombre, Marca, Categoría, Subcategoría, Proveedor, Código de proveedor y Código de barras', async () => {
+    await pos.abrirCrearProducto();
+    await pos.llenarNombreProducto(nombreProducto);
+    await pos.llenarDatosCompletosProducto('Marca QA', 'PROV-CODE-QA', `BARCODE-QA-${Date.now()}`);
+    await pos.avanzarPasoInfoGeneralProducto();
+  });
+
+  await test.step('Dejar el IVA desactivado, verificarlo, y agregar CABYS si el formulario lo ofrece (re-desactivando IVA después)', async () => {
+    cabysAplicado = await configurarIvaProducto(pos, false);
+    console.log(`[crear un Producto Completo sin IVA] cabysAplicado=${cabysAplicado}`);
+  });
+
+  await test.step('Llenar Costo, Precio de venta, Cantidad, Stock mínimo, Descuento de proveedor, Descuento máximo, Tipo de unidad, Sección y Subsección', async () => {
+    await pos.llenarCostosBasicosProducto(PRODUCTO_COSTO, PRODUCTO_PRECIO_VENTA, PRODUCTO_CANTIDAD);
+    await pos.llenarCostosCompletosProducto('2', '5', '10');
+    await pos.avanzarPasoCostosProducto();
+  });
+
+  await test.step('Llenar Tamaño y Descripción, y finalizar', async () => {
+    await pos.llenarDescripcionProducto('Talla M', 'Descripción generada por prueba automatizada QA');
+    await pos.finalizarCrearProducto();
+  });
+
+  let claveProducto = '';
+  await test.step('Buscar el producto en el catálogo del POS y agregarlo al carrito', async () => {
+    claveProducto = await buscarProductoYAgregarAlCarrito(pos, nombreProducto);
+  });
+
+  await test.step('Validar que el producto quedó realmente sin IVA, el nombre coincide y no hay errores', async () => {
+    await validarProductoEnCarrito(pos, page, claveProducto, nombreProducto, false);
+  });
+});
+
+test('crear un Producto Fraccionado con IVA desde el POS y validar que se agrega correctamente al carrito', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const pos = new PosPage(page);
+  const nombreProducto = `Producto Fraccionado QA con IVA ${Date.now()}`;
+
+  await test.step('Cargar el POS pasando por el Dashboard (evita la condición de carrera del binding de "Agregar")', async () => {
+    await pos.cargarPosDesdeDashboard();
+    await pos.cerrarModalNotificacionesSiAparece();
+    await pos.cerrarAvisoConsecutivoSiAparece();
+    await pos.cerrarTodosLosToastsSiAparecen();
+  });
+
+  let cabysAplicado = false;
+  await test.step('Abrir "Crear Producto" y llenar los mismos datos del Producto Completo', async () => {
+    await pos.abrirCrearProducto();
+    await pos.llenarNombreProducto(nombreProducto);
+    await pos.llenarDatosCompletosProducto('Marca QA', 'PROV-CODE-QA', `BARCODE-QA-${Date.now()}`);
+    await pos.avanzarPasoInfoGeneralProducto();
+  });
+
+  await test.step('Activar IVA, verificarlo, y agregar CABYS si el formulario lo ofrece (validando que su tasa coincide con la seleccionada)', async () => {
+    cabysAplicado = await configurarIvaProducto(pos, true);
+    console.log(`[crear un Producto Fraccionado con IVA] cabysAplicado=${cabysAplicado}`);
+  });
+
+  await test.step('Activar "¿Fraccionar?" y llenar los campos que aparecen dinámicamente (precio por caja y por fracción, los únicos obligatorios)', async () => {
+    await pos.llenarCostoProducto(PRODUCTO_COSTO);
+    await pos.activarFraccionarProducto();
+    await pos.llenarCostosFraccionadoProducto(PRODUCTO_PRECIO_CAJA, PRODUCTO_PRECIO_FRACCION, PRODUCTO_CANTIDAD_CAJA, PRODUCTO_FRACCIONES_POR_UNIDAD);
+    await pos.llenarCostosCompletosProducto('2', '5', '10');
+    await pos.avanzarPasoCostosProducto();
+  });
+
+  await test.step('Llenar Tamaño y Descripción, y finalizar', async () => {
+    await pos.llenarDescripcionProducto('Talla M', 'Descripción generada por prueba automatizada QA');
+    await pos.finalizarCrearProducto();
+  });
+
+  let claveProducto = '';
+  await test.step('Buscar el producto en el catálogo del POS y agregarlo al carrito (maneja el modal "Seleccionar Cantidad" propio de Fraccionado)', async () => {
+    claveProducto = await buscarProductoYAgregarAlCarrito(pos, nombreProducto, true);
+  });
+
+  await test.step('Validar que el producto se agregó con IVA aplicado, el nombre coincide y no hay errores', async () => {
+    await validarProductoEnCarrito(pos, page, claveProducto, nombreProducto, true, true);
+  });
+});
+
+test('crear un Producto Fraccionado sin IVA desde el POS y validar que se agrega correctamente al carrito', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const pos = new PosPage(page);
+  const nombreProducto = `Producto Fraccionado QA sin IVA ${Date.now()}`;
+
+  await test.step('Cargar el POS pasando por el Dashboard (evita la condición de carrera del binding de "Agregar")', async () => {
+    await pos.cargarPosDesdeDashboard();
+    await pos.cerrarModalNotificacionesSiAparece();
+    await pos.cerrarAvisoConsecutivoSiAparece();
+    await pos.cerrarTodosLosToastsSiAparecen();
+  });
+
+  let cabysAplicado = false;
+  await test.step('Abrir "Crear Producto" y llenar los mismos datos del Producto Completo', async () => {
+    await pos.abrirCrearProducto();
+    await pos.llenarNombreProducto(nombreProducto);
+    await pos.llenarDatosCompletosProducto('Marca QA', 'PROV-CODE-QA', `BARCODE-QA-${Date.now()}`);
+    await pos.avanzarPasoInfoGeneralProducto();
+  });
+
+  await test.step('Dejar el IVA desactivado, verificarlo, y agregar CABYS si el formulario lo ofrece (re-desactivando IVA después)', async () => {
+    cabysAplicado = await configurarIvaProducto(pos, false);
+    console.log(`[crear un Producto Fraccionado sin IVA] cabysAplicado=${cabysAplicado}`);
+  });
+
+  await test.step('Activar "¿Fraccionar?" y llenar los campos que aparecen dinámicamente (precio por caja y por fracción, los únicos obligatorios)', async () => {
+    await pos.llenarCostoProducto(PRODUCTO_COSTO);
+    await pos.activarFraccionarProducto();
+    await pos.llenarCostosFraccionadoProducto(PRODUCTO_PRECIO_CAJA, PRODUCTO_PRECIO_FRACCION, PRODUCTO_CANTIDAD_CAJA, PRODUCTO_FRACCIONES_POR_UNIDAD);
+    await pos.llenarCostosCompletosProducto('2', '5', '10');
+    await pos.avanzarPasoCostosProducto();
+  });
+
+  await test.step('Llenar Tamaño y Descripción, y finalizar', async () => {
+    await pos.llenarDescripcionProducto('Talla M', 'Descripción generada por prueba automatizada QA');
+    await pos.finalizarCrearProducto();
+  });
+
+  let claveProducto = '';
+  await test.step('Buscar el producto en el catálogo del POS y agregarlo al carrito (maneja el modal "Seleccionar Cantidad" propio de Fraccionado)', async () => {
+    claveProducto = await buscarProductoYAgregarAlCarrito(pos, nombreProducto, true);
+  });
+
+  await test.step('Validar que el producto quedó realmente sin IVA, el nombre coincide y no hay errores', async () => {
+    await validarProductoEnCarrito(pos, page, claveProducto, nombreProducto, false, true);
   });
 });
