@@ -207,6 +207,20 @@ const L = {
   // de reseteo de pos.js:680-699 y sus "Chosen" de tipo/tasa ya quedan en una
   // opción real (no un placeholder) apenas se marca — confirmado en vivo.
   COMBO_APLICAR_IVA:         '#apply_tax_combo',
+  // Select "Seleccione la tarifa" propio de "Crear Combo" — homólogo de
+  // QUICK_PRODUCT_TASA_IVA, pero solo se sincroniza con el CABYS aplicado si
+  // el checkbox COMBO_APLICAR_IVA ya estaba marcado ANTES de aplicar el
+  // CABYS: confirmado en vivo que con el checkbox desmarcado el CABYS no
+  // toca este select (queda en la opción "0% Exento" por defecto), pero con
+  // el checkbox ya marcado, aplicar un CABYS de tasa 13% deja este select
+  // realmente seleccionado en "13%" — a diferencia de lo documentado
+  // anteriormente ("el de Combo no tiene ese autocompletado"), sí lo tiene,
+  // pero condicionado al orden checkbox→CABYS.
+  COMBO_TASA_IVA:            '#tax_rate_list',
+  // Texto con la tasa que el CABYS aplicado sugiere, propio de "Crear Combo"
+  // — homólogo de QUICK_PRODUCT_CABYS_TAX_SUGERIDO. Mismo formato observado
+  // en vivo (fracción, ej. "0.13", no porcentaje).
+  COMBO_CABYS_TAX_SUGERIDO:  '#lbl_search_product_cabys_tax',
 
   // Petición AJAX real que persiste el combo (save_restaurant_combo() en
   // pos.js) — confirmado en vivo inspeccionando la red tras un guardado
@@ -368,17 +382,14 @@ export const CABYS_BUSQUEDA = 'aceite';
 //
 // Válido únicamente para el sub-modal de búsqueda de CABYS de "Producto
 // Rápido" (#table_cabys_code_content) — NO para el de "Crear Combo"
-// (#table_cabys_code_combo, ver COMBO_CABYS_BUSQUEDA_SIN_IVA): son dos
-// índices/búsquedas separados que devuelven resultados distintos para el
-// mismo término — confirmado en vivo: "leche" resuelve a tasa 0% en el de
-// Producto Rápido, pero a tasa 1% ("Leche cruda de vaca") en el de Combo.
+// (#table_cabys_code_combo): son dos índices/búsquedas separados que
+// devuelven resultados distintos para el mismo término — confirmado en
+// vivo: "leche" resuelve a tasa 0% en el de Producto Rápido, pero a tasa 1%
+// ("Leche cruda de vaca") en el de Combo. "Crear Combo" no tiene un
+// término "sin IVA" propio: ese escenario se define por el checkbox
+// "¿Aplicar impuesto?" desactivado, no por elegir un CABYS exento (ver
+// crearComboSinIva() en pos.spec.ts), así que reutiliza CABYS_BUSQUEDA.
 export const CABYS_BUSQUEDA_SIN_IVA = 'leche';
-
-// Término de búsqueda equivalente a CABYS_BUSQUEDA_SIN_IVA pero para el
-// sub-modal de CABYS propio de "Crear Combo" — confirmado en vivo que su
-// primer resultado ("Libros o textos escolares, impresos") resuelve a tasa
-// "Exento", a diferencia de "leche" en este mismo modal (1%, no exento).
-export const COMBO_CABYS_BUSQUEDA_SIN_IVA = 'libro';
 
 // Precio base para el producto rápido de prueba; sin IVA aplicado hasta que
 // se selecciona un CABYS (ver esperarIvaAutocompletado()).
@@ -1391,8 +1402,9 @@ export class PosPage {
    * (#dialog_add_cabys_code vs #dialog_add_cabys_code_combo, cada una con su
    * propio input/botón/tabla) — confirmado en vivo interceptando qué modal
    * queda realmente visible tras el click. Aplicar un CABYS autocompleta el
-   * tipo y la tasa de IVA del formulario de Producto Rápido —ver
-   * esperarIvaAutocompletado()—; el de Combo no tiene ese autocompletado.
+   * tipo y la tasa de IVA en ambos formularios —ver esperarIvaAutocompletado()
+   * para Producto Rápido y esperarIvaAutocompletadoCombo() para Crear Combo—,
+   * aunque con un desfase distinto en cada uno.
    */
   async buscarYAplicarCabys(termino: string, config: ConfigBusquedaCabys = this.configCabysProductoRapido) {
     await this.cerrarModalNotificacionesSiAparece();
@@ -1448,19 +1460,48 @@ export class PosPage {
   }
 
   /**
-   * Valida que la tasa de IVA realmente seleccionada en el formulario
-   * coincide con el IVA que el propio CABYS aplicado sugiere — no solo que
-   * "algo" quedó marcado. El texto de `#quick_product_cabys_tax` viene en
-   * dos formatos distintos según el CABYS (confirmado en vivo): como
-   * fracción ("0.13") o ya en porcentaje ("0%"), así que se normaliza antes
-   * de comparar contra el atributo `percent` de la opción de tasa
-   * realmente seleccionada.
+   * Espera a que el checkbox "¿Aplicar impuesto?" de "Crear Combo" quede
+   * marcado tras aplicar un CABYS — homólogo de esperarIvaAutocompletado()
+   * para Producto Rápido, pero para el checkbox propio del combo.
+   *
+   * Contradice lo que se había asumido inicialmente ("el de Combo no tiene
+   * ese autocompletado"): confirmado en vivo monitoreando el checkbox cada
+   * 500ms tras aplicar un CABYS con el checkbox inicialmente desmarcado, SÍ
+   * se autoactiva —con ~500ms de desfase, no instantáneo—, y el select de
+   * tasa (`#tax_rate_list`) se sincroniza a la vez con la tasa real del
+   * CABYS. Por eso es indispensable esperar este autocompletado ANTES de
+   * intentar desactivar el checkbox otra vez (ver crearComboSinIva() en
+   * pos.spec.ts): desactivarlo de inmediato, sin esperar, corre el riesgo
+   * de ganarle la carrera a esta activación automática y terminar con el
+   * checkbox marcado de todos modos.
+   */
+  async esperarIvaAutocompletadoCombo() {
+    await expect.poll(
+      () => this.checkboxIvaCombo.isChecked(),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    ).toBe(true);
+  }
+
+  /**
+   * Normaliza el texto de tasa sugerida por un CABYS a porcentaje. El texto
+   * viene en dos formatos distintos según el CABYS (confirmado en vivo):
+   * como fracción ("0.13") o ya en porcentaje ("0%") — compartido entre
+   * "Producto Rápido" y "Crear Combo", que usan el mismo formato.
+   */
+  private _normalizarPorcentajeCabys(texto: string): number {
+    return texto.includes('%') ? parseFloat(texto) : parseFloat(texto) * 100;
+  }
+
+  /**
+   * Valida que la tasa de IVA realmente seleccionada en el formulario de
+   * "Producto Rápido" coincide con el IVA que el propio CABYS aplicado
+   * sugiere — no solo que "algo" quedó marcado. Para "Crear Combo" ver
+   * validarIvaCoincideConCabysCombo(), que compara contra los selectores
+   * propios de ese formulario (distintos, no compartidos).
    */
   async validarIvaCoincideConCabys() {
     const cabysTaxTexto = (await this.page.locator(L.QUICK_PRODUCT_CABYS_TAX_SUGERIDO).textContent())?.trim() ?? '';
-    const cabysTaxPct = cabysTaxTexto.includes('%')
-      ? parseFloat(cabysTaxTexto)
-      : parseFloat(cabysTaxTexto) * 100;
+    const cabysTaxPct = this._normalizarPorcentajeCabys(cabysTaxTexto);
 
     const tasaSeleccionadaPct = await this.obtenerTasaIvaSeleccionadaPct();
 
@@ -1475,6 +1516,47 @@ export class PosPage {
     return this.page.locator(L.QUICK_PRODUCT_TASA_IVA).evaluate(
       (el) => parseFloat((el as HTMLSelectElement).selectedOptions[0]?.getAttribute('percent') ?? 'NaN')
     );
+  }
+
+  /**
+   * Lee el `percent` de la opción de tasa de IVA realmente seleccionada en
+   * "Crear Combo" (`#tax_rate_list`) — homólogo de obtenerTasaIvaSeleccionadaPct()
+   * pero para el select propio del combo, que solo queda sincronizado con el
+   * CABYS aplicado si el checkbox ya estaba activado ANTES de aplicar ese
+   * CABYS (ver el comentario de L.COMBO_TASA_IVA).
+   */
+  async obtenerTasaIvaSeleccionadaComboPct(): Promise<number> {
+    return this.page.locator(L.COMBO_TASA_IVA).evaluate(
+      (el) => parseFloat((el as HTMLSelectElement).selectedOptions[0]?.getAttribute('percent') ?? 'NaN')
+    );
+  }
+
+  /**
+   * Valida que la tasa de IVA realmente seleccionada en "Crear Combo"
+   * coincide con el IVA que el propio CABYS aplicado sugiere. Solo tiene
+   * sentido llamarla cuando el checkbox "¿Aplicar impuesto?" se activó
+   * ANTES de aplicar el CABYS (ver activarIvaCombo() + el comentario de
+   * L.COMBO_TASA_IVA) — con el checkbox desmarcado en ese momento, el
+   * select nunca se sincroniza y esta comparación fallaría sin que sea un
+   * error real del sistema.
+   *
+   * La sincronización no es instantánea (confirmado en vivo: leerla justo
+   * después de que el sub-modal de CABYS se cierra todavía puede devolver el
+   * valor por defecto "0%", el mismo desfase de un tick de JS que ya obliga
+   * a esperarIvaAutocompletado() en Producto Rápido), así que se usa
+   * expect.poll() en vez de una lectura + comparación inmediata.
+   */
+  async validarIvaCoincideConCabysCombo() {
+    const cabysTaxTexto = (await this.page.locator(L.COMBO_CABYS_TAX_SUGERIDO).textContent())?.trim() ?? '';
+    const cabysTaxPct = this._normalizarPorcentajeCabys(cabysTaxTexto);
+
+    await expect.poll(
+      () => this.obtenerTasaIvaSeleccionadaComboPct(),
+      {
+        timeout: TIMEOUTS.PAYMENT_MODAL,
+        message: `La tasa de IVA seleccionada en el combo no coincidió con el IVA definido por el CABYS aplicado (${cabysTaxPct}%)`,
+      }
+    ).toBeCloseTo(cabysTaxPct, 1);
   }
 
   /** Lee el valor actual del campo "Precio con IVA" del formulario, como número. */
@@ -2222,28 +2304,34 @@ export class PosPage {
   }
 
   /**
-   * Asegura que un checkbox de IVA quede marcado, clickeándolo solo si hace
-   * falta (nunca a ciegas: un click sobre un checkbox ya marcado lo
-   * destildaría). Reintenta con `expect.poll` porque el propio click puede no
-   * sostenerse al primer intento. Recibe el locator y el id del checkbox
-   * porque tanto "Producto Rápido" (asegurarCheckboxIvaMarcado()) como
-   * "Crear Combo" (activarIvaCombo()) tienen el suyo propio.
+   * Asegura que un checkbox de IVA quede en el estado pedido (marcado o
+   * desmarcado), clickeándolo solo si hace falta (nunca a ciegas: un click
+   * sobre un checkbox ya en el estado deseado lo invertiría). Reintenta con
+   * `expect.poll` porque el propio click puede no sostenerse al primer
+   * intento. Recibe el locator y el id del checkbox porque tanto "Producto
+   * Rápido" (asegurarCheckboxIvaMarcado()) como "Crear Combo"
+   * (activarIvaCombo()/desactivarIvaCombo()) tienen el suyo propio.
    */
-  private async _asegurarCheckboxMarcado(checkbox: Locator, idParaClick: string) {
+  private async _asegurarCheckboxEstado(checkbox: Locator, idParaClick: string, marcado: boolean) {
     await expect.poll(async () => {
-      const yaMarcado = await checkbox.isChecked();
-      if (!yaMarcado) {
+      const actual = await checkbox.isChecked();
+      if (actual !== marcado) {
         await this.page.evaluate((id) => (document.getElementById(id) as HTMLInputElement).click(), idParaClick);
       }
       return checkbox.isChecked();
-    }, { timeout: TIMEOUTS.PAYMENT_MODAL }).toBe(true);
+    }, { timeout: TIMEOUTS.PAYMENT_MODAL }).toBe(marcado);
   }
 
   /**
    * Asegura que el checkbox "Aplicar impuesto" de "Producto Rápido" quede marcado.
    */
   async asegurarCheckboxIvaMarcado() {
-    await this._asegurarCheckboxMarcado(this.page.locator(L.QUICK_PRODUCT_APLICAR_IVA), 'check_quick_product_apply_tax');
+    await this._asegurarCheckboxEstado(this.page.locator(L.QUICK_PRODUCT_APLICAR_IVA), 'check_quick_product_apply_tax', true);
+  }
+
+  /** Locator del checkbox "¿Aplicar impuesto?" propio de "Crear Combo", expuesto para que los tests verifiquen su estado directamente. */
+  get checkboxIvaCombo() {
+    return this.page.locator(L.COMBO_APLICAR_IVA);
   }
 
   /**
@@ -2256,9 +2344,28 @@ export class PosPage {
    * ya quedan en una opción real (no en un placeholder "Seleccionar...")
    * apenas se marca el checkbox — confirmado en vivo leyendo su `value`
    * inmediatamente después del click.
+   *
+   * IMPORTANTE (confirmado en vivo, contradice lo asumido originalmente):
+   * si este checkbox se activa ANTES de aplicar un CABYS, el select de tasa
+   * (`#tax_rate_list`) SÍ se autosincroniza con la tasa real del CABYS —
+   * ver L.COMBO_TASA_IVA y validarIvaCoincideConCabysCombo(). El orden
+   * activar→CABYS es entonces obligatorio para el escenario "con IVA".
    */
   async activarIvaCombo() {
-    await this._asegurarCheckboxMarcado(this.page.locator(L.COMBO_APLICAR_IVA), 'apply_tax_combo');
+    await this._asegurarCheckboxEstado(this.page.locator(L.COMBO_APLICAR_IVA), 'apply_tax_combo', true);
+  }
+
+  /**
+   * Desactiva el checkbox "¿Aplicar impuesto?" de "Crear Combo" — contraparte
+   * de activarIvaCombo(), reutilizando el mismo helper genérico
+   * (_asegurarCheckboxEstado) en vez de duplicar la lógica de click/poll.
+   * Usada tanto para dejar el combo explícitamente "sin IVA" como para
+   * re-forzar ese estado después de aplicar un CABYS (defensivo: aunque no
+   * se confirmó en vivo que aplicar un CABYS reactive este checkbox por su
+   * cuenta, tampoco hay garantía de que no lo haga en otro ambiente/versión).
+   */
+  async desactivarIvaCombo() {
+    await this._asegurarCheckboxEstado(this.page.locator(L.COMBO_APLICAR_IVA), 'apply_tax_combo', false);
   }
 
   /**

@@ -1,5 +1,5 @@
 import { test, expect, Locator, Page } from '@playwright/test';
-import { PosPage, METODO, MONTO_EFECTIVO, DESCUENTO_INDIVIDUAL_PCT, CAJA_TEXTO, TIMEOUTS, ResultadoDescuento, NOMBRE_SERVICIO, VEHICULO_PINTURA_TIPO, CABYS_BUSQUEDA, CABYS_BUSQUEDA_SIN_IVA, PRECIO_PRODUCTO_RAPIDO, COMBO_BUSQUEDA_PRODUCTO, COMBO_CABYS_BUSQUEDA_SIN_IVA, LineaCarrito, PESTANA_POS_FACTURACION, PESTANAS_POS_A_RECORRER } from './pos.page';
+import { PosPage, METODO, MONTO_EFECTIVO, DESCUENTO_INDIVIDUAL_PCT, CAJA_TEXTO, TIMEOUTS, ResultadoDescuento, NOMBRE_SERVICIO, VEHICULO_PINTURA_TIPO, CABYS_BUSQUEDA, CABYS_BUSQUEDA_SIN_IVA, PRECIO_PRODUCTO_RAPIDO, COMBO_BUSQUEDA_PRODUCTO, LineaCarrito, PESTANA_POS_FACTURACION, PESTANAS_POS_A_RECORRER } from './pos.page';
 
 const NOMBRE_CLIENTE_FACTURA = 'Cliente De Prueba QA';
 
@@ -137,56 +137,118 @@ async function agregarProductoRapidoParaValidacionIva(
 }
 
 /**
- * Crea un combo con un producto real agregado, aplicando o no IVA según se
- * indique, y maneja CABYS según la misma regla que ya usa el resto de la
- * suite (manejarCabysSiAplica: obligatorio agregarlo si aparece, se omite si
- * no) — reutilizada tal cual pasando `pos.configCabysCombo` (el sub-modal de
- * búsqueda de CABYS de "Crear Combo" es una instancia completamente separada
- * de la de "Producto Rápido", confirmado en vivo, no un componente
- * compartido), sin duplicar la lógica de búsqueda/aplicado.
- *
- * El término de búsqueda de CABYS depende del escenario, igual que ya hace
- * agregarProductoRapidoParaValidacionIva() para Producto Rápido: CABYS_BUSQUEDA
- * ("aceite", tasa 13%) para "con IVA", CABYS_BUSQUEDA_SIN_IVA ("leche", tasa
- * "0% Exento") para "sin IVA". Confirmado en vivo que el CABYS aplicado —no
- * el checkbox "¿Aplicar impuesto?"— es lo que termina decidiendo la tasa
- * real del combo cuando SÍ se aplica un CABYS: un combo con el checkbox
- * desmarcado pero con un CABYS de tasa 13% aplicado terminó registrado con
- * IVA de todos modos (product_hide_apply_iva_<clave>="1", 13% exacto). Por
- * eso activarIvaCombo() —el checkbox manual— solo se usa como respaldo
- * cuando CABYS NO apareció en este ambiente (depende del país configurado
- * para la compañía, no es fijo); si CABYS sí se aplicó, ya define el
- * resultado y tocar el checkbox además sería redundante.
- *
- * El término "sin IVA" usa COMBO_CABYS_BUSQUEDA_SIN_IVA ("libro"), NO
- * CABYS_BUSQUEDA_SIN_IVA ("leche"): confirmado en vivo que el sub-modal de
- * CABYS de "Crear Combo" es un índice de búsqueda separado del de "Producto
- * Rápido" — "leche" resuelve a tasa 0% en el de Producto Rápido, pero a 1%
- * en el de Combo, así que cada formulario necesita su propio término
- * verificado.
- *
- * Devuelve si CABYS terminó aplicado, para que el test lo registre.
+ * Pasos comunes a ambos escenarios de "Crear Combo": abrir el modal, llenar
+ * nombre/cantidad y agregar un producto real. El manejo del checkbox de IVA
+ * y de CABYS es responsabilidad de cada escenario (crearComboConIva /
+ * crearComboSinIva), porque el orden entre ambos —no solo su presencia—
+ * determina el resultado (ver el comentario de activarIvaCombo() en
+ * pos.page.ts): factorizarlo aquí evitaría poder expresar ese orden.
  */
-async function crearCombo(pos: PosPage, nombre: string, activarIva: boolean): Promise<boolean> {
+async function abrirCrearComboConProducto(pos: PosPage, nombre: string) {
   await pos.abrirCrearCombo();
   await pos.llenarDatosBasicosCombo(nombre);
   await pos.buscarYAgregarPrimerProductoAlCombo(COMBO_BUSQUEDA_PRODUCTO);
+}
 
-  const terminoCabys = activarIva ? CABYS_BUSQUEDA : COMBO_CABYS_BUSQUEDA_SIN_IVA;
-  const cabysAplicado = await pos.manejarCabysSiAplica(terminoCabys, pos.configCabysCombo);
-
-  if (activarIva && !cabysAplicado) {
-    // CABYS no apareció en este ambiente: el checkbox manual es la única vía
-    // para dejar el combo con IVA.
-    await pos.activarIvaCombo();
-  }
-
+/**
+ * Fija un precio válido y guarda el combo ya configurado, validando la
+ * respuesta real de red (save_company_combo) — mismo cierre para ambos
+ * escenarios, sin duplicarlo.
+ */
+async function guardarComboConfigurado(pos: PosPage) {
   await pos.establecerPrecioValidoCombo();
 
   const respuesta = await pos.guardarComboYObtenerRespuesta();
   expect(respuesta.ok(), `La petición a save_company_combo no respondió OK (status ${respuesta.status()})`).toBe(true);
   await expect(pos.modalCrearCombo).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+}
 
+/**
+ * Escenario "Crear Combo con IVA": activa el checkbox "¿Aplicar impuesto?"
+ * PRIMERO y verifica que quedó marcado, y solo después maneja CABYS (si el
+ * formulario lo ofrece en este ambiente — depende del país configurado para
+ * la compañía, no es fijo). Ese orden es obligatorio, no cosmético:
+ * confirmado en vivo que el select de tasa (`#tax_rate_list`) SOLO se
+ * autosincroniza con la tasa real del CABYS aplicado si el checkbox ya
+ * estaba activado en ese momento — con el checkbox desmarcado, aplicar el
+ * mismo CABYS deja el select en su valor por defecto ("0% Exento") sin
+ * tocarlo. Por eso, a diferencia de una versión anterior de este helper,
+ * activarIvaCombo() ya no se limita a ser un respaldo para cuando CABYS no
+ * aparece: es el primer paso siempre.
+ *
+ * Si CABYS aparece, se aplica (CABYS_BUSQUEDA = "aceite", tasa 13%) y se
+ * valida que la tasa seleccionada en el combo coincide exactamente con la
+ * tasa que el propio CABYS sugiere (validarIvaCoincideConCabysCombo()) — no
+ * solo que "algo" quedó aplicado. Si CABYS no aparece, no se lo toca: el
+ * checkbox ya activado en el paso anterior es la única señal de "con IVA"
+ * disponible en ese ambiente.
+ *
+ * Devuelve si CABYS terminó aplicado, para que el test lo registre.
+ */
+async function crearComboConIva(pos: PosPage, nombre: string): Promise<boolean> {
+  await abrirCrearComboConProducto(pos, nombre);
+
+  await pos.activarIvaCombo();
+  await expect(
+    pos.checkboxIvaCombo,
+    'El checkbox "¿Aplicar impuesto?" de "Crear Combo" no quedó activado'
+  ).toBeChecked();
+
+  const cabysAplicado = await pos.manejarCabysSiAplica(CABYS_BUSQUEDA, pos.configCabysCombo);
+  if (cabysAplicado) {
+    await pos.validarIvaCoincideConCabysCombo();
+  }
+
+  await guardarComboConfigurado(pos);
+  return cabysAplicado;
+}
+
+/**
+ * Escenario "Crear Combo sin IVA": "sin IVA" es simplemente no agregarlo —
+ * el checkbox "¿Aplicar impuesto?" ya está desactivado por defecto al abrir
+ * el modal, así que no hace falta tocarlo de entrada. "Sin IVA" tampoco se
+ * simula buscando deliberadamente un CABYS de clasificación "Exento":
+ * CABYS es un campo fiscal obligatorio independiente del checkbox, así que
+ * se usa el mismo término que el escenario "con IVA" (CABYS_BUSQUEDA,
+ * "aceite") si el formulario lo ofrece en este ambiente.
+ *
+ * Aplicar ese CABYS SÍ activa el checkbox de IVA como efecto secundario —
+ * confirmado en vivo, con un desfase de ~500ms (ver
+ * esperarIvaAutocompletadoCombo(), homóloga de esperarIvaAutocompletado()
+ * de Producto Rápido) — así que hay que ESPERAR esa activación automática
+ * antes de revertirla: desactivar el checkbox de inmediato, sin esperar,
+ * corre el riesgo de ganarle la carrera al propio sistema y terminar con
+ * el checkbox marcado de todos modos.
+ *
+ * Nota de comportamiento real del sistema (confirmado en vivo): esperando
+ * correctamente esa auto-activación antes de revertirla, el checkbox
+ * termina realmente desactivado, y el combo queda guardado con
+ * `product_hide_apply_iva_<clave>="0"` e IVA real = 0 en el carrito, sin
+ * importar si se aplicó un CABYS o no — a diferencia de lo que se había
+ * observado en una versión anterior de este flujo (que leía el checkbox
+ * antes de que la auto-activación disparara, y por eso el "desactivar"
+ * corría antes de que hubiera algo real que desactivar, dejando el
+ * checkbox marcado al final). "Sin IVA" es entonces siempre
+ * ivaAplicado=false en la línea del carrito, consistente con que el
+ * checkbox es lo único que define este escenario.
+ *
+ * Devuelve si CABYS terminó aplicado, para que el test lo registre.
+ */
+async function crearComboSinIva(pos: PosPage, nombre: string): Promise<boolean> {
+  await abrirCrearComboConProducto(pos, nombre);
+
+  const cabysAplicado = await pos.manejarCabysSiAplica(CABYS_BUSQUEDA, pos.configCabysCombo);
+  if (cabysAplicado) {
+    await pos.esperarIvaAutocompletadoCombo();
+    await pos.desactivarIvaCombo();
+  }
+
+  await expect(
+    pos.checkboxIvaCombo,
+    'El checkbox "¿Aplicar impuesto?" de "Crear Combo" no quedó desactivado'
+  ).not.toBeChecked();
+
+  await guardarComboConfigurado(pos);
   return cabysAplicado;
 }
 
@@ -563,547 +625,6 @@ test('agregar y facturar un Producto Rápido en POS', async ({ page }) => {
   });
 });
 
-test('agregar producto rápido con IVA en POS', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
-  const pos = new PosPage(page);
-
-  await test.step('Cargar el POS pasando por el Dashboard (evita la condición de carrera del binding de "Agregar")', async () => {
-    await pos.cargarPosDesdeDashboard();
-    await pos.cerrarModalNotificacionesSiAparece();
-    await pos.cerrarAvisoConsecutivoSiAparece();
-    await pos.cerrarTodosLosToastsSiAparecen();
-  });
-
-  let clavesAntes: string[] = [];
-  await test.step('Abrir "Producto Rápido" y llenar nombre y precio', async () => {
-    clavesAntes = await pos.obtenerClavesProductos();
-    await pos.abrirProductoRapido();
-    await pos.llenarDatosBasicosProductoRapido(`Producto Rápido IVA ${Date.now()}`, PRECIO_PRODUCTO_RAPIDO);
-  });
-
-  let cabysAplicado = false;
-  await test.step('Detectar si aparece CABYS: si aparece, completarlo obligatoriamente; si no, continuar sin él', async () => {
-    cabysAplicado = await pos.manejarCabysSiAplica(CABYS_BUSQUEDA);
-    console.log(`[agregar producto rápido con IVA en POS] cabysAplicado=${cabysAplicado}`);
-  });
-
-  await test.step('Seleccionar un IVA válido según la regla: si hubo CABYS, debe coincidir con el que él define; si no, se puede elegir cualquiera', async () => {
-    if (cabysAplicado) {
-      await pos.esperarIvaAutocompletado();
-      await pos.validarIvaCoincideConCabys();
-      console.log('[agregar producto rápido con IVA en POS] validarIvaCoincideConCabys() PASÓ: la tasa seleccionada coincide con la del CABYS');
-    } else {
-      // Confirmado en vivo que sí ocurre: la visibilidad de CABYS depende
-      // del país configurado para la compañía (server-side), no es fija —
-      // ver el comentario de seleccionarIvaManualmente() en pos.page.ts.
-      await pos.seleccionarIvaManualmente();
-    }
-  });
-
-  let clave = '';
-  await test.step('Confirmar creación del producto y validar carrito + red + toast', async () => {
-    const respuesta = await pos.guardarProductoRapidoYObtenerRespuesta();
-    expect(respuesta.ok(), `La petición a getPosProductSaleItem no respondió OK (status ${respuesta.status()})`).toBe(true);
-
-    await expect(pos.modalProductoRapido).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
-    await expect.poll(async () => (await pos.obtenerClavesProductos()).length).toBeGreaterThan(clavesAntes.length);
-    const clavesDespues = await pos.obtenerClavesProductos();
-    clave = clavesDespues.find(c => !clavesAntes.includes(c))!;
-    await expect(page.locator('.noty_bar', { hasText: 'Producto agregado' })).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
-  });
-
-  await test.step('Fijar el carrito para mostrar totales con IVA y validar que el IVA de la línea se calculó correctamente', async () => {
-    await pos.establecerMostrarPrecioConIva(true, [clave]);
-    const linea = await pos.validarLineaCarrito(clave, true);
-    await pos.validarResumenImpuestos([linea]);
-  });
-
-  await test.step('Abrir modal de pago', async () => {
-    await abrirModalDePago(pos);
-  });
-
-  await test.step('Pagar en efectivo', async () => {
-    await pos.seleccionarPagoEfectivo(MONTO_EFECTIVO);
-  });
-
-  await test.step('Confirmar factura y cerrar impresión', async () => {
-    await confirmarPagoAbriendoCajaSiEsNecesario(pos, page);
-  });
-
-  await test.step('Validar carrito vacío', async () => {
-    await pos.validarCarritoVacio();
-  });
-});
-
-test('agregar producto rápido sin IVA en POS', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
-  const pos = new PosPage(page);
-
-  await test.step('Cargar el POS pasando por el Dashboard (evita la condición de carrera del binding de "Agregar")', async () => {
-    await pos.cargarPosDesdeDashboard();
-    await pos.cerrarModalNotificacionesSiAparece();
-    await pos.cerrarAvisoConsecutivoSiAparece();
-    await pos.cerrarTodosLosToastsSiAparecen();
-  });
-
-  let clavesAntes: string[] = [];
-  await test.step('Abrir "Producto Rápido" y llenar nombre y precio', async () => {
-    clavesAntes = await pos.obtenerClavesProductos();
-    await pos.abrirProductoRapido();
-    await pos.llenarDatosBasicosProductoRapido(`Producto Rápido sin IVA ${Date.now()}`, PRECIO_PRODUCTO_RAPIDO);
-  });
-
-  let cabysAplicado = false;
-  await test.step('Detectar si aparece CABYS: si aparece, completarlo obligatoriamente; si no, continuar sin él', async () => {
-    // Mismo CABYS obligatorio que el resto de la suite exige, pero con un
-    // término de búsqueda cuyo resultado trae tasa "0% (Exento)" — en un
-    // ambiente donde el CABYS es obligatorio, esa es la forma real de
-    // representar "producto sin IVA", no dejar el campo vacío.
-    cabysAplicado = await pos.manejarCabysSiAplica(CABYS_BUSQUEDA_SIN_IVA);
-  });
-
-  await test.step('Seleccionar explícitamente "sin IVA" (0% / Exento)', async () => {
-    if (cabysAplicado) {
-      await pos.esperarIvaAutocompletado();
-      await pos.validarIvaCoincideConCabys();
-    } else {
-      // Sin CABYS, el checkbox de IVA queda sin marcar por defecto —
-      // "sin IVA" es simplemente no tocarlo.
-    }
-  });
-
-  await test.step('Confirmar creación del producto y validar comportamiento consistente en UI y red', async () => {
-    const respuesta = await pos.guardarProductoRapidoYObtenerRespuesta();
-    expect(respuesta.ok(), `La petición a getPosProductSaleItem no respondió OK (status ${respuesta.status()})`).toBe(true);
-
-    await expect(pos.modalProductoRapido).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
-    await expect.poll(async () => (await pos.obtenerClavesProductos()).length).toBeGreaterThan(clavesAntes.length);
-    await expect(page.locator('.noty_bar', { hasText: 'Producto agregado' })).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
-  });
-
-  await test.step('Abrir modal de pago', async () => {
-    await abrirModalDePago(pos);
-  });
-
-  await test.step('Pagar en efectivo', async () => {
-    await pos.seleccionarPagoEfectivo(MONTO_EFECTIVO);
-  });
-
-  await test.step('Confirmar factura y cerrar impresión', async () => {
-    await confirmarPagoAbriendoCajaSiEsNecesario(pos, page);
-  });
-
-  await test.step('Validar carrito vacío', async () => {
-    await pos.validarCarritoVacio();
-  });
-});
-
-test('validar cálculo de IVA en productos rápidos — IVA activado', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
-  const pos = new PosPage(page);
-
-  await test.step('Cargar el POS pasando por el Dashboard (evita la condición de carrera del binding de "Agregar")', async () => {
-    await pos.cargarPosDesdeDashboard();
-    await pos.cerrarModalNotificacionesSiAparece();
-    await pos.cerrarAvisoConsecutivoSiAparece();
-    await pos.cerrarTodosLosToastsSiAparecen();
-  });
-
-  // La expectativa de IVA de cada producto es la intención propia de este
-  // test (true, se está pidiendo explícitamente con IVA) — no se deriva de
-  // leer ningún checkbox del formulario. La verificación real contra lo que
-  // el sistema efectivamente aplicó ocurre dentro de validarLineaCarrito(),
-  // contra product_hide_apply_iva_<clave>.
-  const IVA_ESPERADO = true;
-  const claves: string[] = [];
-  await test.step('Agregar dos productos rápidos con IVA activado, con distinta cantidad cada uno', async () => {
-    let clavesAntes = await pos.obtenerClavesProductos();
-    await agregarProductoRapidoParaValidacionIva(pos, `Validación IVA A ${Date.now()}`, PRECIO_PRODUCTO_RAPIDO, true, 1);
-    let clavesDespues = await pos.obtenerClavesProductos();
-    claves.push(clavesDespues.find(c => !clavesAntes.includes(c))!);
-
-    clavesAntes = clavesDespues;
-    await agregarProductoRapidoParaValidacionIva(pos, `Validación IVA B ${Date.now()}`, PRECIO_PRODUCTO_RAPIDO, true, 2);
-    clavesDespues = await pos.obtenerClavesProductos();
-    claves.push(clavesDespues.find(c => !clavesAntes.includes(c))!);
-  });
-
-  await test.step('Fijar el carrito para mostrar la columna "con IVA" con un click real sobre #show_price_with_iva, y confirmar que el checkbox y los totales quedaron consistentes antes de validar', async () => {
-    await pos.establecerMostrarPrecioConIva(true, claves);
-  });
-
-  let lineas: LineaCarrito[] = [];
-  await test.step('Recorrer todos los productos agregados y validar (precio unitario × cantidad) + IVA = total de cada línea', async () => {
-    for (const clave of claves) {
-      lineas.push(await pos.validarLineaCarrito(clave, IVA_ESPERADO));
-    }
-  });
-
-  await test.step('Validar que la suma del IVA de todos los productos coincide con el resumen de totales', async () => {
-    await pos.validarResumenImpuestos(lineas);
-  });
-});
-
-test('validar cálculo de IVA en productos rápidos — IVA desactivado', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
-  const pos = new PosPage(page);
-
-  await test.step('Cargar el POS pasando por el Dashboard (evita la condición de carrera del binding de "Agregar")', async () => {
-    await pos.cargarPosDesdeDashboard();
-    await pos.cerrarModalNotificacionesSiAparece();
-    await pos.cerrarAvisoConsecutivoSiAparece();
-    await pos.cerrarTodosLosToastsSiAparecen();
-  });
-
-  // Misma lógica que el escenario "con IVA": la expectativa es la intención
-  // propia del test, no algo leído de ningún checkbox del formulario.
-  const IVA_ESPERADO = false;
-  const claves: string[] = [];
-  await test.step('Agregar dos productos rápidos con IVA desactivado, con distinta cantidad cada uno', async () => {
-    let clavesAntes = await pos.obtenerClavesProductos();
-    await agregarProductoRapidoParaValidacionIva(pos, `Validación sin IVA A ${Date.now()}`, PRECIO_PRODUCTO_RAPIDO, false, 1);
-    let clavesDespues = await pos.obtenerClavesProductos();
-    claves.push(clavesDespues.find(c => !clavesAntes.includes(c))!);
-
-    clavesAntes = clavesDespues;
-    await agregarProductoRapidoParaValidacionIva(pos, `Validación sin IVA B ${Date.now()}`, PRECIO_PRODUCTO_RAPIDO, false, 3);
-    clavesDespues = await pos.obtenerClavesProductos();
-    claves.push(clavesDespues.find(c => !clavesAntes.includes(c))!);
-  });
-
-  await test.step('Fijar el carrito para mostrar la columna "con IVA" con un click real sobre #show_price_with_iva, y confirmar que el checkbox y los totales quedaron consistentes antes de validar', async () => {
-    await pos.establecerMostrarPrecioConIva(true, claves);
-  });
-
-  let lineas: LineaCarrito[] = [];
-  await test.step('Recorrer todos los productos agregados y validar que el total de cada línea es precio unitario × cantidad, sin IVA', async () => {
-    // La misma fórmula de validarLineaCarrito sirve para este escenario: con
-    // IVA desactivado, iva=0 y neto=total, así que (precio × cantidad) + 0
-    // = total sin necesidad de una fórmula separada.
-    for (const clave of claves) {
-      lineas.push(await pos.validarLineaCarrito(clave, IVA_ESPERADO));
-    }
-  });
-
-  await test.step('Validar que el resumen de totales no refleja IVA de estos productos', async () => {
-    await pos.validarResumenImpuestos(lineas);
-  });
-});
-
-test('Cerrar caja', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
-  const pos = new PosPage(page);
-
-  await test.step('Abrir el POS', async () => {
-    // El modal "Abrir Caja" al cargar bloquea toda la página (incluido el menú
-    // "Caja"), sin importar el estado real de la caja: hay que cerrarlo para poder
-    // continuar. Cerrarlo con "Cancelar" no abre la caja, así que no interfiere con
-    // la detección de estado que hace el propio flujo de "Abrir/Cerrar Caja (F12)".
-    await cargarPosYCerrarModalSiAparece(pos);
-  });
-
-  await test.step('Verificar y descartar modales/mensajes opcionales antes del flujo principal', async () => {
-    // Ninguno de los dos es parte del flujo de cerrar caja: se comprueban y
-    // descartan aquí, en este orden, para que no interfieran con los clicks del
-    // menú "Caja" más adelante. Su ausencia es igual de válida que su aparición.
-    if (await pos.modalNotificaciones.isVisible().catch(() => false)) {
-      await pos.cerrarModalNotificacionesSiAparece();
-      await expect(pos.modalNotificaciones).toBeHidden();
-    }
-
-    if (await pos.avisoConsecutivoFueraDeRango.isVisible().catch(() => false)) {
-      await pos.cerrarAvisoConsecutivoSiAparece();
-      await expect(pos.avisoConsecutivoFueraDeRango).toBeHidden();
-    }
-  });
-
-  await test.step('Abrir el menú "Caja", detectar el estado y cerrarla (abriéndola primero si es necesario)', async () => {
-    // El mismo ítem "Abrir/Cerrar Caja (F12)" muestra el modal "Abrir Caja" (cerrada)
-    // o "Detalle de Cierre" (abierta): la decisión se basa únicamente en cuál de los
-    // dos aparece, nunca se asume de antemano. Además, que la caja parezca abierta
-    // en un momento no garantiza que lo siga estando en el siguiente (el sistema
-    // puede volver a reportarla cerrada de forma asíncrona), así que todo el ciclo
-    // —entrar al menú, abrir si hace falta, y finalmente cerrar— se reintenta como
-    // una unidad hasta lograrlo, monitoreando continuamente el estado real.
-    //
-    // El click sobre el <li> del menú puede quedar bloqueado por un overlay
-    // transitorio del encabezado (banner de notificaciones, un toast "noty") que
-    // en ese instante ocupe esa esquina — confirmado en vivo inspeccionando el
-    // DOM real. Por eso cada vuelta: (1) limpia esos overlays antes de tocar el
-    // menú, (2) nunca vuelve a pulsar #menu_cash si el menú ya está desplegado
-    // (es un toggle: un segundo click lo cerraría en vez de dejarlo abierto), y
-    // (3) nunca vuelve a tocar el menú si algún modal de caja ya está visible —
-    // con el modal abierto, #menu_cash queda bloqueado por su backdrop estático
-    // hasta agotar su propio timeout, sin lograr nada.
-    const MAX_INTENTOS = 5;
-    let cerrada = false;
-
-    for (let intento = 1; intento <= MAX_INTENTOS && !cerrada; intento++) {
-      const abrirCajaYaVisible = await pos.modalAbrirCajaVisible();
-      const cerrarCajaYaVisible = await pos.modalCerrarCaja.isVisible().catch(() => false);
-
-      if (!abrirCajaYaVisible && !cerrarCajaYaVisible) {
-        await pos.abrirMenuCaja();
-        await pos.seleccionarAbrirCerrarCaja().catch((e) => {
-          console.log(`[Cerrar caja] click en "Abrir/Cerrar Caja" no tuvo éxito en el intento ${intento}: ${e.message}`);
-        });
-        await pos.esperarResultadoMenuCaja().catch(() => {});
-      }
-
-      if (await pos.modalAbrirCajaVisible()) {
-        // Escenario: caja cerrada (o se cerró de nuevo). Abrirla y reintentar el
-        // ciclo completo desde el menú, sin asumir que quedará abierta de inmediato.
-        await expect(pos.modalAbrirCaja).toBeVisible();
-        await pos.completarAperturaCaja();
-        await expect(pos.modalAbrirCaja).toBeHidden();
-        continue;
-      }
-
-      if (await pos.modalCerrarCaja.isVisible().catch(() => false)) {
-        // Escenario: caja abierta. Completar y confirmar el cierre.
-        await pos.completarFormularioCerrarCaja('0', '0', 'Cierre de prueba automatizado');
-        await pos.confirmarCerrarCaja();
-        cerrada = !(await pos.modalCerrarCaja.isVisible().catch(() => false));
-        continue;
-      }
-
-      // Ninguno de los dos modales apareció: el click pudo haber sido bloqueado
-      // por completo (menú nunca se abrió) o el menú quedó abierto pero tapado.
-      // La siguiente vuelta vuelve a comprobar el estado real en vez de asumir.
-    }
-
-    expect(cerrada, `La caja no quedó cerrada tras ${MAX_INTENTOS} intentos`).toBe(true);
-  });
-
-  await test.step('Validar que la caja quedó cerrada y que el sistema no muestra errores', async () => {
-    // El modal de cierre debe haber desaparecido y el POS debe seguir funcionando.
-    await expect(pos.modalCerrarCaja).toBeHidden();
-    await expect(pos.primerProducto).toBeVisible();
-
-    // Verificación independiente (no basada solo en la UI que ya se manipuló):
-    // recargar el POS y confirmar que ahora sí pide abrir la caja.
-    await pos.irAlPos();
-    await pos.esperarEstadoInicial();
-    await expect(pos.modalAbrirCaja).toBeVisible();
-    await expect(pos.modalAbrirCaja.getByText(CAJA_TEXTO)).toBeVisible();
-
-    // No debe quedar ningún mensaje de error visible tras el cierre.
-    await expect(page.locator('.noty_bar', { hasText: /error/i })).toHaveCount(0);
-  });
-});
-
-test('Abrir Historial de Facturas', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
-  const pos = new PosPage(page);
-  let historial: Page;
-
-  await test.step('Abrir POS y cerrar modales opcionales si aparecen', async () => {
-    await cargarPosYCerrarModalSiAparece(pos);
-    await pos.cerrarModalNotificacionesSiAparece();
-    await pos.cerrarAvisoConsecutivoSiAparece();
-  });
-
-  await test.step('Abrir el menú de tres puntos y seleccionar "Historial de Facturas"', async () => {
-    await pos.abrirMenuTresPuntos();
-    historial = await pos.abrirHistorialFacturas();
-  });
-
-  await test.step('Validar que la ventana de Historial de Facturas se abrió correctamente', async () => {
-    await historial.waitForLoadState('domcontentloaded');
-    expect(historial.url()).toContain('printPosReceip');
-  });
-
-  await test.step('Cerrar la ventana', async () => {
-    await historial.close();
-  });
-});
-
-test('Abrir Historial de Proformas', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
-  const pos = new PosPage(page);
-  let proformas: Page;
-
-  await test.step('Abrir POS', async () => {
-    await cargarPosYCerrarModalSiAparece(pos);
-  });
-
-  await test.step('Cerrar mensaje de consecutivo y modal de permisos si aparecen, antes de usar el menú de tres puntos', async () => {
-    // Ambos son avisos opcionales del sistema: pueden aparecer o no, y en
-    // ningún caso deben bloquear el resto del flujo.
-    await pos.cerrarAvisoConsecutivoSiAparece();
-    await pos.cerrarModalNotificacionesSiAparece();
-  });
-
-  await test.step('Abrir el menú de tres puntos y seleccionar "Historial de Proformas"', async () => {
-    await pos.abrirMenuTresPuntos();
-    proformas = await pos.abrirHistorialProformas();
-  });
-
-  await test.step('Validar que la ventana de Historial de Proformas se abrió correctamente', async () => {
-    await proformas.waitForLoadState('domcontentloaded');
-    expect(proformas.url()).toContain('printPosProform');
-  });
-
-  await test.step('Cerrar la ventana', async () => {
-    await proformas.close();
-  });
-});
-
-test('Seleccionar una categoría', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
-  const pos = new PosPage(page);
-
-  await test.step('Abrir el POS', async () => {
-    await cargarPosYCerrarModalSiAparece(pos);
-  });
-
-  await test.step('Seleccionar la categoría "Combos"', async () => {
-    await pos.categoriaCombos.click();
-  });
-
-  await test.step('Validar que la categoría quedó seleccionada', async () => {
-    await esperarQuedaActivo(() => pos.categoriaEstaActiva(pos.categoriaCombos));
-  });
-});
-
-test('Seleccionar los combos de la sección Categorías', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
-  const pos = new PosPage(page);
-
-  await test.step('Abrir el POS', async () => {
-    await cargarPosYCerrarModalSiAparece(pos);
-  });
-
-  // Los cinco tipos de categoría disponibles en la barra lateral. "Lista de
-  // precios" queda fuera: el propio sistema la mantiene oculta (display: none)
-  // para esta compañía, así que no es una opción real a probar.
-  const combos: Array<{ nombre: string; obtenerLocator: () => Locator }> = [
-    { nombre: 'TODOS', obtenerLocator: () => pos.categoriaTodos },
-    { nombre: 'Combos', obtenerLocator: () => pos.categoriaCombos },
-    { nombre: 'Categoría', obtenerLocator: () => pos.categoriaTipo },
-    { nombre: 'Productos fraccionados', obtenerLocator: () => pos.categoriaProductosFraccionados },
-    { nombre: 'Productos variantes', obtenerLocator: () => pos.categoriaProductosVariantes },
-  ];
-
-  for (const combo of combos) {
-    await test.step(`Seleccionar "${combo.nombre}" y validar que cambió la información`, async () => {
-      const item = combo.obtenerLocator();
-      await item.click();
-      await esperarQuedaActivo(() => pos.categoriaEstaActiva(item));
-    });
-  }
-});
-
-test('Cambiar entre modo Lista y modo Cuadrícula', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
-  const pos = new PosPage(page);
-  let listaActivaAlInicio = false;
-
-  await test.step('Abrir el POS', async () => {
-    await cargarPosYCerrarModalSiAparece(pos);
-  });
-
-  await test.step('Detectar cuál vista está activa actualmente, sin asumirla', async () => {
-    const listaActiva = await pos.vistaEstaActiva(pos.botonVistaLista);
-    const cuadriculaActiva = await pos.vistaEstaActiva(pos.botonVistaCuadricula);
-
-    if (listaActiva) {
-      listaActivaAlInicio = true;
-    } else if (cuadriculaActiva) {
-      listaActivaAlInicio = false;
-    } else {
-      // Ninguno de los dos botones fue interactuado todavía en esta sesión:
-      // el sistema reporta el estilo inicial en un elemento oculto del DOM.
-      listaActivaAlInicio = (await pos.estiloVistaTexto()) === 'list';
-    }
-  });
-
-  await test.step('Cambiar a la vista contraria y validar el cambio', async () => {
-    if (listaActivaAlInicio) {
-      await pos.botonVistaCuadricula.click();
-      await expect.poll(() => pos.vistaEstaActiva(pos.botonVistaCuadricula)).toBe(true);
-      await expect.poll(() => pos.vistaEstaActiva(pos.botonVistaLista)).toBe(false);
-    } else {
-      await pos.botonVistaLista.click();
-      await expect.poll(() => pos.vistaEstaActiva(pos.botonVistaLista)).toBe(true);
-      await expect.poll(() => pos.vistaEstaActiva(pos.botonVistaCuadricula)).toBe(false);
-    }
-  });
-});
-
-test('Seleccionar el tab Servicios', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
-  const pos = new PosPage(page);
-
-  await test.step('Abrir el POS', async () => {
-    await cargarPosYCerrarModalSiAparece(pos);
-  });
-
-  await test.step('Seleccionar el tab "Servicios"', async () => {
-    await pos.tabServicios.click();
-  });
-
-  await test.step('Validar que el tab "Servicios" quedó activo', async () => {
-    await esperarQuedaActivo(() => pos.tabEstaActivo(pos.tabServicios));
-  });
-});
-
-test('Seleccionar el tab End. Pintura', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
-  const pos = new PosPage(page);
-
-  await test.step('Abrir el POS', async () => {
-    await cargarPosYCerrarModalSiAparece(pos);
-  });
-
-  await test.step('Seleccionar el tab "End. Pintura"', async () => {
-    await pos.tabPintura.click();
-  });
-
-  await test.step('Validar que el tab "End. Pintura" quedó activo', async () => {
-    await esperarQuedaActivo(() => pos.tabEstaActivo(pos.tabPintura));
-  });
-});
-
-test('Recorrer todas las pestañas del POS y validar que cada una carga correctamente', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
-  const pos = new PosPage(page);
-
-  await test.step('Cargar el POS pasando por el Dashboard y cerrar overlays conocidos si aparecen', async () => {
-    await pos.cargarPosDesdeDashboard();
-    await pos.cerrarModalNotificacionesSiAparece();
-    await pos.cerrarAvisoConsecutivoSiAparece();
-    await pos.cerrarTodosLosToastsSiAparecen();
-  });
-
-  await test.step('Confirmar que el POS inicia en la pestaña "POS Facturación"', async () => {
-    await expect(page.locator(PESTANA_POS_FACTURACION.selector)).toHaveClass(/btn_tab_active/);
-  });
-
-  for (const pestana of PESTANAS_POS_A_RECORRER) {
-    await test.step(`Visitar pestaña "${pestana.etiqueta}"`, async () => {
-      if (await pos.existePestanaPos(pestana.selector)) {
-        await pos.visitarPestanaPos(pestana);
-      } else {
-        console.log(`[Recorrer pestañas POS] "${pestana.etiqueta}" (${pestana.selector}) no existe en este ambiente (permisos/configuración) — se omite`);
-      }
-    });
-  }
-
-  await test.step('Visitar pestaña "Apartados" (localizada dinámicamente, sin id fijo conocido)', async () => {
-    const apartados = await pos.localizarPestanaApartados();
-    if (apartados) {
-      await pos.visitarPestanaPos(apartados);
-    } else {
-      console.log('[Recorrer pestañas POS] "Apartados" no existe en este ambiente (permisos/configuración) — se omite');
-    }
-  });
-
-  await test.step('Volver a la pestaña "POS Facturación" y confirmar que quedó activa', async () => {
-    await pos.visitarPestanaPos(PESTANA_POS_FACTURACION);
-  });
-});
-
 test('Seleccionar un cliente existente en el POS', async ({ page }) => {
   test.setTimeout(TIMEOUTS.TEST);
   const pos = new PosPage(page);
@@ -1134,167 +655,5 @@ test('Ingresar nombre del cliente en el POS sin seleccionar uno registrado', asy
 
   await test.step('Abrir "Agregar" → "Nombre del cliente" e ingresar el nombre', async () => {
     await pos.ingresarNombreCliente(NOMBRE_CLIENTE_FACTURA);
-  });
-});
-
-test('facturar producto rápido con IVA y cliente existente en POS', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
-  const pos = new PosPage(page);
-
-  await test.step('Cargar el POS pasando por el Dashboard (evita la condición de carrera del binding de "Agregar")', async () => {
-    await pos.cargarPosDesdeDashboard();
-    await pos.cerrarModalNotificacionesSiAparece();
-    await pos.cerrarAvisoConsecutivoSiAparece();
-    await pos.cerrarTodosLosToastsSiAparecen();
-  });
-
-  await test.step('Agregar un producto rápido con IVA activado', async () => {
-    await agregarProductoRapidoParaValidacionIva(pos, `Producto Rápido IVA Cliente Existente ${Date.now()}`, PRECIO_PRODUCTO_RAPIDO, true);
-  });
-
-  await test.step('Seleccionar un cliente existente', async () => {
-    const nombreCliente = await pos.seleccionarClienteExistente();
-    expect(nombreCliente.length).toBeGreaterThan(0);
-  });
-
-  await test.step('Abrir modal de pago', async () => {
-    await abrirModalDePago(pos);
-  });
-
-  await test.step('Pagar en efectivo', async () => {
-    await pos.seleccionarPagoEfectivo(MONTO_EFECTIVO);
-  });
-
-  await test.step('Confirmar factura y cerrar impresión', async () => {
-    await confirmarPagoAbriendoCajaSiEsNecesario(pos, page);
-  });
-
-  await test.step('Validar carrito vacío', async () => {
-    await pos.validarCarritoVacio();
-  });
-});
-
-test('crear un Combo con IVA desde el POS y validar que se agrega correctamente al carrito', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
-  const pos = new PosPage(page);
-
-  await test.step('Cargar el POS pasando por el Dashboard (evita la condición de carrera del binding de "Agregar")', async () => {
-    await pos.cargarPosDesdeDashboard();
-    await pos.cerrarModalNotificacionesSiAparece();
-    await pos.cerrarAvisoConsecutivoSiAparece();
-    await pos.cerrarTodosLosToastsSiAparecen();
-  });
-
-  const nombreCombo = `Combo QA con IVA ${Date.now()}`;
-
-  await test.step('Crear el combo: seleccionar IVA y agregar CABYS si el formulario lo ofrece', async () => {
-    const cabysAplicado = await crearCombo(pos, nombreCombo, true);
-    console.log(`[crear un Combo con IVA] cabysAplicado=${cabysAplicado}`);
-  });
-
-  let claveCombo = '';
-  await test.step('Buscar el combo en la categoría "Combos" y agregarlo al carrito', async () => {
-    claveCombo = await buscarComboYAgregarAlCarrito(pos, nombreCombo);
-  });
-
-  await test.step('Fijar el carrito para mostrar totales con IVA y validar que el combo se agregó con IVA aplicado, el nombre coincide y no hay errores', async () => {
-    await pos.establecerMostrarPrecioConIva(true, [claveCombo]);
-    const linea = await pos.validarLineaCarrito(claveCombo, true);
-    expect(linea.nombre, 'El nombre de la línea agregada al carrito no coincide con el combo creado').toBe(nombreCombo);
-    await expect(page.locator('.noty_bar', { hasText: /error/i })).toHaveCount(0);
-  });
-});
-
-test('crear un Combo sin IVA desde el POS y validar que se agrega correctamente al carrito', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
-  const pos = new PosPage(page);
-
-  await test.step('Cargar el POS pasando por el Dashboard (evita la condición de carrera del binding de "Agregar")', async () => {
-    await pos.cargarPosDesdeDashboard();
-    await pos.cerrarModalNotificacionesSiAparece();
-    await pos.cerrarAvisoConsecutivoSiAparece();
-    await pos.cerrarTodosLosToastsSiAparecen();
-  });
-
-  const nombreCombo = `Combo QA sin IVA ${Date.now()}`;
-
-  let cabysAplicado = false;
-  await test.step('Crear el combo sin seleccionar IVA — CABYS sigue siendo obligatorio si el formulario lo ofrece', async () => {
-    // No se llama a activarIvaCombo(): el checkbox "¿Aplicar impuesto?" queda
-    // en su estado por defecto (sin marcar). Si el formulario no ofreciera
-    // CABYS en este ambiente (depende del país configurado para la
-    // compañía, no es fijo — ver el comentario de existeCampoCabys() en
-    // pos.page.ts), cabysAplicado quedaría en false y ese sería el único
-    // caso real de "sin IVA" (ivaAplicado=false) — ver el step de
-    // validación más abajo para la explicación completa.
-    cabysAplicado = await crearCombo(pos, nombreCombo, false);
-    console.log(`[crear un Combo sin IVA] cabysAplicado=${cabysAplicado}`);
-  });
-
-  let claveCombo = '';
-  await test.step('Buscar el combo en la categoría "Combos" y agregarlo al carrito', async () => {
-    claveCombo = await buscarComboYAgregarAlCarrito(pos, nombreCombo);
-  });
-
-  await test.step('Fijar el carrito para mostrar totales con IVA y validar el combo agregado, el nombre y que no hay errores', async () => {
-    await pos.establecerMostrarPrecioConIva(true, [claveCombo]);
-
-    // Comportamiento real descubierto en vivo (no documentado previamente):
-    // aplicar CUALQUIER CABYS —incluso uno de tasa "0% (Exento)", como el
-    // usado aquí (COMBO_CABYS_BUSQUEDA_SIN_IVA)— deja
-    // product_hide_apply_iva_<clave>="1" de todos modos: el sistema marca
-    // "IVA aplicado" por la sola presencia de una clasificación CABYS, sin
-    // importar su tasa ni el estado del checkbox "¿Aplicar impuesto?".
-    // Confirmado interceptando la red: neto y total con IVA quedan
-    // idénticos (0 de impuesto real cobrado), pero la bandera igual queda
-    // en true. Por eso, cuando CABYS es obligatorio y se aplica, un combo
-    // "sin IVA" en el sentido estricto de la bandera del sistema deja de
-    // ser posible — lo único verdaderamente controlable es que la TASA
-    // real sea 0%, no la bandera. La expectativa real es entonces
-    // `cabysAplicado`: true si CABYS se aplicó (sin importar la tasa),
-    // false solo si el formulario no ofreció CABYS en este ambiente y por
-    // tanto el checkbox se quedó como estaba (sin marcar).
-    const linea = await pos.validarLineaCarrito(claveCombo, cabysAplicado);
-    expect(linea.nombre, 'El nombre de la línea agregada al carrito no coincide con el combo creado').toBe(nombreCombo);
-    if (cabysAplicado) {
-      expect(linea.iva, 'La tasa de IVA del CABYS "sin IVA" debería ser 0 (Exento)').toBeCloseTo(0, 1);
-    }
-    await expect(page.locator('.noty_bar', { hasText: /error/i })).toHaveCount(0);
-  });
-});
-
-test('facturar producto rápido con IVA y nombre del cliente en POS', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
-  const pos = new PosPage(page);
-
-  await test.step('Cargar el POS pasando por el Dashboard (evita la condición de carrera del binding de "Agregar")', async () => {
-    await pos.cargarPosDesdeDashboard();
-    await pos.cerrarModalNotificacionesSiAparece();
-    await pos.cerrarAvisoConsecutivoSiAparece();
-    await pos.cerrarTodosLosToastsSiAparecen();
-  });
-
-  await test.step('Agregar un producto rápido con IVA activado', async () => {
-    await agregarProductoRapidoParaValidacionIva(pos, `Producto Rápido IVA Nombre Cliente ${Date.now()}`, PRECIO_PRODUCTO_RAPIDO, true);
-  });
-
-  await test.step('Ingresar solo el nombre del cliente (sin seleccionar uno registrado)', async () => {
-    await pos.ingresarNombreCliente(NOMBRE_CLIENTE_FACTURA);
-  });
-
-  await test.step('Abrir modal de pago', async () => {
-    await abrirModalDePago(pos);
-  });
-
-  await test.step('Pagar en efectivo', async () => {
-    await pos.seleccionarPagoEfectivo(MONTO_EFECTIVO);
-  });
-
-  await test.step('Confirmar factura y cerrar impresión', async () => {
-    await confirmarPagoAbriendoCajaSiEsNecesario(pos, page);
-  });
-
-  await test.step('Validar carrito vacío', async () => {
-    await pos.validarCarritoVacio();
   });
 });
