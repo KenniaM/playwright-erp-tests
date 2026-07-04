@@ -149,6 +149,9 @@ const L = {
   // y de reintentar hasta que el ítem hijo se vuelva visible.
   FAB_TOGGLE:        '#add_sn_product > li.mfb-component__wrap-new > a.mfb-component__button--main',
   FAB_ITEM_PRODUCTO_RAPIDO: 'a[data-mfb-label*="Producto Rápido"]',
+  // Mismo FAB del POS, ítem hermano de "Producto Rápido" — confirmado en vivo
+  // (label real: "(⇧+G) Agregar combo", onclick="add_restaurant_combo(0)").
+  FAB_ITEM_CREAR_COMBO: 'a[data-mfb-label*="Agregar combo"]',
 
   DIALOG_PRODUCTO_RAPIDO: '#dialog_quick_product_pos',
   QUICK_PRODUCT_NOMBRE:   '#quick_product_name',
@@ -173,6 +176,42 @@ const L = {
   // → add_sn_product() en pos.js). Se usa para armar waitForResponse() antes
   // del click y validar la red explícitamente, no solo el efecto visual.
   AJAX_GUARDAR_PRODUCTO: 'getPosProductSaleItem',
+
+  // ─── "Crear Combo" (mismo FAB que "Producto Rápido") ───────────────────────
+  DIALOG_CREAR_COMBO:        '#dialog_add_restaurant_combo',
+  COMBO_NOMBRE:              '#combo_rest_name',
+  COMBO_PRECIO_FINAL:        '#combo_rest_total',
+  COMBO_CANTIDAD:            '#combo_rest_quantity',
+  COMBO_BUSCADOR_PRODUCTO:   '#search_parameter',
+  // Los resultados de búsqueda son <div onclick="get_product_combo(...)">,
+  // no <a> — confirmado inspeccionando el DOM en vivo (a diferencia de los
+  // resultados de CABYS o de cliente, que sí son enlaces/filas normales).
+  COMBO_RESULTADO_ITEM:      '#product_option_view [onclick]',
+  COMBO_LISTA_PRODUCTOS:     '#content_combo_product_list',
+  COMBO_PRODUCTO_EN_LISTA:   '#content_combo_product_list [id^="product_combo_"]',
+  COMBO_PRECIO_REAL:         '#real_price_combo',
+  COMBO_BTN_GUARDAR:         '#btn_save_combo',
+  // Botón "CABYS" propio de este formulario. A diferencia de lo asumido
+  // inicialmente, NO reutiliza el sub-modal de "Producto Rápido"
+  // (#dialog_add_cabys_code): abre uno propio y completamente separado
+  // (#dialog_add_cabys_code_combo, con su propio input/botón/tabla, todos
+  // con sufijo "_combo") — confirmado en vivo interceptando qué modal
+  // realmente queda visible tras el click.
+  COMBO_BTN_CABYS:              'a[href="javascript:show_add_cabys_code_combo();"]',
+  COMBO_DIALOG_BUSCAR_CABYS:    '#dialog_add_cabys_code_combo',
+  COMBO_CABYS_BUSCADOR_INPUT:   '#cabys_code_search_combo',
+  COMBO_CABYS_BUSCADOR_BOTON:   '#btn_cabys_code_search_combo',
+  COMBO_CABYS_FILAS_RESULTADO:  '#table_cabys_code_combo tr',
+  // Checkbox "¿Aplicar impuesto?" propio de "Crear Combo" — a diferencia del
+  // de "Producto Rápido" (#check_quick_product_apply_tax), no tiene el bug
+  // de reseteo de pos.js:680-699 y sus "Chosen" de tipo/tasa ya quedan en una
+  // opción real (no un placeholder) apenas se marca — confirmado en vivo.
+  COMBO_APLICAR_IVA:         '#apply_tax_combo',
+
+  // Petición AJAX real que persiste el combo (save_restaurant_combo() en
+  // pos.js) — confirmado en vivo inspeccionando la red tras un guardado
+  // exitoso.
+  AJAX_GUARDAR_COMBO: 'save_company_combo',
 
   // Área de totales del POS (footer principal, NO el modal de pago): fila
   // etiquetada "IVA" que acumula el impuesto de todo el carrito. Confirmado
@@ -326,11 +365,31 @@ export const CABYS_BUSQUEDA = 'aceite';
 // caso "sin IVA": en este ambiente el CABYS es obligatorio
 // (validate_cabys_code=1), así que "sin IVA" se logra con un CABYS cuya
 // propia clasificación fiscal es exenta, no dejando el campo vacío.
+//
+// Válido únicamente para el sub-modal de búsqueda de CABYS de "Producto
+// Rápido" (#table_cabys_code_content) — NO para el de "Crear Combo"
+// (#table_cabys_code_combo, ver COMBO_CABYS_BUSQUEDA_SIN_IVA): son dos
+// índices/búsquedas separados que devuelven resultados distintos para el
+// mismo término — confirmado en vivo: "leche" resuelve a tasa 0% en el de
+// Producto Rápido, pero a tasa 1% ("Leche cruda de vaca") en el de Combo.
 export const CABYS_BUSQUEDA_SIN_IVA = 'leche';
+
+// Término de búsqueda equivalente a CABYS_BUSQUEDA_SIN_IVA pero para el
+// sub-modal de CABYS propio de "Crear Combo" — confirmado en vivo que su
+// primer resultado ("Libros o textos escolares, impresos") resuelve a tasa
+// "Exento", a diferencia de "leche" en este mismo modal (1%, no exento).
+export const COMBO_CABYS_BUSQUEDA_SIN_IVA = 'libro';
 
 // Precio base para el producto rápido de prueba; sin IVA aplicado hasta que
 // se selecciona un CABYS (ver esperarIvaAutocompletado()).
 export const PRECIO_PRODUCTO_RAPIDO = '1000';
+
+// Término de búsqueda de producto para el formulario "Crear Combo" — mismo
+// producto real que ya usa el resto de la suite (facturar dos productos con
+// descuento individual), en vez de un término genérico que trae productos de
+// prueba con datos inconsistentes (nombres/cantidades basura confirmados en
+// vivo con búsquedas genéricas como "producto").
+export const COMBO_BUSQUEDA_PRODUCTO = 'FRENOS';
 
 // ─── Tipos de resultado del descuento individual ───────────────────────────────
 
@@ -370,6 +429,23 @@ export type EstadoCheckIva = {
   activo: boolean;
   metodo: string;
   evidencia: string;
+};
+
+// ─── Configuración del sub-modal de búsqueda de CABYS ──────────────────────────
+//
+// "Producto Rápido" y "Crear Combo" cada uno abre su PROPIO sub-modal de
+// búsqueda de CABYS (#dialog_add_cabys_code vs #dialog_add_cabys_code_combo),
+// cada uno con su propio input/botón/tabla de resultados — no un componente
+// compartido, como se asumió inicialmente — confirmado en vivo interceptando
+// qué modal queda realmente visible tras el click en cada botón "CABYS". Este
+// tipo agrupa los cinco locators que buscarYAplicarCabys()/manejarCabysSiAplica()
+// necesitan para operar cualquiera de los dos, sin duplicar esa lógica.
+export type ConfigBusquedaCabys = {
+  boton: Locator;
+  modal: Locator;
+  input: Locator;
+  botonBuscar: Locator;
+  filas: Locator;
 };
 
 // ─── Datos de una línea del carrito (validación de IVA) ────────────────────────
@@ -1275,28 +1351,30 @@ export class PosPage {
   }
 
   /**
-   * Indica si el campo CABYS está presente en este momento del formulario.
-   * No es un dato fijo: depende del país configurado para la compañía en
-   * este ambiente compartido de QA (confirmado en vivo pasando de
-   * visible/obligatorio con la compañía configurada como Costa Rica, a
-   * oculto con la misma compañía luego reconfigurada como Honduras, sin
-   * ningún cambio de este lado) — de ahí que este chequeo se haga en cada
-   * corrida en vez de asumir un estado fijo.
+   * Indica si el botón CABYS está presente en este momento del formulario
+   * indicado (por defecto, el de "Producto Rápido"; "Crear Combo" pasa
+   * `configCabysCombo.boton`). No es un dato fijo: depende del país
+   * configurado para la compañía en este ambiente compartido de QA
+   * (confirmado en vivo pasando de visible/obligatorio con la compañía
+   * configurada como Costa Rica, a oculto con la misma compañía luego
+   * reconfigurada como Honduras, sin ningún cambio de este lado) — de ahí que
+   * este chequeo se haga en cada corrida en vez de asumir un estado fijo.
    */
-  async existeCampoCabys(): Promise<boolean> {
-    return this.page.locator(L.QUICK_PRODUCT_BTN_CABYS).isVisible().catch(() => false);
+  async existeCampoCabys(boton: Locator = this.page.locator(L.QUICK_PRODUCT_BTN_CABYS)): Promise<boolean> {
+    return boton.isVisible().catch(() => false);
   }
 
   /**
-   * Completa el CABYS únicamente si el campo aparece en este formulario;
+   * Completa el CABYS únicamente si el botón aparece en el formulario dado;
    * si no aparece, no lo toca. Devuelve si lo aplicó o no, para que quien
    * llama decida el resto del flujo de IVA en consecuencia (ver
    * validarIvaCoincideConCabys() para el caso "aplicado" y
-   * seleccionarIvaManualmente() para el caso "no aplicado").
+   * seleccionarIvaManualmente() para el caso "no aplicado"). Reutilizado tal
+   * cual por "Crear Combo" pasando `configCabysCombo`.
    */
-  async manejarCabysSiAplica(termino: string): Promise<boolean> {
-    if (!(await this.existeCampoCabys())) return false;
-    await this.buscarYAplicarCabys(termino);
+  async manejarCabysSiAplica(termino: string, config: ConfigBusquedaCabys = this.configCabysProductoRapido): Promise<boolean> {
+    if (!(await this.existeCampoCabys(config.boton))) return false;
+    await this.buscarYAplicarCabys(termino, config);
     return true;
   }
 
@@ -1304,23 +1382,54 @@ export class PosPage {
    * Busca un código CABYS por texto en el sub-modal dedicado y aplica el
    * primer resultado de la tabla (mismo criterio que el resto de la suite
    * usa para catálogos sin nombre estable por el cual filtrar: tomar el
-   * primero disponible). Aplicar un CABYS autocompleta el tipo y la tasa de
-   * IVA del formulario —ver esperarIvaAutocompletado()—.
+   * primero disponible).
+   *
+   * Recibe la configuración completa (botón, modal, input, botón de
+   * búsqueda y filas de resultado) en vez de solo el botón: "Producto
+   * Rápido" y "Crear Combo" NO comparten el mismo sub-modal —a diferencia de
+   * lo asumido inicialmente—, sino dos instancias completamente separadas
+   * (#dialog_add_cabys_code vs #dialog_add_cabys_code_combo, cada una con su
+   * propio input/botón/tabla) — confirmado en vivo interceptando qué modal
+   * queda realmente visible tras el click. Aplicar un CABYS autocompleta el
+   * tipo y la tasa de IVA del formulario de Producto Rápido —ver
+   * esperarIvaAutocompletado()—; el de Combo no tiene ese autocompletado.
    */
-  async buscarYAplicarCabys(termino: string) {
+  async buscarYAplicarCabys(termino: string, config: ConfigBusquedaCabys = this.configCabysProductoRapido) {
     await this.cerrarModalNotificacionesSiAparece();
-    await this.page.locator(L.QUICK_PRODUCT_BTN_CABYS).click();
-    await expect(this.modalBusquedaCabys).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await config.boton.click();
+    await expect(config.modal).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
 
-    await this.page.locator(L.CABYS_BUSCADOR_INPUT).fill(termino);
+    await config.input.fill(termino);
     await this.cerrarModalNotificacionesSiAparece();
-    await this.page.locator(L.CABYS_BUSCADOR_BOTON).click();
+    await config.botonBuscar.click();
 
-    const primeraFila = this.page.locator(L.CABYS_FILAS_RESULTADO).first();
+    const primeraFila = config.filas.first();
     await expect(primeraFila, `No hubo resultados de CABYS para "${termino}"`).toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
     await primeraFila.getByRole('link', { name: 'Aplicar' }).click();
 
-    await expect(this.modalBusquedaCabys).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await expect(config.modal).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /** Configuración del sub-modal de búsqueda de CABYS de "Producto Rápido" (la usada por defecto). */
+  get configCabysProductoRapido(): ConfigBusquedaCabys {
+    return {
+      boton: this.page.locator(L.QUICK_PRODUCT_BTN_CABYS),
+      modal: this.modalBusquedaCabys,
+      input: this.page.locator(L.CABYS_BUSCADOR_INPUT),
+      botonBuscar: this.page.locator(L.CABYS_BUSCADOR_BOTON),
+      filas: this.page.locator(L.CABYS_FILAS_RESULTADO),
+    };
+  }
+
+  /** Configuración del sub-modal de búsqueda de CABYS propio de "Crear Combo" (separado del de Producto Rápido). */
+  get configCabysCombo(): ConfigBusquedaCabys {
+    return {
+      boton: this.page.locator(L.COMBO_BTN_CABYS),
+      modal: this.page.locator(L.COMBO_DIALOG_BUSCAR_CABYS),
+      input: this.page.locator(L.COMBO_CABYS_BUSCADOR_INPUT),
+      botonBuscar: this.page.locator(L.COMBO_CABYS_BUSCADOR_BOTON),
+      filas: this.page.locator(L.COMBO_CABYS_FILAS_RESULTADO),
+    };
   }
 
   /**
@@ -1728,6 +1837,149 @@ export class PosPage {
     return respuestaPromise;
   }
 
+  // ─── "Crear Combo" ──────────────────────────────────────────────────────────
+
+  /** Locator del modal "Crear Combo". */
+  get modalCrearCombo() {
+    return this.page.locator(L.DIALOG_CREAR_COMBO);
+  }
+
+  /**
+   * Locator del botón "CABYS" propio del formulario "Crear Combo" — distinto
+   * del de "Producto Rápido" (otro onclick, otra posición en el DOM, y abre
+   * un sub-modal de búsqueda completamente separado, no compartido — ver
+   * `configCabysCombo`). Expuesto aparte para poder comprobar su existencia
+   * (existeCampoCabys()) sin armar la configuración completa.
+   */
+  get botonCabysCombo() {
+    return this.page.locator(L.COMBO_BTN_CABYS);
+  }
+
+  /**
+   * Expande el FAB y abre el modal "Crear Combo". El ítem "Agregar combo"
+   * queda con bounding box 0×0 de forma efímera (confirmado en vivo con
+   * getBoundingClientRect: el estado "visible" que reporta Playwright puede
+   * durar apenas milisegundos antes de volver a colapsar), así que —a
+   * diferencia de abrirProductoRapido()— la comprobación de expansión usa
+   * isVisible() puntual (sin esperar/poll) dentro de un ciclo corto y
+   * frecuente, en vez de waitFor(): un poll que tarda en resolver puede
+   * capturar el ítem apenas antes de que vuelva a colapsar, dejando el click
+   * posterior actuando sobre un box ya vacío de nuevo.
+   *
+   * A diferencia de "Producto Rápido" (que usa `data-toggle="modal"` sobre
+   * contenido ya presente en el DOM), el ítem "Agregar combo" dispara
+   * `add_restaurant_combo(0)`, que carga el contenido del modal por AJAX
+   * antes de mostrarlo —confirmado en vivo, incluye su propia llamada a
+   * `get_combo_pharmaceutical()`—, así que el modal puede tardar bastante
+   * más en aparecer que el de Producto Rápido: se espera con un timeout
+   * generoso (TIMEOUTS.PRODUCTS_LOAD) después del único click sobre el ítem.
+   */
+  async abrirCrearCombo() {
+    const toggle = this.page.locator(L.FAB_TOGGLE);
+    const item = this.page.locator(L.FAB_ITEM_CREAR_COMBO);
+
+    const MAX_INTENTOS = 15;
+    let expandido = false;
+    for (let intento = 1; intento <= MAX_INTENTOS && !expandido; intento++) {
+      await this.cerrarModalNotificacionesSiAparece();
+      await toggle.click({ force: true });
+      expandido = await item.isVisible().catch(() => false);
+      if (!expandido) await this.page.waitForTimeout(300);
+    }
+
+    if (!expandido) {
+      throw new Error(`El botón flotante del POS no se pudo expandir tras ${MAX_INTENTOS} intentos.`);
+    }
+
+    await item.click({ force: true });
+    await expect(
+      this.modalCrearCombo,
+      'El modal "Crear Combo" no apareció tras clickear "Agregar combo" en el FAB'
+    ).toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+  }
+
+  /**
+   * Llena nombre y cantidad en el formulario "Crear Combo" ya abierto. El
+   * precio final NO se llena aquí: debe fijarse después de agregar los
+   * productos (ver establecerPrecioValidoCombo()), porque el sistema lo
+   * valida contra la suma de sus precios.
+   */
+  async llenarDatosBasicosCombo(nombre: string, cantidad = '1') {
+    await this.page.locator(L.COMBO_NOMBRE).fill(nombre);
+    await this.page.locator(L.COMBO_CANTIDAD).fill(cantidad);
+  }
+
+  /**
+   * Busca un producto por texto en el buscador propio de "Crear Combo"
+   * (Enter dispara la búsqueda — confirmado en vivo, no hay botón submit) y
+   * agrega el primer resultado disponible: mismo criterio de "primera opción
+   * disponible" que ya usa el resto de la suite para catálogos configurables
+   * por compañía sin nombre estable (CABYS, IVA, parte/pieza/servicio de End.
+   * Pintura). Los resultados son `<div onclick="get_product_combo(...)">`,
+   * no `<a>` ni filas con un botón propio — confirmado inspeccionando el DOM
+   * en vivo — así que se clickean vía evaluate() en vez de un locator.click()
+   * normal, que no encuentra un target accionable estándar ahí.
+   */
+  async buscarYAgregarPrimerProductoAlCombo(termino: string) {
+    const buscador = this.page.locator(L.COMBO_BUSCADOR_PRODUCTO);
+    await buscador.fill(termino);
+    await buscador.press('Enter');
+
+    const resultado = this.page.locator(L.COMBO_RESULTADO_ITEM).first();
+    await expect(resultado, `No hubo resultados de producto para "${termino}" al crear el combo`).toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+
+    const productosAntes = await this.page.locator(L.COMBO_PRODUCTO_EN_LISTA).count();
+    await this.page.evaluate((selector) => {
+      (document.querySelector(selector) as HTMLElement | null)?.click();
+    }, L.COMBO_RESULTADO_ITEM);
+
+    await expect(
+      this.page.locator(L.COMBO_PRODUCTO_EN_LISTA),
+      `El producto buscado ("${termino}") no se agregó a la lista del combo`
+    ).toHaveCount(productosAntes + 1, { timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /** Lee el "Precio real" del combo: la suma de precios de los productos ya agregados. */
+  async obtenerPrecioRealCombo(): Promise<number> {
+    const texto = await this.page.locator(L.COMBO_PRECIO_REAL).textContent();
+    return parseFloat((texto ?? '0').replace(/[^0-9.]/g, '')) || 0;
+  }
+
+  /**
+   * Fija un precio final válido para el combo, a partir del "Precio real"
+   * (suma de precios de los productos ya agregados) — nunca un monto fijo
+   * arbitrario. Regla de negocio descubierta inspeccionando la app en vivo
+   * (no documentada): si el precio final supera esa suma, el sistema
+   * rechaza el guardado en el propio cliente, sin disparar ningún request
+   * de red, mostrando solo el toast "El precio del combo es mayor al precio
+   * del producto" — confirmado interceptando la red y la consola tras el
+   * click en "Guardar combo". Devuelve el precio fijado, por si el test
+   * necesita usarlo para validar el carrito después.
+   */
+  async establecerPrecioValidoCombo(porcentajeDelPrecioReal = 0.8): Promise<number> {
+    const precioReal = await this.obtenerPrecioRealCombo();
+    expect(precioReal, 'El "Precio real" del combo es 0 — no se agregó ningún producto todavía').toBeGreaterThan(0);
+
+    const precioValido = parseFloat((precioReal * porcentajeDelPrecioReal).toFixed(2));
+    await this.page.locator(L.COMBO_PRECIO_FINAL).fill(String(precioValido));
+    return precioValido;
+  }
+
+  /**
+   * Presiona "Guardar combo" y devuelve la respuesta real de la petición que
+   * lo persiste (save_company_combo) — misma señal de éxito a nivel de red
+   * que ya usa guardarProductoRapidoYObtenerRespuesta() para Producto
+   * Rápido, no solo el efecto visual de que el modal se cerró.
+   */
+  async guardarComboYObtenerRespuesta() {
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_GUARDAR_COMBO),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await this.page.locator(L.COMBO_BTN_GUARDAR).click({ force: true });
+    return respuestaPromise;
+  }
+
   // ─── Pestañas superiores del POS ────────────────────────────────────────────
 
   /** Indica si la pestaña existe en el DOM en este momento — detecta pestañas ocultas por permisos/configuración sin fallar. */
@@ -1970,19 +2222,43 @@ export class PosPage {
   }
 
   /**
-   * Asegura que el checkbox "Aplicar impuesto" quede marcado, clickeándolo
-   * solo si hace falta (nunca a ciegas: un click sobre un checkbox ya
-   * marcado lo destildaría). Reintenta con `expect.poll` porque el propio
-   * click puede no sostenerse al primer intento.
+   * Asegura que un checkbox de IVA quede marcado, clickeándolo solo si hace
+   * falta (nunca a ciegas: un click sobre un checkbox ya marcado lo
+   * destildaría). Reintenta con `expect.poll` porque el propio click puede no
+   * sostenerse al primer intento. Recibe el locator y el id del checkbox
+   * porque tanto "Producto Rápido" (asegurarCheckboxIvaMarcado()) como
+   * "Crear Combo" (activarIvaCombo()) tienen el suyo propio.
+   */
+  private async _asegurarCheckboxMarcado(checkbox: Locator, idParaClick: string) {
+    await expect.poll(async () => {
+      const yaMarcado = await checkbox.isChecked();
+      if (!yaMarcado) {
+        await this.page.evaluate((id) => (document.getElementById(id) as HTMLInputElement).click(), idParaClick);
+      }
+      return checkbox.isChecked();
+    }, { timeout: TIMEOUTS.PAYMENT_MODAL }).toBe(true);
+  }
+
+  /**
+   * Asegura que el checkbox "Aplicar impuesto" de "Producto Rápido" quede marcado.
    */
   async asegurarCheckboxIvaMarcado() {
-    await expect.poll(async () => {
-      const yaMarcado = await this.page.locator(L.QUICK_PRODUCT_APLICAR_IVA).isChecked();
-      if (!yaMarcado) {
-        await this.page.evaluate((id) => (document.getElementById(id) as HTMLInputElement).click(), 'check_quick_product_apply_tax');
-      }
-      return this.page.locator(L.QUICK_PRODUCT_APLICAR_IVA).isChecked();
-    }, { timeout: TIMEOUTS.PAYMENT_MODAL }).toBe(true);
+    await this._asegurarCheckboxMarcado(this.page.locator(L.QUICK_PRODUCT_APLICAR_IVA), 'check_quick_product_apply_tax');
+  }
+
+  /**
+   * Activa el checkbox "¿Aplicar impuesto?" de "Crear Combo". A diferencia
+   * del checkbox de "Producto Rápido", este NO tiene el bug de reseteo de
+   * pos.js:680-699 (confirmado en vivo: permanece marcado incluso varios
+   * segundos después de activarlo), así que no hace falta la espera de 5s ni
+   * el doble reafirmado que sí necesita seleccionarIvaManualmente(). Tampoco
+   * hace falta interactuar con los "Chosen" de tipo/tasa de impuesto: ambos
+   * ya quedan en una opción real (no en un placeholder "Seleccionar...")
+   * apenas se marca el checkbox — confirmado en vivo leyendo su `value`
+   * inmediatamente después del click.
+   */
+  async activarIvaCombo() {
+    await this._asegurarCheckboxMarcado(this.page.locator(L.COMBO_APLICAR_IVA), 'apply_tax_combo');
   }
 
   /**

@@ -1,5 +1,5 @@
 import { test, expect, Locator, Page } from '@playwright/test';
-import { PosPage, METODO, MONTO_EFECTIVO, DESCUENTO_INDIVIDUAL_PCT, CAJA_TEXTO, TIMEOUTS, ResultadoDescuento, NOMBRE_SERVICIO, VEHICULO_PINTURA_TIPO, CABYS_BUSQUEDA, CABYS_BUSQUEDA_SIN_IVA, PRECIO_PRODUCTO_RAPIDO, LineaCarrito, PESTANA_POS_FACTURACION, PESTANAS_POS_A_RECORRER } from './pos.page';
+import { PosPage, METODO, MONTO_EFECTIVO, DESCUENTO_INDIVIDUAL_PCT, CAJA_TEXTO, TIMEOUTS, ResultadoDescuento, NOMBRE_SERVICIO, VEHICULO_PINTURA_TIPO, CABYS_BUSQUEDA, CABYS_BUSQUEDA_SIN_IVA, PRECIO_PRODUCTO_RAPIDO, COMBO_BUSQUEDA_PRODUCTO, COMBO_CABYS_BUSQUEDA_SIN_IVA, LineaCarrito, PESTANA_POS_FACTURACION, PESTANAS_POS_A_RECORRER } from './pos.page';
 
 const NOMBRE_CLIENTE_FACTURA = 'Cliente De Prueba QA';
 
@@ -134,6 +134,81 @@ async function agregarProductoRapidoParaValidacionIva(
 
   await pos.guardarProductoRapidoYObtenerRespuesta();
   await expect(pos.modalProductoRapido).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+}
+
+/**
+ * Crea un combo con un producto real agregado, aplicando o no IVA según se
+ * indique, y maneja CABYS según la misma regla que ya usa el resto de la
+ * suite (manejarCabysSiAplica: obligatorio agregarlo si aparece, se omite si
+ * no) — reutilizada tal cual pasando `pos.configCabysCombo` (el sub-modal de
+ * búsqueda de CABYS de "Crear Combo" es una instancia completamente separada
+ * de la de "Producto Rápido", confirmado en vivo, no un componente
+ * compartido), sin duplicar la lógica de búsqueda/aplicado.
+ *
+ * El término de búsqueda de CABYS depende del escenario, igual que ya hace
+ * agregarProductoRapidoParaValidacionIva() para Producto Rápido: CABYS_BUSQUEDA
+ * ("aceite", tasa 13%) para "con IVA", CABYS_BUSQUEDA_SIN_IVA ("leche", tasa
+ * "0% Exento") para "sin IVA". Confirmado en vivo que el CABYS aplicado —no
+ * el checkbox "¿Aplicar impuesto?"— es lo que termina decidiendo la tasa
+ * real del combo cuando SÍ se aplica un CABYS: un combo con el checkbox
+ * desmarcado pero con un CABYS de tasa 13% aplicado terminó registrado con
+ * IVA de todos modos (product_hide_apply_iva_<clave>="1", 13% exacto). Por
+ * eso activarIvaCombo() —el checkbox manual— solo se usa como respaldo
+ * cuando CABYS NO apareció en este ambiente (depende del país configurado
+ * para la compañía, no es fijo); si CABYS sí se aplicó, ya define el
+ * resultado y tocar el checkbox además sería redundante.
+ *
+ * El término "sin IVA" usa COMBO_CABYS_BUSQUEDA_SIN_IVA ("libro"), NO
+ * CABYS_BUSQUEDA_SIN_IVA ("leche"): confirmado en vivo que el sub-modal de
+ * CABYS de "Crear Combo" es un índice de búsqueda separado del de "Producto
+ * Rápido" — "leche" resuelve a tasa 0% en el de Producto Rápido, pero a 1%
+ * en el de Combo, así que cada formulario necesita su propio término
+ * verificado.
+ *
+ * Devuelve si CABYS terminó aplicado, para que el test lo registre.
+ */
+async function crearCombo(pos: PosPage, nombre: string, activarIva: boolean): Promise<boolean> {
+  await pos.abrirCrearCombo();
+  await pos.llenarDatosBasicosCombo(nombre);
+  await pos.buscarYAgregarPrimerProductoAlCombo(COMBO_BUSQUEDA_PRODUCTO);
+
+  const terminoCabys = activarIva ? CABYS_BUSQUEDA : COMBO_CABYS_BUSQUEDA_SIN_IVA;
+  const cabysAplicado = await pos.manejarCabysSiAplica(terminoCabys, pos.configCabysCombo);
+
+  if (activarIva && !cabysAplicado) {
+    // CABYS no apareció en este ambiente: el checkbox manual es la única vía
+    // para dejar el combo con IVA.
+    await pos.activarIvaCombo();
+  }
+
+  await pos.establecerPrecioValidoCombo();
+
+  const respuesta = await pos.guardarComboYObtenerRespuesta();
+  expect(respuesta.ok(), `La petición a save_company_combo no respondió OK (status ${respuesta.status()})`).toBe(true);
+  await expect(pos.modalCrearCombo).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+  return cabysAplicado;
+}
+
+/**
+ * Busca por nombre exacto el combo recién creado en la categoría "Combos"
+ * (reutilizando productoPorNombre/agregarProductoPorNombre, igual que el
+ * resto de la suite para cualquier producto del catálogo) y devuelve la
+ * clave de la línea que se agregó al carrito.
+ */
+async function buscarComboYAgregarAlCarrito(pos: PosPage, nombre: string): Promise<string> {
+  await pos.categoriaCombos.click();
+  await esperarQuedaActivo(() => pos.categoriaEstaActiva(pos.categoriaCombos));
+  await expect(
+    pos.productoPorNombre(nombre),
+    `El combo "${nombre}" no aparece en la categoría "Combos"`
+  ).toHaveCount(1, { timeout: TIMEOUTS.PRODUCTS_LOAD });
+
+  const clavesAntes = await pos.obtenerClavesProductos();
+  await pos.agregarProductoPorNombre(nombre);
+  await expect.poll(async () => (await pos.obtenerClavesProductos()).length).toBeGreaterThan(clavesAntes.length);
+  const clavesDespues = await pos.obtenerClavesProductos();
+  return clavesDespues.find(c => !clavesAntes.includes(c))!;
 }
 
 test('facturar producto con efectivo en POS', async ({ page }) => {
@@ -448,12 +523,17 @@ test('agregar y facturar un Producto Rápido en POS', async ({ page }) => {
     await pos.llenarDatosBasicosProductoRapido(`Producto Rápido ${Date.now()}`, PRECIO_PRODUCTO_RAPIDO);
   });
 
-  await test.step('Buscar y aplicar un código CABYS', async () => {
-    await pos.buscarYAplicarCabys(CABYS_BUSQUEDA);
-  });
-
-  await test.step('Validar que el IVA se autocompletó a partir del CABYS aplicado', async () => {
-    await pos.esperarIvaAutocompletado();
+  await test.step('Detectar si aparece CABYS: si aparece, completarlo obligatoriamente; si no, seleccionar IVA manualmente', async () => {
+    const cabysAplicado = await pos.manejarCabysSiAplica(CABYS_BUSQUEDA);
+    console.log(`[agregar y facturar un Producto Rápido en POS] cabysAplicado=${cabysAplicado}`);
+    if (cabysAplicado) {
+      await pos.esperarIvaAutocompletado();
+    } else {
+      // Confirmado en vivo que sí ocurre: la visibilidad de CABYS depende
+      // del país configurado para la compañía (server-side), no es fija —
+      // ver el comentario de seleccionarIvaManualmente() en pos.page.ts.
+      await pos.seleccionarIvaManualmente();
+    }
   });
 
   await test.step('Presionar "Agregar" y validar que el producto se agregó al carrito', async () => {
@@ -1091,6 +1171,95 @@ test('facturar producto rápido con IVA y cliente existente en POS', async ({ pa
 
   await test.step('Validar carrito vacío', async () => {
     await pos.validarCarritoVacio();
+  });
+});
+
+test('crear un Combo con IVA desde el POS y validar que se agrega correctamente al carrito', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const pos = new PosPage(page);
+
+  await test.step('Cargar el POS pasando por el Dashboard (evita la condición de carrera del binding de "Agregar")', async () => {
+    await pos.cargarPosDesdeDashboard();
+    await pos.cerrarModalNotificacionesSiAparece();
+    await pos.cerrarAvisoConsecutivoSiAparece();
+    await pos.cerrarTodosLosToastsSiAparecen();
+  });
+
+  const nombreCombo = `Combo QA con IVA ${Date.now()}`;
+
+  await test.step('Crear el combo: seleccionar IVA y agregar CABYS si el formulario lo ofrece', async () => {
+    const cabysAplicado = await crearCombo(pos, nombreCombo, true);
+    console.log(`[crear un Combo con IVA] cabysAplicado=${cabysAplicado}`);
+  });
+
+  let claveCombo = '';
+  await test.step('Buscar el combo en la categoría "Combos" y agregarlo al carrito', async () => {
+    claveCombo = await buscarComboYAgregarAlCarrito(pos, nombreCombo);
+  });
+
+  await test.step('Fijar el carrito para mostrar totales con IVA y validar que el combo se agregó con IVA aplicado, el nombre coincide y no hay errores', async () => {
+    await pos.establecerMostrarPrecioConIva(true, [claveCombo]);
+    const linea = await pos.validarLineaCarrito(claveCombo, true);
+    expect(linea.nombre, 'El nombre de la línea agregada al carrito no coincide con el combo creado').toBe(nombreCombo);
+    await expect(page.locator('.noty_bar', { hasText: /error/i })).toHaveCount(0);
+  });
+});
+
+test('crear un Combo sin IVA desde el POS y validar que se agrega correctamente al carrito', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const pos = new PosPage(page);
+
+  await test.step('Cargar el POS pasando por el Dashboard (evita la condición de carrera del binding de "Agregar")', async () => {
+    await pos.cargarPosDesdeDashboard();
+    await pos.cerrarModalNotificacionesSiAparece();
+    await pos.cerrarAvisoConsecutivoSiAparece();
+    await pos.cerrarTodosLosToastsSiAparecen();
+  });
+
+  const nombreCombo = `Combo QA sin IVA ${Date.now()}`;
+
+  let cabysAplicado = false;
+  await test.step('Crear el combo sin seleccionar IVA — CABYS sigue siendo obligatorio si el formulario lo ofrece', async () => {
+    // No se llama a activarIvaCombo(): el checkbox "¿Aplicar impuesto?" queda
+    // en su estado por defecto (sin marcar). Si el formulario no ofreciera
+    // CABYS en este ambiente (depende del país configurado para la
+    // compañía, no es fijo — ver el comentario de existeCampoCabys() en
+    // pos.page.ts), cabysAplicado quedaría en false y ese sería el único
+    // caso real de "sin IVA" (ivaAplicado=false) — ver el step de
+    // validación más abajo para la explicación completa.
+    cabysAplicado = await crearCombo(pos, nombreCombo, false);
+    console.log(`[crear un Combo sin IVA] cabysAplicado=${cabysAplicado}`);
+  });
+
+  let claveCombo = '';
+  await test.step('Buscar el combo en la categoría "Combos" y agregarlo al carrito', async () => {
+    claveCombo = await buscarComboYAgregarAlCarrito(pos, nombreCombo);
+  });
+
+  await test.step('Fijar el carrito para mostrar totales con IVA y validar el combo agregado, el nombre y que no hay errores', async () => {
+    await pos.establecerMostrarPrecioConIva(true, [claveCombo]);
+
+    // Comportamiento real descubierto en vivo (no documentado previamente):
+    // aplicar CUALQUIER CABYS —incluso uno de tasa "0% (Exento)", como el
+    // usado aquí (COMBO_CABYS_BUSQUEDA_SIN_IVA)— deja
+    // product_hide_apply_iva_<clave>="1" de todos modos: el sistema marca
+    // "IVA aplicado" por la sola presencia de una clasificación CABYS, sin
+    // importar su tasa ni el estado del checkbox "¿Aplicar impuesto?".
+    // Confirmado interceptando la red: neto y total con IVA quedan
+    // idénticos (0 de impuesto real cobrado), pero la bandera igual queda
+    // en true. Por eso, cuando CABYS es obligatorio y se aplica, un combo
+    // "sin IVA" en el sentido estricto de la bandera del sistema deja de
+    // ser posible — lo único verdaderamente controlable es que la TASA
+    // real sea 0%, no la bandera. La expectativa real es entonces
+    // `cabysAplicado`: true si CABYS se aplicó (sin importar la tasa),
+    // false solo si el formulario no ofreció CABYS en este ambiente y por
+    // tanto el checkbox se quedó como estaba (sin marcar).
+    const linea = await pos.validarLineaCarrito(claveCombo, cabysAplicado);
+    expect(linea.nombre, 'El nombre de la línea agregada al carrito no coincide con el combo creado').toBe(nombreCombo);
+    if (cabysAplicado) {
+      expect(linea.iva, 'La tasa de IVA del CABYS "sin IVA" debería ser 0 (Exento)').toBeCloseTo(0, 1);
+    }
+    await expect(page.locator('.noty_bar', { hasText: /error/i })).toHaveCount(0);
   });
 });
 
