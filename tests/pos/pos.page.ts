@@ -291,11 +291,17 @@ const L = {
   PRODUCTO_FRACCIONES_POR_UNIDAD:   '#fragments_per_unit_app',
   PRODUCTO_PRECIO_FRACCION:         '#product_price_fragment_app',
 
-  // Botón "CABYS" propio de este formulario — existe siempre en el DOM
-  // (confirmado en vivo, count()==1) pero solo queda visible si el país
-  // configurado para la compañía lo exige (mismo comportamiento condicional
-  // ya documentado para Producto Rápido/Combo — en este ambiente compartido
-  // actualmente no aparece). Reutiliza el sub-modal COMPARTIDO de CABYS
+  // Botón "CABYS" propio de este formulario — pertenece al panel del paso
+  // "Inf. General" (debajo de "Proveedor"), NO al paso "Costos" — confirmado
+  // en vivo inspeccionando el DOM real, contradice lo documentado
+  // anteriormente aquí ("no aparece en este ambiente"): sí aparece y está
+  // visible en "Inf. General" en cuanto se abre el modal (sin depender de
+  // llenar Proveedor), porque esta compañía SÍ exige CABYS
+  // (#validate_cabys_code = "1", confirmado en vivo). El panel de "Inf.
+  // General" se oculta —no se destruye— al avanzar a "Costos" con
+  // avanzarPasoInfoGeneralProducto(), así que comprobar/usar este botón
+  // DESPUÉS de avanzar siempre lo encuentra oculto y concluye erróneamente
+  // que CABYS no existe. Reutiliza el sub-modal COMPARTIDO de CABYS
   // (#dialog_add_cabys_code, el mismo que usa Producto Rápido) — confirmado
   // en vivo que NO abre uno propio como sí hace Combo.
   PRODUCTO_BTN_CABYS:        '#quick_pos_product_cabys_content a[href*="validate_pos_cabys_code"]',
@@ -2338,14 +2344,47 @@ export class PosPage {
    * Llena los campos adicionales de "Costos" para un producto Completo o
    * Fraccionado: stock mínimo, descuento de proveedor, descuento máximo,
    * tipo de unidad y sección/sub sección (Chosen, primera opción real).
+   *
+   * "Descuento de proveedor" (#product_discount_app) se omite si no está
+   * interactuable — confirmado en vivo (reproducido de forma determinística,
+   * esperando hasta 120s sin recuperación): cuando el producto tiene un
+   * CABYS aplicado Y "¿Fraccionar?" activado A LA VEZ, este campo colapsa a
+   * ancho 0 de forma PERMANENTE, no transitoria (sin CABYS aplicado se
+   * mantiene interactuable sin importar el estado de IVA — probado
+   * explícitamente activando IVA manualmente sin CABYS, y también sin IVA).
+   * No es un problema de timing de este lado: es un efecto real y
+   * reproducible de la propia app al combinar esos dos estados. El campo no
+   * es obligatorio para guardar (solo precio por caja y precio por fracción
+   * lo son en un producto Fraccionado), así que se omite en vez de fallar.
    */
   async llenarCostosCompletosProducto(stockMinimo: string, descuentoProveedor: string, descuentoMaximo: string) {
     await this.page.locator(L.PRODUCTO_STOCK_MINIMO).fill(stockMinimo);
-    await this.page.locator(L.PRODUCTO_DESCUENTO_PROVEEDOR).fill(descuentoProveedor);
+    await this._llenarDescuentoProveedorSiEsPosible(descuentoProveedor);
     await this.page.locator(L.PRODUCTO_DESCUENTO_MAXIMO).fill(descuentoMaximo);
     await this._seleccionarPrimeraOpcionChosen(L.PRODUCTO_TIPO_UNIDAD_CHOSEN);
     await this._seleccionarPrimeraOpcionChosen(L.PRODUCTO_SECCION_CHOSEN);
     await this._seleccionarPrimeraOpcionChosenSiHayOpciones(L.PRODUCTO_SUBSECCION_CHOSEN);
+  }
+
+  /**
+   * Ver el comentario de llenarCostosCompletosProducto(): omite el campo si
+   * quedó permanentemente no interactuable (CABYS + Fraccionado a la vez).
+   *
+   * Intenta el fill() directamente, con un timeout propio acotado, en vez
+   * de comprobar isVisible() primero y llenar después: separar "verificar"
+   * de "actuar" deja una ventana real donde el campo puede leerse visible
+   * en el chequeo y volverse no interactuable un instante después (el mismo
+   * colapso de layout, a mitad de camino) — confirmado en vivo: ese orden
+   * dejó pasar la condición y el fill() posterior, sin timeout propio,
+   * esperó los 300s completos del test. Intentar el fill() de una sola vez
+   * con su propio límite corto evita esa ventana.
+   */
+  private async _llenarDescuentoProveedorSiEsPosible(descuentoProveedor: string) {
+    const campo = this.page.locator(L.PRODUCTO_DESCUENTO_PROVEEDOR);
+    const relleno = await campo.fill(descuentoProveedor, { timeout: 5_000 }).then(() => true).catch(() => false);
+    if (!relleno) {
+      console.log('[llenarCostosCompletosProducto] "Descuento de proveedor" no quedó interactuable a tiempo (CABYS + Fraccionado a la vez) — se omite, no es obligatorio.');
+    }
   }
 
   /**

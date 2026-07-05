@@ -576,66 +576,93 @@ test('crear un Combo sin IVA desde el POS y validar que se agrega correctamente 
 });
 
 /**
- * Configura el IVA y CABYS de "Crear Producto" en el paso "Costos", con
- * exactamente la misma lógica ya probada para "Crear Combo"
- * (crearComboConIva/crearComboSinIva en este mismo archivo):
+ * Maneja CABYS para "Crear Producto" EN EL MOMENTO CORRECTO del wizard: el
+ * botón "CABYS" (contenedor `#quick_pos_product_cabys_content`, debajo del
+ * campo "Proveedor") pertenece al panel del paso "Inf. General" —
+ * confirmado en vivo inspeccionando el DOM real, contradice lo asumido
+ * antes (que compartía paso con el checkbox de IVA, en "Costos"). El panel
+ * de "Inf. General" se oculta —no se destruye— al avanzar a "Costos" con
+ * avanzarPasoInfoGeneralProducto(); por eso esta función debe llamarse
+ * SIEMPRE ANTES de ese avance: comprobarlo después solo encuentra el
+ * contenedor oculto y concluye erróneamente que CABYS no existe, aunque el
+ * país configurado para esta compañía sí lo exija (`#validate_cabys_code =
+ * "1"`, confirmado en vivo).
  *
- * - "Con IVA": el checkbox se activa PRIMERO y se verifica que quedó
- *   marcado, y solo después se maneja CABYS (si el formulario lo ofrece en
- *   este ambiente). Si CABYS se aplica, se valida que la tasa seleccionada
- *   coincida exactamente con la que el propio CABYS sugiere.
- * - "Sin IVA": el checkbox se deja desactivado (por defecto) y se maneja
- *   CABYS igual. Si CABYS se aplica, se re-desactiva el checkbox después —
- *   defensivo: no se pudo confirmar en vivo si aplicar un CABYS activa este
- *   checkbox por su cuenta (a diferencia de "Crear Combo", donde sí se
- *   confirmó ese efecto secundario con ~500ms de desfase — ver
- *   esperarIvaAutocompletadoCombo() en pos.page.ts), porque CABYS no está
- *   habilitado para "Crear Producto" en este ambiente compartido de QA (el
- *   botón existe en el DOM pero no es visible — ver el comentario de
- *   L.PRODUCTO_BTN_CABYS en pos.page.ts). Si en otro ambiente sí ocurriera
- *   ese mismo efecto secundario, este re-forzado a desactivado lo revierte
- *   igual.
- *
- * A diferencia de "Crear Combo" (donde activar el checkbox ya deja una
- * opción real seleccionada), en "Crear Producto" activar el checkbox NO
- * selecciona ningún tipo/tarifa de IVA real — quedan en su placeholder
- * vacío. Confirmado en vivo que dejarlos así bloquea silenciosamente el
- * avance del wizard (el botón "Siguiente" no dispara ninguna petición),
- * así que cuando CABYS no se aplica, hace falta seleccionarlos manualmente
- * (seleccionarIvaManualmenteProducto()) — mismo criterio que ya usa
- * seleccionarIvaManualmente() para Producto Rápido.
- *
- * Devuelve si CABYS terminó aplicado, para que el test lo registre.
+ * Reutiliza `existeCampoCabys()`/`buscarYAplicarCabys()` de pos.page.ts tal
+ * cual —mismas funciones que ya usan Producto Rápido y Combo, sin duplicar
+ * su lógica—, separadas en dos llamadas en vez de usar el atajo
+ * `manejarCabysSiAplica()` únicamente para poder loguear cada punto
+ * pedido: si la sección se encontró, si se intentó interactuar con ella, y
+ * si se omitió (con el motivo). Nunca falla si CABYS no existe: se limita
+ * a registrarlo y devolver `false` para que el resto del flujo continúe
+ * normalmente.
  */
-async function configurarIvaProducto(pos: PosPage, activarIva: boolean): Promise<boolean> {
+async function manejarCabysProductoEnPasoUno(pos: PosPage, etiqueta: string): Promise<boolean> {
+  const boton = pos.configCabysProducto.boton;
+  const existe = await pos.existeCampoCabys(boton);
+
+  if (!existe) {
+    console.log(`[${etiqueta}] CABYS: sección NO encontrada/visible en "Inf. General" — se omite (depende del país configurado para la compañía) y se continúa sin CABYS.`);
+    return false;
+  }
+
+  console.log(`[${etiqueta}] CABYS: sección encontrada y visible en "Inf. General" — se interactuará con ella.`);
+  await boton.scrollIntoViewIfNeeded();
+  await pos.buscarYAplicarCabys(CABYS_BUSQUEDA, pos.configCabysProducto);
+  console.log(`[${etiqueta}] CABYS: interacción completada — se aplicó un CABYS.`);
+  return true;
+}
+
+/**
+ * Configura el IVA de "Crear Producto" ya en el paso "Costos", asumiendo
+ * que CABYS (si el formulario lo ofrece) ya se manejó en el paso anterior
+ * vía manejarCabysProductoEnPasoUno().
+ *
+ * Confirmado en vivo (inspeccionando el DOM real de la app, no asumido):
+ * aplicar un CABYS en "Inf. General" SÍ autoactiva el checkbox "¿Aplica
+ * Impuesto?" y sincroniza tipo/tasa con la tasa real del CABYS, con un
+ * desfase medido de ~330ms. Para cuando este método corre,
+ * avanzarPasoInfoGeneralProducto() ya esperó la respuesta real de
+ * saveProductStepOne más el renderizado del paso "Costos" (~1.3s medidos
+ * en vivo, más de 4 veces ese desfase), así que no hace falta ninguna
+ * espera adicional: el checkbox y las tasas ya están estables para cuando
+ * se llega aquí — a diferencia de "Crear Combo" (donde CABYS se aplica y
+ * se revierte dentro del mismo paso, sin ninguna transición de por medio,
+ * por lo que sí necesita esperar explícitamente el autocompletado antes de
+ * desactivar).
+ *
+ * Sin CABYS aplicado, activar el checkbox NO deja ningún tipo/tarifa real
+ * seleccionado (queda en el placeholder vacío, lo que bloquea
+ * silenciosamente el avance del wizard) — de ahí que
+ * seleccionarIvaManualmenteProducto() sea obligatorio en ese caso, mismo
+ * criterio que ya usa seleccionarIvaManualmente() para Producto Rápido.
+ */
+async function configurarIvaProductoEnPasoDos(pos: PosPage, activarIva: boolean, cabysAplicado: boolean) {
   if (activarIva) {
-    await pos.activarIvaProducto();
-    await expect(
-      pos.checkboxIvaProducto,
-      'El checkbox "¿Aplica Impuesto?" de "Crear Producto" no quedó activado'
-    ).toBeChecked();
+    if (cabysAplicado) {
+      await expect(
+        pos.checkboxIvaProducto,
+        'El checkbox "¿Aplica Impuesto?" de "Crear Producto" no quedó activado automáticamente tras aplicar el CABYS'
+      ).toBeChecked();
+      await pos.validarIvaCoincideConCabysProducto();
+    } else {
+      await pos.activarIvaProducto();
+      await expect(
+        pos.checkboxIvaProducto,
+        'El checkbox "¿Aplica Impuesto?" de "Crear Producto" no quedó activado'
+      ).toBeChecked();
+      await pos.seleccionarIvaManualmenteProducto();
+    }
+    return;
   }
 
-  const cabysAplicado = await pos.manejarCabysSiAplica(CABYS_BUSQUEDA, pos.configCabysProducto);
-
-  if (activarIva && cabysAplicado) {
-    await pos.validarIvaCoincideConCabysProducto();
-  } else if (activarIva && !cabysAplicado) {
-    await pos.seleccionarIvaManualmenteProducto();
-  }
-
-  if (!activarIva && cabysAplicado) {
+  if (cabysAplicado) {
     await pos.desactivarIvaProducto();
   }
-
-  if (!activarIva) {
-    await expect(
-      pos.checkboxIvaProducto,
-      'El checkbox "¿Aplica Impuesto?" de "Crear Producto" no quedó desactivado'
-    ).not.toBeChecked();
-  }
-
-  return cabysAplicado;
+  await expect(
+    pos.checkboxIvaProducto,
+    'El checkbox "¿Aplica Impuesto?" de "Crear Producto" no quedó desactivado'
+  ).not.toBeChecked();
 }
 
 /**
@@ -719,15 +746,15 @@ test('crear un Producto Sencillo con IVA desde el POS y validar que se agrega co
   });
 
   let cabysAplicado = false;
-  await test.step('Abrir "Crear Producto" y llenar únicamente Nombre (paso "Inf. General")', async () => {
+  await test.step('Abrir "Crear Producto", llenar únicamente Nombre y manejar CABYS si el formulario lo ofrece (paso "Inf. General")', async () => {
     await pos.abrirCrearProducto();
     await pos.llenarNombreProducto(nombreProducto);
+    cabysAplicado = await manejarCabysProductoEnPasoUno(pos, 'crear un Producto Sencillo con IVA');
     await pos.avanzarPasoInfoGeneralProducto();
   });
 
-  await test.step('Activar IVA, verificarlo, y agregar CABYS si el formulario lo ofrece (validando que su tasa coincide con la seleccionada)', async () => {
-    cabysAplicado = await configurarIvaProducto(pos, true);
-    console.log(`[crear un Producto Sencillo con IVA] cabysAplicado=${cabysAplicado}`);
+  await test.step('Activar IVA en el paso "Costos" (o validar que el CABYS aplicado ya lo activó) y verificar que la tasa coincide', async () => {
+    await configurarIvaProductoEnPasoDos(pos, true, cabysAplicado);
   });
 
   await test.step('Llenar únicamente Costo, Precio de venta y Cantidad, y finalizar', async () => {
@@ -759,15 +786,15 @@ test('crear un Producto Sencillo sin IVA desde el POS y validar que se agrega co
   });
 
   let cabysAplicado = false;
-  await test.step('Abrir "Crear Producto" y llenar únicamente Nombre (paso "Inf. General")', async () => {
+  await test.step('Abrir "Crear Producto", llenar únicamente Nombre y manejar CABYS si el formulario lo ofrece (paso "Inf. General")', async () => {
     await pos.abrirCrearProducto();
     await pos.llenarNombreProducto(nombreProducto);
+    cabysAplicado = await manejarCabysProductoEnPasoUno(pos, 'crear un Producto Sencillo sin IVA');
     await pos.avanzarPasoInfoGeneralProducto();
   });
 
-  await test.step('Dejar el IVA desactivado, verificarlo, y agregar CABYS si el formulario lo ofrece (re-desactivando IVA después)', async () => {
-    cabysAplicado = await configurarIvaProducto(pos, false);
-    console.log(`[crear un Producto Sencillo sin IVA] cabysAplicado=${cabysAplicado}`);
+  await test.step('Dejar el IVA desactivado en el paso "Costos", re-desactivándolo si el CABYS aplicado lo activó automáticamente', async () => {
+    await configurarIvaProductoEnPasoDos(pos, false, cabysAplicado);
   });
 
   await test.step('Llenar únicamente Costo, Precio de venta y Cantidad, y finalizar', async () => {
@@ -799,16 +826,16 @@ test('crear un Producto Completo con IVA desde el POS y validar que se agrega co
   });
 
   let cabysAplicado = false;
-  await test.step('Abrir "Crear Producto" y llenar Nombre, Marca, Categoría, Subcategoría, Proveedor, Código de proveedor y Código de barras', async () => {
+  await test.step('Abrir "Crear Producto", llenar Nombre, Marca, Categoría, Subcategoría, Proveedor, Código de proveedor y Código de barras, y manejar CABYS si el formulario lo ofrece', async () => {
     await pos.abrirCrearProducto();
     await pos.llenarNombreProducto(nombreProducto);
     await pos.llenarDatosCompletosProducto('Marca QA', 'PROV-CODE-QA', `BARCODE-QA-${Date.now()}`);
+    cabysAplicado = await manejarCabysProductoEnPasoUno(pos, 'crear un Producto Completo con IVA');
     await pos.avanzarPasoInfoGeneralProducto();
   });
 
-  await test.step('Activar IVA, verificarlo, y agregar CABYS si el formulario lo ofrece (validando que su tasa coincide con la seleccionada)', async () => {
-    cabysAplicado = await configurarIvaProducto(pos, true);
-    console.log(`[crear un Producto Completo con IVA] cabysAplicado=${cabysAplicado}`);
+  await test.step('Activar IVA en el paso "Costos" (o validar que el CABYS aplicado ya lo activó) y verificar que la tasa coincide', async () => {
+    await configurarIvaProductoEnPasoDos(pos, true, cabysAplicado);
   });
 
   await test.step('Llenar Costo, Precio de venta, Cantidad, Stock mínimo, Descuento de proveedor, Descuento máximo, Tipo de unidad, Sección y Subsección', async () => {
@@ -845,16 +872,16 @@ test('crear un Producto Completo sin IVA desde el POS y validar que se agrega co
   });
 
   let cabysAplicado = false;
-  await test.step('Abrir "Crear Producto" y llenar Nombre, Marca, Categoría, Subcategoría, Proveedor, Código de proveedor y Código de barras', async () => {
+  await test.step('Abrir "Crear Producto", llenar Nombre, Marca, Categoría, Subcategoría, Proveedor, Código de proveedor y Código de barras, y manejar CABYS si el formulario lo ofrece', async () => {
     await pos.abrirCrearProducto();
     await pos.llenarNombreProducto(nombreProducto);
     await pos.llenarDatosCompletosProducto('Marca QA', 'PROV-CODE-QA', `BARCODE-QA-${Date.now()}`);
+    cabysAplicado = await manejarCabysProductoEnPasoUno(pos, 'crear un Producto Completo sin IVA');
     await pos.avanzarPasoInfoGeneralProducto();
   });
 
-  await test.step('Dejar el IVA desactivado, verificarlo, y agregar CABYS si el formulario lo ofrece (re-desactivando IVA después)', async () => {
-    cabysAplicado = await configurarIvaProducto(pos, false);
-    console.log(`[crear un Producto Completo sin IVA] cabysAplicado=${cabysAplicado}`);
+  await test.step('Dejar el IVA desactivado en el paso "Costos", re-desactivándolo si el CABYS aplicado lo activó automáticamente', async () => {
+    await configurarIvaProductoEnPasoDos(pos, false, cabysAplicado);
   });
 
   await test.step('Llenar Costo, Precio de venta, Cantidad, Stock mínimo, Descuento de proveedor, Descuento máximo, Tipo de unidad, Sección y Subsección', async () => {
@@ -891,16 +918,16 @@ test('crear un Producto Fraccionado con IVA desde el POS y validar que se agrega
   });
 
   let cabysAplicado = false;
-  await test.step('Abrir "Crear Producto" y llenar los mismos datos del Producto Completo', async () => {
+  await test.step('Abrir "Crear Producto", llenar los mismos datos del Producto Completo, y manejar CABYS si el formulario lo ofrece', async () => {
     await pos.abrirCrearProducto();
     await pos.llenarNombreProducto(nombreProducto);
     await pos.llenarDatosCompletosProducto('Marca QA', 'PROV-CODE-QA', `BARCODE-QA-${Date.now()}`);
+    cabysAplicado = await manejarCabysProductoEnPasoUno(pos, 'crear un Producto Fraccionado con IVA');
     await pos.avanzarPasoInfoGeneralProducto();
   });
 
-  await test.step('Activar IVA, verificarlo, y agregar CABYS si el formulario lo ofrece (validando que su tasa coincide con la seleccionada)', async () => {
-    cabysAplicado = await configurarIvaProducto(pos, true);
-    console.log(`[crear un Producto Fraccionado con IVA] cabysAplicado=${cabysAplicado}`);
+  await test.step('Activar IVA en el paso "Costos" (o validar que el CABYS aplicado ya lo activó) y verificar que la tasa coincide', async () => {
+    await configurarIvaProductoEnPasoDos(pos, true, cabysAplicado);
   });
 
   await test.step('Activar "¿Fraccionar?" y llenar los campos que aparecen dinámicamente (precio por caja y por fracción, los únicos obligatorios)', async () => {
@@ -939,16 +966,16 @@ test('crear un Producto Fraccionado sin IVA desde el POS y validar que se agrega
   });
 
   let cabysAplicado = false;
-  await test.step('Abrir "Crear Producto" y llenar los mismos datos del Producto Completo', async () => {
+  await test.step('Abrir "Crear Producto", llenar los mismos datos del Producto Completo, y manejar CABYS si el formulario lo ofrece', async () => {
     await pos.abrirCrearProducto();
     await pos.llenarNombreProducto(nombreProducto);
     await pos.llenarDatosCompletosProducto('Marca QA', 'PROV-CODE-QA', `BARCODE-QA-${Date.now()}`);
+    cabysAplicado = await manejarCabysProductoEnPasoUno(pos, 'crear un Producto Fraccionado sin IVA');
     await pos.avanzarPasoInfoGeneralProducto();
   });
 
-  await test.step('Dejar el IVA desactivado, verificarlo, y agregar CABYS si el formulario lo ofrece (re-desactivando IVA después)', async () => {
-    cabysAplicado = await configurarIvaProducto(pos, false);
-    console.log(`[crear un Producto Fraccionado sin IVA] cabysAplicado=${cabysAplicado}`);
+  await test.step('Dejar el IVA desactivado en el paso "Costos", re-desactivándolo si el CABYS aplicado lo activó automáticamente', async () => {
+    await configurarIvaProductoEnPasoDos(pos, false, cabysAplicado);
   });
 
   await test.step('Activar "¿Fraccionar?" y llenar los campos que aparecen dinámicamente (precio por caja y por fracción, los únicos obligatorios)', async () => {
