@@ -519,6 +519,53 @@ const L = {
   // esté activa — la única fuente confiable para no asumir la moneda base
   // (nunca CRC ni Lempira por defecto).
   AJAX_CAMBIO_MONEDA: 'setTypeCurrencyReceipByUser',
+
+  // Precio VISIBLE de un producto en el grid (cambia con la moneda activa) —
+  // confirmado en vivo que es distinto del valor crudo oculto
+  // (#original_price_product_stock_<id>.hide), que se mantiene constante sin
+  // importar la moneda. Es hermano de L.PRODUCTO (.product_box_name) dentro
+  // de la misma card .product_box, no un descendiente directo.
+  PRODUCTO_PRECIO_VISIBLE: '.product_box_price',
+
+  // ─── Vista Expandida / Vista Normal (menú de tres puntos del carrito) ──────
+  // "Expandir/Encoger" vive en el mismo menú MDL ya reutilizado por
+  // abrirMenuTresPuntos() (#demo-menu-lower-left). Confirmado en vivo que su
+  // efecto real es: L.PRODUCT_CONTENT gana/pierde la clase "hide" (oculta
+  // también el buscador de la grilla, que vive dentro), la tabla del carrito
+  // cambia de ancho (col-lg-4 → col-lg-12), y dispara AJAX_VISTA_COMPRIMIDA
+  // real, persistido por usuario en el servidor (mismo patrón que la moneda).
+  SWITCH_COMPRESS:        '#switch_compress',
+  PRODUCT_CONTENT:        '#product_content',
+  AJAX_VISTA_COMPRIMIDA:  'setContentCompressState',
+
+  // Buscador interno que solo es visible/interactuable con Vista Expandida
+  // activa (vive arriba del carrito, dentro de #content_search_parameter).
+  // Confirmado en vivo (código fuente pos_barcode.js) que NO es el mismo
+  // autocomplete del buscador de la grilla: dispara un endpoint distinto
+  // (AJAX_BUSCADOR_INTERNO) y filtra por código de producto, no por nombre.
+  // Con un único resultado coincidente, la propia app lo autoselecciona y
+  // agrega al carrito llamando a la misma función add_to_table() que usa el
+  // click normal de la grilla — confirmado end-to-end en vivo.
+  BUSCADOR_INTERNO_VISTA_EXPANDIDA: '#search_product_parameter',
+  AJAX_BUSCADOR_INTERNO:            'get_pos_product_search_item',
+
+  // Código interno del producto, oculto (class="hide") dentro de la misma
+  // card del grid — necesario porque el buscador interno de Vista Expandida
+  // filtra por código, no por nombre (confirmado en vivo).
+  PRODUCTO_CODIGO_OCULTO: 'input[id^="input_hide_product_code_"]',
+
+  // ─── Vaciar Carrito ─────────────────────────────────────────────────────────
+  // Botón junto a "Facturar" (mismo contenedor .btn-container), título real
+  // "Borrar los productos asignados", atajo (ctrl+x). Confirmado en vivo que
+  // abre el mismo patrón de SweetAlert v1 ya centralizado en
+  // _confirmarSweetAlertV1() y que la limpieza es puramente client-side: no
+  // dispara ningún AJAX (confirmado interceptando la red completa).
+  BTN_VACIAR_CARRITO: '#cancel_sale',
+
+  // Total visible en el footer principal del POS (NO el modal de pago, ver
+  // L.TOTAL_MODAL, ni el total de una sola línea). Confirmado en vivo que
+  // vuelve a "$0.00" tras vaciar el carrito.
+  TOTAL_VISIBLE_POS: '#total',
 } as const;
 
 // Texto que identifica la caja cerrada en el modal "Abrir Caja". Exportado para
@@ -3618,4 +3665,178 @@ export class PosPage {
     await this.page.locator(L.GESTION_PROFORMA_BTN_VER_TODAS).click();
     return popupPromise;
   }
+
+  // ─── Precio visible de producto (grid) ─────────────────────────────────────
+
+  /**
+   * Localiza el precio VISIBLE de un producto en el grid por su nombre exacto
+   * (mismo criterio de escape/coincidencia que productoPorNombre()) — el que
+   * realmente cambia con la moneda activa, a diferencia del valor crudo
+   * oculto (#original_price_product_stock_<id>), que se mantiene constante
+   * sin importar la moneda (confirmado en vivo, Fase 1 de "Cambio de
+   * moneda"). Es hermano de la card del nombre dentro del mismo .product_box,
+   * no un descendiente directo, de ahí el ancestor::.
+   */
+  precioVisibleProducto(nombre: string): Locator {
+    return this.productoPorNombre(nombre)
+      .locator('xpath=ancestor::*[contains(@class,"product_box")][1]')
+      .locator(L.PRODUCTO_PRECIO_VISIBLE);
+  }
+
+  /** Lee el precio visible actual de un producto en el grid como texto (con símbolo de moneda). */
+  async obtenerPrecioVisibleProducto(nombre: string): Promise<string> {
+    return (await this.precioVisibleProducto(nombre).textContent()) ?? '';
+  }
+
+  /**
+   * Lee el código interno de un producto del grid por su nombre exacto —
+   * necesario para el buscador interno de Vista Expandida, que filtra por
+   * código y no por nombre (confirmado en vivo). Debe leerse mientras la
+   * grilla sigue visible (Vista Normal), antes de activar Vista Expandida.
+   */
+  async obtenerCodigoProducto(nombre: string): Promise<string> {
+    return this.productoPorNombre(nombre)
+      .locator('xpath=ancestor::*[contains(@class,"product_box")][1]')
+      .locator(L.PRODUCTO_CODIGO_OCULTO)
+      .inputValue();
+  }
+
+  // ─── Vista Expandida / Vista Normal ─────────────────────────────────────────
+
+  /**
+   * Indica si Vista Expandida está activa consultando el efecto real en el
+   * DOM (visibilidad de L.PRODUCT_CONTENT), no solo una clase CSS aislada:
+   * confirmado en vivo que al activarse, PRODUCT_CONTENT dejar de ser
+   * visible (oculta también el buscador de la grilla, que vive dentro).
+   */
+  async vistaExpandidaActiva(): Promise<boolean> {
+    return !(await this.page.locator(L.PRODUCT_CONTENT).isVisible());
+  }
+
+  /**
+   * Abre el menú de tres puntos (reutiliza abrirMenuTresPuntos()) y clickea
+   * "Expandir/Encoger", reintentando de forma acotada — mismo patrón de
+   * overlays ya usado en el resto de menús MDL de esta clase, confirmado en
+   * vivo que #switch_compress sufre la misma inestabilidad intermitente.
+   * Valida el cambio real combinando la respuesta de AJAX_VISTA_COMPRIMIDA
+   * (persistida por el servidor) con el estado real de vistaExpandidaActiva()
+   * — no solo una clase CSS — y devuelve el nuevo estado.
+   */
+  async alternarVistaExpandida(): Promise<boolean> {
+    const estadoAntes = await this.vistaExpandidaActiva();
+    const MAX_INTENTOS = 8;
+
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      await this.cerrarModalNotificacionesSiAparece();
+      await this.cerrarTodosLosToastsSiAparecen();
+      await this.abrirMenuTresPuntos();
+
+      const visible = await this.page.locator(L.SWITCH_COMPRESS)
+        .waitFor({ state: 'visible', timeout: 2_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!visible) continue;
+
+      const respuestaPromise = this.page.waitForResponse(
+        (res) => res.url().includes(L.AJAX_VISTA_COMPRIMIDA),
+        { timeout: 4_000 }
+      ).catch(() => null);
+      const clickeado = await this.page.locator(L.SWITCH_COMPRESS)
+        .click({ timeout: 4_000 })
+        .then(() => true)
+        .catch(() => false);
+
+      if (clickeado) {
+        const respuesta = await respuestaPromise;
+        if (respuesta) {
+          await expect.poll(() => this.vistaExpandidaActiva(), { timeout: 3_000 }).toBe(!estadoAntes);
+          return !estadoAntes;
+        }
+      }
+    }
+    throw new Error(`No se pudo alternar Vista Expandida tras ${MAX_INTENTOS} intentos`);
+  }
+
+  /**
+   * Busca un producto por su código exacto (interno o de barras) usando el
+   * buscador interno que solo aparece con Vista Expandida activa
+   * (L.BUSCADOR_INTERNO_VISTA_EXPANDIDA) y espera a que quede agregado al
+   * carrito. Confirmado en vivo (código fuente + red) que este buscador NO
+   * usa el mismo autocomplete que el de la grilla: dispara un AJAX distinto
+   * (AJAX_BUSCADOR_INTERNO) y filtra por código, no por nombre. Con un único
+   * resultado coincidente —el caso normal al buscar por código exacto—, la
+   * propia aplicación autoselecciona el resultado y lo agrega llamando a la
+   * misma función add_to_table() que usa el click normal de la grilla; por
+   * eso la confirmación de que se agregó reutiliza el mismo criterio ya
+   * usado en el resto de la suite (crecimiento de L.CARRITO_CLAVES), sin
+   * duplicar esa lógica de validación.
+   */
+  async agregarProductoPorCodigoEnVistaExpandida(codigo: string): Promise<void> {
+    const clavesAntes = await this.obtenerClavesProductos();
+
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_BUSCADOR_INTERNO),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await this.page.locator(L.BUSCADOR_INTERNO_VISTA_EXPANDIDA).fill(codigo);
+    await this.page.locator(L.BUSCADOR_INTERNO_VISTA_EXPANDIDA).press('Enter');
+    await respuestaPromise;
+
+    await expect.poll(
+      async () => (await this.obtenerClavesProductos()).length,
+      { timeout: TIMEOUTS.PRODUCTS_LOAD }
+    ).toBeGreaterThan(clavesAntes.length);
+  }
+
+  // ─── Vaciar Carrito ─────────────────────────────────────────────────────────
+
+  /**
+   * Presiona "Vaciar Carrito" (L.BTN_VACIAR_CARRITO, junto a "Facturar") y
+   * confirma el SweetAlert que abre, reutilizando el mismo patrón privado ya
+   * centralizado en _confirmarSweetAlertV1(). Confirmado en vivo que la
+   * limpieza es puramente client-side (no dispara ningún AJAX), así que no
+   * hay una respuesta de red que esperar aquí: quien llama debe validar el
+   * resultado contra el estado real del DOM (ver validarCarritoVacio()).
+   */
+  async vaciarCarrito(): Promise<void> {
+    await this.page.locator(L.BTN_VACIAR_CARRITO).click();
+    await this._confirmarSweetAlertV1('No apareció la confirmación de "Vaciar Carrito"');
+    await this.page.locator('.sweet-alert.visible').waitFor({ state: 'hidden', timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /** Lee el total visible del footer principal del POS (NO el modal de pago) como número. */
+  async obtenerTotalVisiblePosNumerico(): Promise<number> {
+    const texto = await this.page.locator(L.TOTAL_VISIBLE_POS).textContent();
+    return this._leerMontoDeTexto(texto ?? '$0.00');
+  }
+
+  /**
+   * Indica si el botón "Facturar" quedó deshabilitado (atributo disabled o
+   * pointer-events:none) — confirmado en vivo que, en este ambiente, vaciar
+   * el carrito NO lo deshabilita (sigue clickeable), a diferencia de lo que
+   * podría asumirse; se expone este chequeo real en vez de asumirlo.
+   */
+  async facturarEstaDeshabilitado(): Promise<boolean> {
+    return this.page.evaluate((selector) => {
+      const btn = document.querySelector(selector);
+      if (!btn) return false;
+      return btn.hasAttribute('disabled') || getComputedStyle(btn).pointerEvents === 'none';
+    }, L.BTN_FACTURAR);
+  }
+}
+
+/**
+ * Registra los errores de JavaScript NO capturados ("pageerror") desde el
+ * momento en que se llama, no desde el inicio de la página — mismo patrón ya
+ * usado en pos-orden-caja.spec.ts (duplicado ahí como función local antes de
+ * esta tarea). Se centraliza aquí, como función independiente (no método de
+ * PosPage: no usa `this.page`, solo recibe un Page), para que
+ * pos-navegacion.spec.ts pueda reutilizarla sin sumar una tercera copia de la
+ * misma lógica — sin modificar pos-orden-caja.spec.ts, que conserva su propia
+ * copia intacta.
+ */
+export function espiarErroresJS(page: Page): string[] {
+  const errores: string[] = [];
+  page.on('pageerror', (err) => errores.push(err.message));
+  return errores;
 }
