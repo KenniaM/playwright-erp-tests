@@ -392,9 +392,29 @@ test('facturar dos productos con descuento individual y pago mixto (tarjeta + ef
 
   await test.step('Agregar dos productos al carrito', async () => {
     // Por nombre exacto, no por posición: el catálogo puede reordenarse en
-    // cualquier momento con solo agregar productos nuevos.
+    // cualquier momento con solo agregar productos nuevos. Se busca primero
+    // en el buscador real del grid (mismo patrón defensivo ya usado en
+    // pos-orden-caja.spec.ts): la vista por defecto del catálogo tiene un
+    // cupo fijo y un producto puede no aparecer ahí sin buscarlo
+    // explícitamente a medida que el catálogo compartido de QA crece.
+    //
+    // "PRODUCTO CON 13%" (nombre anterior del segundo producto) no
+    // corresponde a ningún producto real del catálogo — confirmado en vivo
+    // que ni el buscador ni ningún término relacionado ("13", "con 13",
+    // "PRODUCTO CON") lo encuentran; el historial de git muestra que ese
+    // literal viene de un comentario descriptivo de una versión anterior
+    // (`agregarProductoPorIndice(2) // producto índice 2 (PRODUCTO CON
+    // 13%)`) que quedó mal convertido a un nombre exacto al reemplazar la
+    // selección por índice. Se reemplaza por "Producto de prueba 1", un
+    // producto real y estable del catálogo (confirmado en vivo: coincidencia
+    // exacta única, sin ambigüedad con "Producto de prueba 10") que sí
+    // agrega una segunda línea distinta al carrito — necesario para que el
+    // descuento individual por producto tenga dos claves reales sobre las
+    // que aplicarse.
+    await pos.buscarProductoEnGrid('FRENOS');
     await pos.agregarProductoPorNombre('FRENOS');
-    await pos.agregarProductoPorNombre('PRODUCTO CON 13%');
+    await pos.buscarProductoEnGrid('Producto de prueba 1');
+    await pos.agregarProductoPorNombre('Producto de prueba 1');
   });
 
   await test.step('Desactivar descuento general si está activo', async () => {

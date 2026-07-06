@@ -1,4 +1,4 @@
-import { expect, Locator, Page, Response } from '@playwright/test';
+import { expect, Download, Locator, Page, Response } from '@playwright/test';
 
 // ─── URL ──────────────────────────────────────────────────────────────────────
 
@@ -461,6 +461,64 @@ const L = {
   TOTAL_FACTURA_TOGGLE:         '.content-total-bill',
   DESCUENTO_GENERAL_PORCENTAJE: '#total_discount_input',
   DESCUENTO_GENERAL_MONTO:      '#total_discount',
+
+  // ─── "Crear Proforma" (mismo menú que "Enviar a caja", L.ORDEN_CAJA_MENU_BTN) ──
+  // Confirmado en vivo (Fase 1): el ítem no tiene id propio (a diferencia de
+  // "Enviar a caja"), solo la clase .btn_proform, onclick="create_proform()".
+  PROFORMA_MENU_ITEM: '.btn_proform',
+  DIALOG_PROFORMA:    '#dialog_proform',
+
+  // Las 3 tarjetas de "Tipo de Documento" son mutuamente excluyentes por
+  // comportamiento propio de la app (confirmado en vivo: clickear una
+  // desmarca las otras dos). Cada tarjeta envuelve un checkbox oculto —
+  // ese checkbox, no la clase CSS de la tarjeta, es la fuente real del
+  // estado (ver seleccionarTipoProforma()).
+  PROFORMA_CARD_NORMAL:         '#card_proforma',
+  PROFORMA_CHECK_NORMAL:        '#ck_is_proform__invoice',
+  PROFORMA_CARD_CONSIGNACION:   '#card_consignment',
+  PROFORMA_CHECK_CONSIGNACION:  '#ck_is_consignment_invoice',
+  PROFORMA_CARD_TALLER:         '#card_workshop',
+  PROFORMA_CHECK_TALLER:        '#ck_is_workshop_proform',
+
+  // Único campo de cliente del modal: texto libre (NO es un select pese al
+  // id) — confirmado en vivo que seleccionar un cliente arriba del carrito
+  // (seleccionarClienteExistente()) sincroniza este mismo campo.
+  PROFORMA_CLIENTE_INPUT:   '#customer_proform_select',
+  PROFORMA_VENDEDOR_CHOSEN: '#select_payment_agent_assigned_chosen',
+  PROFORMA_BTN_GUARDAR:     '#make_proform',
+
+  // Petición AJAX real que guarda la Proforma (confirmado en vivo
+  // interceptando la red tras confirmar el SweetAlert de advertencia).
+  AJAX_GUARDAR_PROFORMA: 'addPosProductProform',
+
+  // ─── Modal "Gestión de Proforma" (aparece automáticamente tras guardar) ────
+  DIALOG_GESTION_PROFORMA:         '#modal_pos_proform_result',
+  GESTION_PROFORMA_BTN_IMPRIMIR:   '#print_btn_pos',
+  GESTION_PROFORMA_BTN_PDF:        '#pos_proform_result_pdf_btn',
+  GESTION_PROFORMA_BTN_VER_TODAS:  '#pos_proform_result_view_all_btn',
+  GESTION_PROFORMA_BTN_CORREO:     '#pos_proform_result_email_btn',
+
+  // Confirmado en vivo (Fase 1): responde texto plano "1" (éxito) / "0"
+  // (fallo) — no JSON. Solo responde éxito si la Proforma se creó con un
+  // cliente existente (con nombre libre responde "0" y el sistema muestra
+  // el toast "Error al enviar proforma!").
+  AJAX_ENVIAR_PROFORMA_CORREO: 'sendProformByEmail',
+
+  // ─── Moneda (header principal del POS, fuera de cualquier modal) ───────────
+  // Mismo tipo de botón MDL que el resto de menús del POS (#menu_cash,
+  // #demo-menu-top-right) — confirmado en vivo que overlays conocidos
+  // (notificaciones, toasts) y un tooltip propio del botón ("powerTip")
+  // interceptan el click de forma intermitente, igual que en esos otros
+  // menús — ver _seleccionarOpcionMoneda().
+  MENU_MONEDA_BTN:  '#menu_type_currency',
+  MENU_MONEDA_ITEM: 'ul[for="menu_type_currency"] li',
+
+  // Confirmado en vivo que se dispara automáticamente al cargar el POS y de
+  // nuevo cada vez que se cambia de moneda; su respuesta incluye
+  // currency_base_symbol, que se mantiene fijo sin importar cuál moneda
+  // esté activa — la única fuente confiable para no asumir la moneda base
+  // (nunca CRC ni Lempira por defecto).
+  AJAX_CAMBIO_MONEDA: 'setTypeCurrencyReceipByUser',
 } as const;
 
 // Texto que identifica la caja cerrada en el modal "Abrir Caja". Exportado para
@@ -532,6 +590,10 @@ export const DESCUENTO_GENERAL_PCT = '10';
 // "Contado" ("1") / "Crédito" ("2") en el modal "Enviar a caja" — mismos
 // valores que ORDEN_CAJA_TIPO_PAGO_HIDE refleja realmente en el DOM.
 export type TipoPagoOrdenCaja = 'contado' | 'credito';
+
+// Los 3 tipos de documento del modal "Agregar Proforma" — mutuamente
+// excluyentes, confirmado en vivo (Fase 1).
+export type TipoProforma = 'normal' | 'consignacion' | 'taller';
 
 // Nombre de un servicio real y único en el catálogo del tab "Servicios" —
 // confirmado contando coincidencias exactas en el DOM en vivo (30 servicios
@@ -945,8 +1007,7 @@ export class PosPage {
     await this.cerrarModalNotificacionesSiAparece();
     await this.cerrarAvisoConsecutivoSiAparece();
     await this.modalCerrarCaja.locator(L.CIERRE_BTN_CERRAR).click();
-    await this.page.locator('.sweet-alert.visible').waitFor({ state: 'visible', timeout: TIMEOUTS.PAYMENT_MODAL });
-    await this.page.locator('.sweet-alert.visible button.confirm').click();
+    await this._confirmarSweetAlertV1();
 
     await cierreConfirmadoPromise;
 
@@ -1015,9 +1076,16 @@ export class PosPage {
         const clavesConModalAbierto = await this.page.locator(L.CARRITO_CLAVES).count();
         expect(clavesConModalAbierto, 'El carrito creció pero además se abrió un modal: revisar manualmente.').toBe(clavesAntes);
 
-        // force:true porque el panel de ayuda del aviso de notificaciones puede
-        // reaparecer de forma asíncrona y quedar interceptando el click, igual
-        // que ya se observó con el menú de tres puntos.
+        // El modal de permisos de notificación puede aparecer de forma asíncrona
+        // en cualquier momento y quedar físicamente encima de este botón —
+        // confirmado en vivo (mismo comportamiento ya documentado en
+        // abrirMenuTresPuntos()) que force:true por sí solo NO protege contra
+        // esto: el navegador entrega el click al elemento que está arriba en esa
+        // coordenada, no al que Playwright pretendía clickear. Por eso se cierra
+        // explícitamente aquí, justo antes del click, en vez de asumir que el
+        // chequeo del inicio del método (una sola vez, antes del bucle) sigue
+        // siendo válido varias iteraciones después.
+        await this.cerrarModalNotificacionesSiAparece();
         await modalAbierto.getByRole('button', { name: 'Cerrar', exact: true }).click({ force: true });
         await expect(modalAbierto).toBeHidden();
         continue; // este producto no se agrega directamente: probar el siguiente
@@ -1287,7 +1355,7 @@ export class PosPage {
   /** Lee el total de una línea del carrito como número. */
   async obtenerTotalProducto(clave: string): Promise<number> {
     const texto = await this.page.locator(`#total_by_product_${clave}`).textContent() ?? '0';
-    return parseFloat(texto.replace(/[^0-9.]/g, '')) || 0;
+    return this._leerMontoDeTexto(texto);
   }
 
   /** Lee el total final de venta como número (sí refleja descuentos individuales). */
@@ -1296,7 +1364,7 @@ export class PosPage {
       (id) => document.getElementById(id)?.textContent ?? '$0.00',
       L.TOTAL_MODAL
     );
-    return parseFloat(texto.replace(/[^0-9.]/g, '')) || 0;
+    return this._leerMontoDeTexto(texto);
   }
 
   /** Pago mixto: activa tarjeta manteniendo efectivo, luego llena ambos montos. */
@@ -1805,59 +1873,6 @@ export class PosPage {
     ).toBeCloseTo(cabysTaxPct, 1);
   }
 
-  /** Lee el valor actual del campo "Precio con IVA" del formulario, como número. */
-  async obtenerPrecioConIvaFormulario(): Promise<number> {
-    const valor = await this.page.locator(L.QUICK_PRODUCT_PRECIO_CON_IVA).inputValue();
-    return parseFloat(valor) || 0;
-  }
-
-  /**
-   * Valida, ANTES de guardar, que el "Precio con IVA" del formulario
-   * refleja realmente el precio base más la tasa de IVA seleccionada
-   * (`precio_con_iva = precio + precio × tasa/100`, confirmado en Fase 1
-   * leyendo `quick_product_apply_tax()` en pos.js) — no solo que el
-   * checkbox quedó marcado. Devuelve el monto leído para que el test lo use
-   * después como referencia al validar el total en el carrito, ya que el
-   * formulario se limpia al guardar.
-   */
-  async validarMontoConIvaEnFormulario(precioBase: string): Promise<number> {
-    // El campo "Precio con IVA" retiene el último valor calculado aunque el
-    // checkbox se haya destildado después (confirmado en vivo: el sistema
-    // puede quedar con "Precio con IVA" mostrando un monto con impuesto
-    // mientras el checkbox real está apagado, y en ese estado el producto se
-    // guarda SIN IVA aunque el formulario "se vea" correcto) — por eso esta
-    // validación exige el checkbox marcado, no solo el número del campo.
-    await expect(
-      this.page.locator(L.QUICK_PRODUCT_APLICAR_IVA),
-      'El checkbox "Aplicar impuesto" no está marcado — el producto se guardaría sin IVA aunque "Precio con IVA" muestre un monto calculado'
-    ).toBeChecked();
-
-    const tasaPct = await this.obtenerTasaIvaSeleccionadaPct();
-    const precioConIva = await this.obtenerPrecioConIvaFormulario();
-    const esperado = parseFloat(precioBase) * (1 + tasaPct / 100);
-
-    expect(
-      precioConIva,
-      `"Precio con IVA" (${precioConIva}) no coincide con precio base (${precioBase}) + tasa (${tasaPct}%) = ${esperado}`
-    ).toBeCloseTo(esperado, 1);
-
-    return precioConIva;
-  }
-
-  /**
-   * Valida, DESPUÉS de guardar, que el total de la línea agregada en el
-   * carrito es el monto CON IVA (no el precio base sin impuesto) —
-   * confirma que lo que efectivamente se guardó y se va a facturar incluye
-   * el IVA, no solo que el formulario lo calculó bien antes de enviarlo.
-   */
-  async validarMontoCarritoIncluyeIva(clave: string, montoConIvaEsperado: number) {
-    const totalEnCarrito = await this.obtenerTotalProducto(clave);
-    expect(
-      totalEnCarrito,
-      `El total en el carrito (${totalEnCarrito}) no coincide con el monto con IVA esperado (${montoConIvaEsperado})`
-    ).toBeCloseTo(montoConIvaEsperado, 1);
-  }
-
   /**
    * Lee el IVA acumulado en el área de totales del POS (footer principal,
    * fila "IVA") — un valor calculado y devuelto por el propio sistema para
@@ -1871,20 +1886,7 @@ export class PosPage {
    */
   async obtenerTotalIvaGeneral(): Promise<number> {
     const texto = await this.page.locator(L.TOTAL_IVA_GENERAL).textContent() ?? '$0.00';
-    return parseFloat(texto.replace(/[^0-9.]/g, '')) || 0;
-  }
-
-  /**
-   * Valida que el área de totales del POS refleje IVA mayor a cero tras
-   * agregar un producto con impuesto. Usa expect.poll() porque el total se
-   * recalcula de forma asíncrona apenas se agrega la fila al carrito, no de
-   * forma instantánea junto con el propio DOM de la fila.
-   */
-  async validarTotalIvaGeneralEsMayorACero() {
-    await expect.poll(
-      () => this.obtenerTotalIvaGeneral(),
-      { timeout: TIMEOUTS.PAYMENT_MODAL }
-    ).toBeGreaterThan(0);
+    return this._leerMontoDeTexto(texto);
   }
 
   /**
@@ -1902,8 +1904,7 @@ export class PosPage {
    * Determina de forma confiable si el carrito está mostrando actualmente
    * el total "con IVA" de cada línea — checkbox #show_price_with_iva,
    * arriba del carrito (encabezado de la tabla), NO el checkbox del
-   * formulario "Producto Rápido". Mismo patrón de evidencia que
-   * `obtenerEstadoCheckIva()`: lee la propiedad IDL `.checked` (única
+   * formulario "Producto Rápido". Lee la propiedad IDL `.checked` (única
    * fuente real; este checkbox tampoco usa aria-checked, data-* ni clases
    * de estado) e imprime el método y la evidencia usados.
    */
@@ -2173,17 +2174,6 @@ export class PosPage {
   }
 
   /**
-   * Locator del botón "CABYS" propio del formulario "Crear Combo" — distinto
-   * del de "Producto Rápido" (otro onclick, otra posición en el DOM, y abre
-   * un sub-modal de búsqueda completamente separado, no compartido — ver
-   * `configCabysCombo`). Expuesto aparte para poder comprobar su existencia
-   * (existeCampoCabys()) sin armar la configuración completa.
-   */
-  get botonCabysCombo() {
-    return this.page.locator(L.COMBO_BTN_CABYS);
-  }
-
-  /**
    * Expande el FAB y abre el modal "Crear Combo". El ítem "Agregar combo"
    * queda con bounding box 0×0 de forma efímera (confirmado en vivo con
    * getBoundingClientRect: el estado "visible" que reporta Playwright puede
@@ -2321,16 +2311,6 @@ export class PosPage {
   /** Locator del modal "Crear Producto". */
   get modalCrearProducto() {
     return this.page.locator(L.DIALOG_CREAR_PRODUCTO);
-  }
-
-  /**
-   * Locator del botón "CABYS" propio de "Crear Producto". Existe siempre en
-   * el DOM (confirmado en vivo, count()==1) pero solo queda visible si el
-   * país configurado para la compañía lo exige — mismo comportamiento
-   * condicional ya documentado para Producto Rápido/Combo.
-   */
-  get botonCabysProducto() {
-    return this.page.locator(L.PRODUCTO_BTN_CABYS);
   }
 
   /** Locator del checkbox "¿Aplica Impuesto?" propio de "Crear Producto". */
@@ -2805,48 +2785,6 @@ export class PosPage {
   }
 
   /**
-   * Determina de forma confiable si el check "Incluir IVA" está activo en
-   * ESTE momento — nunca asumido por el escenario del test. Lee la
-   * propiedad IDL `.checked` (única fuente real dentro del propio checkbox,
-   * ver el comentario de `EstadoCheckIva`) e imprime en consola el estado
-   * detectado, el método usado y la evidencia cruda inspeccionada (atributo
-   * HTML, aria-checked, data-*, clases), para que quede constancia de que
-   * no se asumió nada.
-   *
-   * Importante: esta lectura es válida para ESTE instante. No garantiza qué
-   * quedará aplicado tras el guardado —ver el comentario de
-   * `EstadoCheckIva`—, así que las validaciones posteriores al guardado
-   * deben usar `#product_hide_apply_iva_<clave>` (LineaCarrito.ivaAplicado),
-   * no este resultado.
-   */
-  async obtenerEstadoCheckIva(): Promise<EstadoCheckIva> {
-    const detalle = await this.page.locator(L.QUICK_PRODUCT_APLICAR_IVA).evaluate((el: HTMLInputElement) => ({
-      checkedProperty: el.checked,
-      checkedAttribute: el.getAttribute('checked'),
-      ariaChecked: el.getAttribute('aria-checked'),
-      dataAttrs: [...el.attributes].filter(a => a.name.startsWith('data-')).map(a => `${a.name}="${a.value}"`),
-      classList: [...el.classList],
-    }));
-
-    const resultado: EstadoCheckIva = {
-      activo: detalle.checkedProperty,
-      metodo: 'propiedad IDL .checked (Playwright: isChecked())',
-      evidencia:
-        `checkedProperty(.checked)=${detalle.checkedProperty}, ` +
-        `checkedAttribute(getAttribute)=${detalle.checkedAttribute ?? 'null'}, ` +
-        `aria-checked=${detalle.ariaChecked ?? 'null'}, ` +
-        `data-*=[${detalle.dataAttrs.join(', ') || 'ninguno'}], ` +
-        `classList=[${detalle.classList.join(', ') || 'ninguna'}]`,
-    };
-
-    console.log(
-      `[obtenerEstadoCheckIva] activo=${resultado.activo} | método=${resultado.metodo} | evidencia: ${resultado.evidencia}`
-    );
-
-    return resultado;
-  }
-
-  /**
    * Asegura que un checkbox de IVA quede en el estado pedido (marcado o
    * desmarcado), clickeándolo solo si hace falta (nunca a ciegas: un click
    * sobre un checkbox ya en el estado deseado lo invertiría). Reintenta con
@@ -2909,57 +2847,6 @@ export class PosPage {
    */
   async desactivarIvaCombo() {
     await this._asegurarCheckboxEstado(this.page.locator(L.COMBO_APLICAR_IVA), 'apply_tax_combo', false);
-  }
-
-  /**
-   * Re-verifica y, si hace falta, vuelve a dejar el checkbox de IVA marcado
-   * y el tipo/tasa realmente seleccionados (no en el placeholder "0").
-   *
-   * Causa raíz confirmada interceptando la propiedad `checked` del checkbox
-   * (captura de stack real, no una hipótesis): pos.js:680-699 liga un
-   * `setTimeout(..., 300)` al evento `shown.bs.modal` del formulario que,
-   * si la compañía no tiene un impuesto por defecto configurado, ejecuta
-   * `$('#check_quick_product_apply_tax').prop('checked', false)`
-   * incondicionalmente — una sola vez por apertura del modal, sin importar
-   * lo que el usuario haya seleccionado mientras tanto. `.prop()` no
-   * dispara ningún evento "change", así que no hay señal que esperar. El
-   * "300ms" es nominal: confirmado en vivo disparando más de un segundo
-   * después de abierto el modal cuando el hilo principal está ocupado
-   * (carga de scripts), pudiendo caer en medio de la propia selección
-   * manual de IVA del test.
-   *
-   * Como es un timer de una sola vez (no recurrente), la defensa no es
-   * perseguirlo indefinidamente sino corregir, esperar un margen real
-   * mayor a los 300ms nominales, y corregir de nuevo — para esa segunda
-   * pasada, el timer ya disparó y no hay una tercera corrección pendiente.
-   */
-  async asegurarIvaManualConfigurado() {
-    const corregirSiHizoFalta = async () => {
-      await this.asegurarCheckboxIvaMarcado();
-      const tipoValor = await this.page.locator(L.QUICK_PRODUCT_TIPO_IVA).inputValue();
-      if (parseInt(tipoValor, 10) === 0) {
-        await this._seleccionarPrimeraOpcionChosen('#quick_product_tax_chosen');
-      }
-      const tasaValor = await this.page.locator(L.QUICK_PRODUCT_TASA_IVA).inputValue();
-      if (parseInt(tasaValor, 10) === 0) {
-        await this._seleccionarPrimeraOpcionChosen('#quick_product_tax_rate_chosen');
-      }
-    };
-
-    await corregirSiHizoFalta();
-    await this.page.waitForTimeout(800); // margen real sobre los 300ms nominales del timer de pos.js
-    await corregirSiHizoFalta();
-
-    // Verificación final: si algo se reseteó, esto también reseteó "Precio
-    // con IVA" (lo recalcula quick_product_apply_tax() al reafirmar el
-    // checkbox) — validar que quedó realmente mayor al precio base, no
-    // igual a él (que sería 0% de tasa efectiva).
-    const precio = parseFloat(await this.page.locator(L.QUICK_PRODUCT_PRECIO).inputValue());
-    const precioConIva = await this.obtenerPrecioConIvaFormulario();
-    expect(
-      precioConIva,
-      `"Precio con IVA" (${precioConIva}) quedó igual al precio base (${precio}) tras reafirmar el IVA — la tasa se reseteó a 0%`
-    ).toBeGreaterThan(precio);
   }
 
   private async _llamarSetProductTotal(clave: string, porcentaje: string) {
@@ -3228,16 +3115,11 @@ export class PosPage {
   async enviarOrdenCaja(): Promise<Response> {
     await this.page.locator(L.ORDEN_CAJA_BTN_ENVIAR).click();
 
-    await expect(
-      this.page.locator('.sweet-alert.visible'),
-      'No apareció la confirmación "¿Está seguro de enviar esta venta a caja?"'
-    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
-
     const respuestaPromise = this.page.waitForResponse(
       (res) => res.url().includes(L.AJAX_ENVIAR_ORDEN_CAJA),
       { timeout: TIMEOUTS.PAYMENT_MODAL }
     );
-    await this.page.locator('.sweet-alert.visible button.confirm').click();
+    await this._confirmarSweetAlertV1('No apareció la confirmación "¿Está seguro de enviar esta venta a caja?"');
     return respuestaPromise;
   }
 
@@ -3320,6 +3202,420 @@ export class PosPage {
   /** Lee el monto de descuento general actual como número. */
   async obtenerMontoDescuentoGeneralNumerico(): Promise<number> {
     const texto = await this.page.locator(L.DESCUENTO_GENERAL_MONTO).textContent() ?? '$0.00';
+    return this._leerMontoDeTexto(texto);
+  }
+
+  /**
+   * Convierte a número el texto de un monto monetario del DOM (p. ej.
+   * "$1,234.56"), descartando cualquier carácter que no sea dígito o punto.
+   * Único punto de esta conversión — reutilizado por todos los métodos que
+   * leen un total/monto del POS (producto, venta, IVA general, descuento
+   * general) para no repetir la misma expresión de parseo en cada uno.
+   */
+  private _leerMontoDeTexto(texto: string): number {
     return parseFloat(texto.replace(/[^0-9.]/g, '')) || 0;
+  }
+
+  /**
+   * Espera el SweetAlert v1 de confirmación ("¿Está seguro...?") y hace click
+   * en "Aceptar" — patrón compartido por confirmarCerrarCaja() y
+   * enviarOrdenCaja(), que antes repetían cada uno el mismo selector y click
+   * por su cuenta. Si se indica `mensajeSiNoAparece`, la espera de
+   * visibilidad usa `expect().toBeVisible()` con ese mensaje (igual que ya
+   * hacía enviarOrdenCaja()); si no, usa `waitFor()` sin mensaje propio
+   * (igual que ya hacía confirmarCerrarCaja()) — se preserva el
+   * comportamiento exacto de cada llamador original.
+   */
+  private async _confirmarSweetAlertV1(mensajeSiNoAparece?: string) {
+    const dialogo = this.page.locator('.sweet-alert.visible');
+    if (mensajeSiNoAparece) {
+      await expect(dialogo, mensajeSiNoAparece).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    } else {
+      await dialogo.waitFor({ state: 'visible', timeout: TIMEOUTS.PAYMENT_MODAL });
+    }
+    await this.page.locator('.sweet-alert.visible button.confirm').click();
+  }
+
+  // ─── Composiciones reutilizables de "agregar un producto más" ─────────────
+  // Ambas centralizan una composición que ya existía duplicada como helper
+  // local en pos-orden-caja.spec.ts (agregarProductoRapidoSimple /
+  // crearYAgregarProductoFraccionado) — al necesitarse también en
+  // pos-proforma.spec.ts, se centralizan aquí en vez de sumar una tercera
+  // copia. Ninguna de las dos agrega lógica nueva: solo componen métodos ya
+  // existentes de este mismo Page Object.
+
+  /**
+   * Agrega un Producto Rápido mínimo al carrito (sin CABYS/IVA, irrelevante
+   * para los escenarios que solo necesitan "un producto rápido más" en el
+   * carrito) — mismo criterio ya confirmado en pos-crear.spec.ts/
+   * pos-orden-caja.spec.ts: no tocar el checkbox de IVA es la forma real de
+   * guardarlo sin IVA en este ambiente.
+   */
+  async agregarProductoRapidoSimple(nombre: string, precio: string) {
+    await this.abrirProductoRapido();
+    await this.llenarDatosBasicosProductoRapido(nombre, precio);
+    await this.guardarProductoRapidoYObtenerRespuesta();
+    await expect(this.modalProductoRapido).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /**
+   * Crea un Producto Fraccionado nuevo (mínimo: nombre + fraccionar + precio
+   * por caja/fracción, únicos campos obligatorios) y lo agrega al carrito.
+   * Recarga el POS después de crearlo (cargarPosDesdeDashboard) porque el
+   * grid por defecto no refleja productos recién creados — por eso debe
+   * llamarse ANTES de agregar cualquier otro producto al carrito en el mismo
+   * test: la recarga vacía el carrito. Devuelve la clave de la línea
+   * agregada.
+   */
+  async crearYAgregarProductoFraccionadoSimple(nombre: string): Promise<string> {
+    await this.abrirCrearProducto();
+    await this.llenarNombreProducto(nombre);
+    await this.avanzarPasoInfoGeneralProducto();
+    await this.llenarCostoProducto('1000');
+    await this.activarFraccionarProducto();
+    await this.llenarCostosFraccionadoProducto('9000', '850', '12', '10');
+    await this.avanzarPasoCostosProducto();
+    await this.finalizarCrearProducto();
+
+    await this.cargarPosDesdeDashboard();
+    await this.cerrarModalNotificacionesSiAparece();
+    await this.cerrarAvisoConsecutivoSiAparece();
+    await this.cerrarTodosLosToastsSiAparecen();
+
+    const clavesAntes = await this.obtenerClavesProductos();
+    await this.buscarProductoEnGrid(nombre);
+    await this.agregarProductoFraccionadoPorNombre(nombre, '1');
+    await expect.poll(
+      async () => (await this.obtenerClavesProductos()).length,
+      { timeout: TIMEOUTS.PRODUCTS_LOAD }
+    ).toBeGreaterThan(clavesAntes.length);
+
+    const clavesDespues = await this.obtenerClavesProductos();
+    return clavesDespues.find((c) => !clavesAntes.includes(c))!;
+  }
+
+  // ─── Moneda del POS ─────────────────────────────────────────────────────────
+  //
+  // Ningún método existente de esta clase toca moneda — sección enteramente
+  // nueva, necesaria porque una Proforma de Taller solo puede crearse en la
+  // moneda base de la compañía (confirmado en vivo, Fase 1), y esta nunca
+  // debe asumirse (no siempre es CRC, ni Lempira pese a que la compañía de
+  // este ambiente se llame "Honduras": en este ambiente la base real es
+  // USD, confirmado por el propio backend vía currency_base_symbol).
+
+  /**
+   * Abre el menú de moneda (#menu_type_currency, mismo tipo de botón MDL que
+   * el resto de menús del POS) y clickea la opción indicada, reintentando y
+   * cerrando los overlays conocidos (notificaciones, toasts) en cada vuelta.
+   * Confirmado en vivo que overlays conocidos —y un tooltip propio del
+   * botón ("powerTip")— interceptan el click de forma intermitente, igual
+   * que ya se documentó para #menu_cash/#demo-menu-top-right; el mismo
+   * patrón de reintento ya probado en abrirMenuOrdenCaja() resuelve esto
+   * aquí también. Devuelve el cuerpo de la respuesta real de
+   * setTypeCurrencyReceipByUser.
+   *
+   * MAX_INTENTOS en 8 (no 4-5 como el resto de menús): confirmado en vivo
+   * que el modal de permisos de notificación puede reaparecer de forma
+   * asíncrona en cualquier momento —incluso entre el cierre de una vuelta y
+   * el click de la siguiente—, y con 5 intentos esto agotó el bucle
+   * completo al menos una vez en pruebas repetidas; cada intento sigue
+   * acotado individualmente, así que más intentos no arriesgan colgar el
+   * test, solo dan más oportunidades de ganarle la carrera al overlay.
+   */
+  private async _seleccionarOpcionMoneda(opcion: Locator): Promise<{ currency_symbol: string; currency_base_symbol: string }> {
+    const MAX_INTENTOS = 8;
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      await this.cerrarModalNotificacionesSiAparece();
+      await this.cerrarTodosLosToastsSiAparecen();
+
+      // Este proyecto no configura un actionTimeout por defecto — sin un
+      // límite propio en ESTE click, un overlay que lo bloquee dejaría la
+      // espera colgada hasta el timeout completo del test (confirmado en
+      // vivo: ocurrió exactamente así antes de acotar este click), sin que
+      // el bucle de reintento llegara siquiera a su segunda vuelta.
+      const menuAbierto = await this.page.locator(L.MENU_MONEDA_BTN)
+        .click({ timeout: 5_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!menuAbierto) continue;
+
+      const respuestaPromise = this.page.waitForResponse(
+        (res) => res.url().includes(L.AJAX_CAMBIO_MONEDA),
+        { timeout: 4_000 }
+      ).catch(() => null);
+      const clickeado = await opcion.click({ timeout: 4_000 }).then(() => true).catch(() => false);
+
+      if (clickeado) {
+        const respuesta = await respuestaPromise;
+        if (respuesta) return respuesta.json();
+      }
+    }
+    throw new Error(`No se pudo seleccionar la opción de moneda tras ${MAX_INTENTOS} intentos`);
+  }
+
+  /**
+   * Lee la moneda actualmente activa y la moneda base real de la compañía,
+   * reconfirmando la selección activa (mismo clic, sin cambiar nada) para
+   * obtener una respuesta fresca de setTypeCurrencyReceipByUser — confirmado
+   * en vivo que currency_base_symbol se mantiene fijo sin importar cuál
+   * moneda esté activa (a diferencia de la propia selección, que si
+   * cambia), así que es la única fuente confiable para no asumir cuál es la
+   * moneda base.
+   */
+  async obtenerInfoMoneda(): Promise<{ simboloActivo: string; simboloBase: string }> {
+    const opcionActiva = this.page.locator(L.MENU_MONEDA_ITEM).filter({
+      has: this.page.locator('.icon_type_currency_print_active_by_user:visible'),
+    });
+    const cuerpo = await this._seleccionarOpcionMoneda(opcionActiva);
+    return { simboloActivo: cuerpo.currency_symbol, simboloBase: cuerpo.currency_base_symbol };
+  }
+
+  /**
+   * Cambia la moneda activa del POS a la indicada por su símbolo (p. ej.
+   * "$", "₡", "L") — usado tanto para llevar la moneda a la base antes de
+   * una Proforma de Taller como para restaurar la moneda original al
+   * terminar el test.
+   */
+  async cambiarMoneda(simbolo: string): Promise<string> {
+    const opcion = this.page.locator(L.MENU_MONEDA_ITEM).filter({
+      has: this.page.locator('.icon_type_currency_print_by_user', { hasText: simbolo }),
+    });
+    const cuerpo = await this._seleccionarOpcionMoneda(opcion);
+    expect(cuerpo.currency_symbol, `No se pudo cambiar la moneda a "${simbolo}"`).toBe(simbolo);
+    return cuerpo.currency_symbol;
+  }
+
+  /**
+   * Verifica cuál es la moneda base real de la compañía (nunca asumida) y,
+   * si la moneda activa no coincide, cambia automáticamente a ella —
+   * necesario porque una Proforma de Taller solo puede crearse en la
+   * moneda base (confirmado en vivo: en moneda no-base, "Crear Proforma"
+   * queda bloqueado en silencio, sin SweetAlert ni AJAX). Devuelve el
+   * símbolo de la moneda ORIGINAL (antes de este método), para que el test
+   * la restaure con cambiarMoneda() al terminar — confirmado en vivo que
+   * esta configuración persiste por usuario en el servidor, no por sesión
+   * de navegador, así que no restaurarla puede afectar a otros tests.
+   */
+  async asegurarMonedaBaseActiva(): Promise<string> {
+    const { simboloActivo, simboloBase } = await this.obtenerInfoMoneda();
+    if (simboloActivo !== simboloBase) {
+      await this.cambiarMoneda(simboloBase);
+    }
+    return simboloActivo;
+  }
+
+  // ─── "Crear Proforma" ───────────────────────────────────────────────────────
+
+  /** Locator del modal "Agregar Proforma". */
+  get modalCrearProforma() {
+    return this.page.locator(L.DIALOG_PROFORMA);
+  }
+
+  /**
+   * Abre el menú de acciones junto a "Facturar" (mismo menú MDL que "Enviar
+   * a caja", L.ORDEN_CAJA_MENU_BTN) y selecciona "PROFORMA". Reutiliza el
+   * mismo patrón de reintento + cierre de overlays ya probado en
+   * abrirMenuOrdenCaja(), cambiando únicamente el ítem de éxito esperado.
+   */
+  async abrirCrearProforma() {
+    await this.cerrarModalNotificacionesSiAparece();
+    await this.cerrarAvisoConsecutivoSiAparece();
+
+    await this.page.locator('ul.mdl-menu[data-mdl-for="demo-menu-top-right"][data-upgraded*="MaterialMenu"]')
+      .waitFor({ state: 'attached', timeout: TIMEOUTS.PRODUCTS_LOAD })
+      .catch(() => {});
+
+    const item = this.page.locator(L.PROFORMA_MENU_ITEM);
+    const MAX_INTENTOS = 4;
+    let abierto = false;
+    for (let intento = 1; intento <= MAX_INTENTOS && !abierto; intento++) {
+      await this.cerrarModalNotificacionesSiAparece();
+      await this.cerrarAvisoConsecutivoSiAparece();
+
+      await this.page.evaluate(
+        (sel) => (document.querySelector(sel) as HTMLElement)?.click(),
+        L.ORDEN_CAJA_MENU_BTN
+      );
+      abierto = await item.waitFor({ state: 'visible', timeout: 2_000 }).then(() => true).catch(() => false);
+    }
+    expect(abierto, `La opción "Proforma" no apareció en el menú de acciones tras ${MAX_INTENTOS} intentos`).toBe(true);
+
+    await this.page.evaluate(
+      (sel) => (document.querySelector(sel) as HTMLElement)?.click(),
+      L.PROFORMA_MENU_ITEM
+    );
+
+    await expect(this.modalCrearProforma, 'El modal "Agregar Proforma" no apareció tras seleccionar la opción del menú').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /**
+   * Selecciona el tipo de documento en el modal "Agregar Proforma". Las 3
+   * tarjetas son mutuamente excluyentes por comportamiento propio de la
+   * aplicación (confirmado en vivo: clickear una desmarca automáticamente
+   * las otras dos) — pero "Proforma" (Normal) ya viene activa por defecto al
+   * abrir el modal, y al ser un checkbox real (no un radio button), clickear
+   * una tarjeta YA marcada la desmarca en vez de dejarla igual — confirmado
+   * en vivo que este es exactamente el caso al pedir "normal" explícitamente.
+   * Por eso solo se clickea si el checkbox no está ya en el estado
+   * esperado, mismo criterio que _asegurarCheckboxEstado() ya usa para el
+   * resto de checkboxes de la suite. Valida el checkbox real que la tarjeta
+   * envuelve (no solo la clase CSS "active-*" de la tarjeta), que es la
+   * fuente real del estado.
+   */
+  async seleccionarTipoProforma(tipo: TipoProforma) {
+    const opciones = {
+      normal:       { tarjeta: L.PROFORMA_CARD_NORMAL,       checkbox: L.PROFORMA_CHECK_NORMAL },
+      consignacion: { tarjeta: L.PROFORMA_CARD_CONSIGNACION, checkbox: L.PROFORMA_CHECK_CONSIGNACION },
+      taller:       { tarjeta: L.PROFORMA_CARD_TALLER,       checkbox: L.PROFORMA_CHECK_TALLER },
+    } as const;
+    const { tarjeta, checkbox } = opciones[tipo];
+
+    const checkboxLocator = this.page.locator(checkbox);
+    if (!(await checkboxLocator.isChecked())) {
+      await this.page.locator(tarjeta).click();
+    }
+    await expect(
+      checkboxLocator,
+      `El checkbox interno de la tarjeta de tipo de Proforma "${tipo}" no quedó marcado`
+    ).toBeChecked();
+  }
+
+  /** Locator del campo "Nombre del cliente" del modal "Agregar Proforma" — expuesto para que los tests validen su valor directamente. */
+  get campoNombreClienteProforma() {
+    return this.page.locator(L.PROFORMA_CLIENTE_INPUT);
+  }
+
+  /** Llena el campo "Nombre del cliente" del modal "Agregar Proforma" con texto libre. */
+  async llenarNombreClienteProforma(nombre: string) {
+    await this.campoNombreClienteProforma.fill(nombre);
+  }
+
+  /**
+   * Selecciona el primer vendedor real disponible en "Agregar Proforma" —
+   * mismo criterio que seleccionarVendedorOrdenCaja() (catálogo
+   * configurable por la empresa, sin nombre estable). Devuelve el nombre
+   * realmente seleccionado.
+   */
+  async seleccionarVendedorProforma(): Promise<string> {
+    await this._seleccionarPrimeraOpcionChosen(L.PROFORMA_VENDEDOR_CHOSEN);
+    const nombreVendedor = await this._obtenerTextoChosenSeleccionado(L.PROFORMA_VENDEDOR_CHOSEN);
+    expect(nombreVendedor, 'El vendedor seleccionado en "Agregar Proforma" no quedó visible').not.toBe('');
+    return nombreVendedor;
+  }
+
+  /**
+   * Presiona "Crear Proforma", confirma el SweetAlert de advertencia
+   * ("¿Esta seguro de crear esta proforma?") y espera la respuesta real de
+   * red que efectivamente la guarda (addPosProductProform) — mismo patrón
+   * ya usado en enviarOrdenCaja(): la espera del AJAX se arma ANTES de
+   * confirmar el SweetAlert, no después, para no perderse la respuesta si
+   * llega muy rápido.
+   */
+  async guardarProformaYObtenerRespuesta(): Promise<Response> {
+    await this.page.locator(L.PROFORMA_BTN_GUARDAR).click();
+
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_GUARDAR_PROFORMA),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await this._confirmarSweetAlertV1('No apareció la confirmación "¿Esta seguro de crear esta proforma?"');
+    return respuestaPromise;
+  }
+
+  /**
+   * Valida que "Crear Proforma" terminó exitosamente, sin depender
+   * únicamente del toast: la respuesta real de addPosProductProform
+   * respondió OK, el modal de captura se cerró, y el modal de Gestión de
+   * Proforma apareció automáticamente.
+   */
+  async validarProformaCreada(respuesta: Response) {
+    expect(respuesta.ok(), `${L.AJAX_GUARDAR_PROFORMA} no respondió OK (status ${respuesta.status()})`).toBe(true);
+
+    await expect(
+      this.modalCrearProforma,
+      'El modal "Agregar Proforma" no se cerró tras confirmar el guardado'
+    ).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    await expect(
+      this.modalGestionProforma,
+      'El modal "Gestión de Proforma" no apareció tras crear la proforma'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  // ─── Gestión de Proforma (modal posterior al guardado) ─────────────────────
+
+  /** Locator del modal "Gestión de Proforma" que aparece automáticamente tras guardar. */
+  get modalGestionProforma() {
+    return this.page.locator(L.DIALOG_GESTION_PROFORMA);
+  }
+
+  /**
+   * Cierra el modal de Gestión de Proforma con su botón "Cerrar" — necesario
+   * antes de cualquier interacción posterior con el resto del POS (p. ej.
+   * el menú de moneda): confirmado en vivo que este modal usa
+   * `data-backdrop="static"` y, mientras sigue abierto, intercepta clicks en
+   * cualquier otro elemento de la página, incluido `#menu_type_currency`.
+   */
+  async cerrarModalGestionProforma() {
+    await this.modalGestionProforma.getByRole('button', { name: 'Cerrar', exact: true }).click();
+    await expect(this.modalGestionProforma).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /**
+   * Presiona "Enviar por correo" en el modal de Gestión de Proforma y
+   * devuelve la respuesta real del AJAX (sendProformByEmail, cuerpo crudo
+   * "1"=éxito / "0"=fallo, no JSON) — confirmado en vivo que solo responde
+   * éxito si la Proforma se creó con un cliente existente (con nombre libre
+   * responde "0" y el sistema muestra el toast "Error al enviar
+   * proforma!").
+   */
+  async enviarProformaPorCorreo(): Promise<Response> {
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_ENVIAR_PROFORMA_CORREO),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await this.page.locator(L.GESTION_PROFORMA_BTN_CORREO).click();
+    return respuestaPromise;
+  }
+
+  /**
+   * Presiona "Descargar PDF" en el modal de Gestión de Proforma y devuelve
+   * el evento de descarga real del navegador — confirmado en vivo que el
+   * nombre sugerido sigue el patrón "PROFORMA #<número>.pdf".
+   */
+  async descargarPdfProforma(): Promise<Download> {
+    const downloadPromise = this.page.waitForEvent('download', { timeout: TIMEOUTS.PRINT_POPUP });
+    await this.page.locator(L.GESTION_PROFORMA_BTN_PDF).click();
+    return downloadPromise;
+  }
+
+  /**
+   * Presiona "Imprimir" en el modal de Gestión de Proforma y devuelve la
+   * ventana emergente ya cargada — confirmado en vivo que su contenido se
+   * renderiza vía document.write() (la URL queda en "about:blank", igual
+   * que el resto de ventanas de impresión de esta suite), así que quien
+   * llama puede validar el contenido antes de cerrarla con
+   * mostrarYCerrarVentanaImpresion().
+   */
+  async imprimirProforma(): Promise<Page> {
+    const popupPromise = this.page.waitForEvent('popup', { timeout: TIMEOUTS.PRINT_POPUP });
+    await this.page.locator(L.GESTION_PROFORMA_BTN_IMPRIMIR).click();
+    const popup = await popupPromise;
+    await popup.waitForLoadState('domcontentloaded');
+    return popup;
+  }
+
+  /**
+   * Presiona "Ver todas" en el modal de Gestión de Proforma y devuelve la
+   * ventana emergente — confirmado en vivo que lleva al mismo destino real
+   * (proform/printPosProform) que ya valida abrirHistorialProformas() desde
+   * el menú de tres puntos, aunque el elemento que dispara el click es
+   * distinto (el propio modal de gestión, no el menú de tres puntos), por
+   * lo que no puede reutilizarse ese método tal cual.
+   */
+  async verTodasLasProformas(): Promise<Page> {
+    const popupPromise = this.page.waitForEvent('popup', { timeout: TIMEOUTS.PRINT_POPUP });
+    await this.page.locator(L.GESTION_PROFORMA_BTN_VER_TODAS).click();
+    return popupPromise;
   }
 }

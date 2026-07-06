@@ -438,9 +438,7 @@ test('validar cálculo de IVA en productos rápidos — IVA activado', async ({ 
 
   let lineas: LineaCarrito[] = [];
   await test.step('Recorrer todos los productos agregados y validar (precio unitario × cantidad) + IVA = total de cada línea', async () => {
-    for (const clave of claves) {
-      lineas.push(await pos.validarLineaCarrito(clave, IVA_ESPERADO));
-    }
+    lineas = await pos.validarLineasCarrito(claves, IVA_ESPERADO);
   });
 
   await test.step('Validar que la suma del IVA de todos los productos coincide con el resumen de totales', async () => {
@@ -484,9 +482,7 @@ test('validar cálculo de IVA en productos rápidos — IVA desactivado', async 
     // La misma fórmula de validarLineaCarrito sirve para este escenario: con
     // IVA desactivado, iva=0 y neto=total, así que (precio × cantidad) + 0
     // = total sin necesidad de una fórmula separada.
-    for (const clave of claves) {
-      lineas.push(await pos.validarLineaCarrito(clave, IVA_ESPERADO));
-    }
+    lineas = await pos.validarLineasCarrito(claves, IVA_ESPERADO);
   });
 
   await test.step('Validar que el resumen de totales no refleja IVA de estos productos', async () => {
