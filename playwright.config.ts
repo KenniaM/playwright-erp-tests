@@ -46,6 +46,7 @@ export default defineConfig({
       storageState: 'playwright/.auth/admin.json',
       launchOptions: {},
     },
+    dependencies: ['setup'],
   },
 
   {

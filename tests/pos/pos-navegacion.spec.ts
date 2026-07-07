@@ -1,82 +1,5 @@
 import { test, expect, Locator, Page } from '@playwright/test';
-import { PosPage, CAJA_TEXTO, TIMEOUTS, METODO, PESTANA_POS_FACTURACION, PESTANAS_POS_A_RECORRER, espiarErroresJS } from './pos.page';
-
-// Productos reales y estables del catálogo, ya usados por el resto de la
-// suite (pos.spec.ts, pos-orden-caja.spec.ts) — evita depender de la
-// posición en el grid o de productos de precio variable.
-const PRODUCTO_NORMAL = 'FRENOS';
-const PRODUCTO_SECUNDARIO = 'Producto de prueba 1';
-
-/**
- * Carga el POS y decide qué hacer con el modal "Abrir Caja" si aparece: lo valida y
- * lo cierra sin completar la apertura, ya que agregar productos no requiere la caja
- * abierta (eso se decide más adelante, al facturar). Comportamiento esperado, no un error.
- */
-async function cargarPosYCerrarModalSiAparece(pos: PosPage) {
-  await pos.irAlPos();
-  await pos.esperarEstadoInicial();
-  if (await pos.modalAbrirCajaVisible()) {
-    await expect(pos.modalAbrirCaja).toBeVisible();
-    await expect(pos.modalAbrirCaja.getByText(CAJA_TEXTO)).toBeVisible();
-    await pos.cerrarModalAbrirCaja();
-  }
-}
-
-/**
- * Espera (con reintentos reales, no una pausa fija) a que la condición de
- * "activo" dada se cumpla — usado para confirmar que una categoría o un tab
- * quedó seleccionado tras hacer click.
- */
-async function esperarQuedaActivo(chequeoActivo: () => Promise<boolean>) {
-  await expect.poll(chequeoActivo).toBe(true);
-}
-
-/**
- * Presiona el primer "Facturar" (abre el modal de pago). Este botón nunca requiere
- * abrir la caja —eso solo puede ocurrir al confirmar el pago, más adelante— así que
- * aquí no se valida ni se intenta abrir la caja en ningún caso. Mismo patrón ya usado
- * en pos.spec.ts/pos-facturar.spec.ts (duplicado localmente aquí, no importado: cada
- * spec de esta suite compone su propio flujo a partir de los métodos de PosPage).
- */
-async function abrirModalDePago(pos: PosPage) {
-  await pos.presionarFacturar();
-  await pos.esperarModalPago();
-}
-
-/**
- * Presiona el "Facturar" del modal de pago (confirma el pago) y monitorea lo que
- * ocurre después, sin asumir que el modal "Abrir Caja" —si aparece— lo hace
- * inmediatamente. Mismo patrón ya usado en pos.spec.ts/pos-facturar.spec.ts.
- */
-async function confirmarPagoAbriendoCajaSiEsNecesario(pos: PosPage, page: Page) {
-  const MAX_INTENTOS = 3;
-
-  for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
-    const popupPromise = page.waitForEvent('popup', { timeout: TIMEOUTS.PRINT_POPUP })
-      .then((printPage) => ({ tipo: 'popup' as const, printPage }));
-    const modalPromise = pos.modalAbrirCaja.waitFor({ state: 'visible', timeout: TIMEOUTS.PRINT_POPUP })
-      .then(() => ({ tipo: 'modalAbrirCaja' as const }));
-
-    await pos.presionarConfirmarPago();
-    await pos.cerrarAvisoConsecutivoSiAparece();
-
-    const resultado = await Promise.race([popupPromise, modalPromise]);
-
-    if (resultado.tipo === 'popup') {
-      await pos.mostrarYCerrarVentanaImpresion(resultado.printPage);
-      return;
-    }
-
-    await expect(pos.modalAbrirCaja).toBeVisible();
-    await pos.completarAperturaCaja();
-    await expect(pos.modalAbrirCaja).toBeHidden();
-  }
-
-  throw new Error(
-    `La facturación no se completó tras ${MAX_INTENTOS} intentos de abrir la caja: ` +
-    'el sistema siguió pidiendo abrir la caja o nunca mostró la ventana de impresión.'
-  );
-}
+import { PosPage, TIMEOUTS, METODO, PESTANA_POS_FACTURACION, PESTANAS_POS_A_RECORRER, espiarErroresJS, esperarQuedaActivo } from './pos.page';
 
 /**
  * Cambia la moneda de `desde` a `hacia` y valida, con el mismo producto real,
@@ -86,17 +9,21 @@ async function confirmarPagoAbriendoCajaSiEsNecesario(pos: PosPage, page: Page) 
  * ambiente ya estuviera, por estado persistido del servidor, en la moneda
  * destino antes de empezar (confirmado en vivo, Fase 1: la moneda persiste
  * por usuario en el servidor, no por sesión).
+ *
+ * `nombreProducto` lo localiza el test que llama a esta función —vía
+ * pos.obtenerPrimerProductoNormal(), nunca un nombre fijo del catálogo—
+ * antes de cambiar de moneda por primera vez.
  */
-async function validarCambioDeMonedaYPrecio(pos: PosPage, desde: string, hacia: string, errores: string[]) {
+async function validarCambioDeMonedaYPrecio(pos: PosPage, desde: string, hacia: string, errores: string[], nombreProducto: string) {
   await pos.cambiarMoneda(desde);
-  const precioAntes = await pos.obtenerPrecioVisibleProducto(PRODUCTO_NORMAL);
+  const precioAntes = await pos.obtenerPrecioVisibleProducto(nombreProducto);
 
   await pos.cambiarMoneda(hacia);
 
   const info = await pos.obtenerInfoMoneda();
   expect(info.simboloActivo, `La moneda activa no cambió a "${hacia}"`).toBe(hacia);
 
-  const precioDespues = await pos.obtenerPrecioVisibleProducto(PRODUCTO_NORMAL);
+  const precioDespues = await pos.obtenerPrecioVisibleProducto(nombreProducto);
   expect(precioDespues, 'El precio visible del producto no se actualizó tras cambiar de moneda').not.toBe(precioAntes);
   expect(
     precioDespues.trim().startsWith(hacia),
@@ -112,7 +39,7 @@ test('Abrir Historial de Facturas', async ({ page }) => {
   let historial: Page;
 
   await test.step('Abrir POS y cerrar modales opcionales si aparecen', async () => {
-    await cargarPosYCerrarModalSiAparece(pos);
+    await pos.cargarPosYCerrarModalSiAparece();
     await pos.cerrarModalNotificacionesSiAparece();
     await pos.cerrarAvisoConsecutivoSiAparece();
   });
@@ -138,7 +65,7 @@ test('Abrir Historial de Proformas', async ({ page }) => {
   let proformas: Page;
 
   await test.step('Abrir POS', async () => {
-    await cargarPosYCerrarModalSiAparece(pos);
+    await pos.cargarPosYCerrarModalSiAparece();
   });
 
   await test.step('Cerrar mensaje de consecutivo y modal de permisos si aparecen, antes de usar el menú de tres puntos', async () => {
@@ -168,7 +95,7 @@ test('Seleccionar una categoría', async ({ page }) => {
   const pos = new PosPage(page);
 
   await test.step('Abrir el POS', async () => {
-    await cargarPosYCerrarModalSiAparece(pos);
+    await pos.cargarPosYCerrarModalSiAparece();
   });
 
   await test.step('Seleccionar la categoría "Combos"', async () => {
@@ -185,7 +112,7 @@ test('Seleccionar los combos de la sección Categorías', async ({ page }) => {
   const pos = new PosPage(page);
 
   await test.step('Abrir el POS', async () => {
-    await cargarPosYCerrarModalSiAparece(pos);
+    await pos.cargarPosYCerrarModalSiAparece();
   });
 
   // Los cinco tipos de categoría disponibles en la barra lateral. "Lista de
@@ -214,7 +141,7 @@ test('Cambiar entre modo Lista y modo Cuadrícula', async ({ page }) => {
   let listaActivaAlInicio = false;
 
   await test.step('Abrir el POS', async () => {
-    await cargarPosYCerrarModalSiAparece(pos);
+    await pos.cargarPosYCerrarModalSiAparece();
   });
 
   await test.step('Detectar cuál vista está activa actualmente, sin asumirla', async () => {
@@ -250,7 +177,7 @@ test('Seleccionar el tab Servicios', async ({ page }) => {
   const pos = new PosPage(page);
 
   await test.step('Abrir el POS', async () => {
-    await cargarPosYCerrarModalSiAparece(pos);
+    await pos.cargarPosYCerrarModalSiAparece();
   });
 
   await test.step('Seleccionar el tab "Servicios"', async () => {
@@ -267,7 +194,7 @@ test('Seleccionar el tab End. Pintura', async ({ page }) => {
   const pos = new PosPage(page);
 
   await test.step('Abrir el POS', async () => {
-    await cargarPosYCerrarModalSiAparece(pos);
+    await pos.cargarPosYCerrarModalSiAparece();
   });
 
   await test.step('Seleccionar el tab "End. Pintura"', async () => {
@@ -285,9 +212,7 @@ test('Recorrer todas las pestañas del POS y validar que cada una carga correcta
 
   await test.step('Cargar el POS pasando por el Dashboard y cerrar overlays conocidos si aparecen', async () => {
     await pos.cargarPosDesdeDashboard();
-    await pos.cerrarModalNotificacionesSiAparece();
-    await pos.cerrarAvisoConsecutivoSiAparece();
-    await pos.cerrarTodosLosToastsSiAparecen();
+    await pos.cerrarOverlaysConocidos();
   });
 
   await test.step('Confirmar que el POS inicia en la pestaña "POS Facturación"', async () => {
@@ -324,17 +249,18 @@ test('Cambiar moneda a Colones', async ({ page }) => {
   test.setTimeout(TIMEOUTS.TEST);
   const pos = new PosPage(page);
   let monedaOriginal = '';
+  let nombreProducto = '';
 
   await test.step('Abrir el POS y ubicar un producto real para comparar precios', async () => {
-    await cargarPosYCerrarModalSiAparece(pos);
-    await pos.buscarProductoEnGrid(PRODUCTO_NORMAL);
+    await pos.cargarPosYCerrarModalSiAparece();
+    nombreProducto = (await pos.obtenerPrimerProductoNormal()).nombre;
     monedaOriginal = (await pos.obtenerInfoMoneda()).simboloActivo;
   });
 
   const errores = espiarErroresJS(page);
 
   await test.step('Partir de Dólares y cambiar a Colones, validando símbolo, precio y errores JS', async () => {
-    await validarCambioDeMonedaYPrecio(pos, '$', '₡', errores);
+    await validarCambioDeMonedaYPrecio(pos, '$', '₡', errores, nombreProducto);
   });
 
   await test.step('Restaurar la moneda original', async () => {
@@ -346,17 +272,18 @@ test('Cambiar moneda a Dólares (USD)', async ({ page }) => {
   test.setTimeout(TIMEOUTS.TEST);
   const pos = new PosPage(page);
   let monedaOriginal = '';
+  let nombreProducto = '';
 
   await test.step('Abrir el POS y ubicar un producto real para comparar precios', async () => {
-    await cargarPosYCerrarModalSiAparece(pos);
-    await pos.buscarProductoEnGrid(PRODUCTO_NORMAL);
+    await pos.cargarPosYCerrarModalSiAparece();
+    nombreProducto = (await pos.obtenerPrimerProductoNormal()).nombre;
     monedaOriginal = (await pos.obtenerInfoMoneda()).simboloActivo;
   });
 
   const errores = espiarErroresJS(page);
 
   await test.step('Partir de Colones y cambiar a Dólares, validando símbolo, precio y errores JS', async () => {
-    await validarCambioDeMonedaYPrecio(pos, '₡', '$', errores);
+    await validarCambioDeMonedaYPrecio(pos, '₡', '$', errores, nombreProducto);
   });
 
   await test.step('Restaurar la moneda original', async () => {
@@ -372,9 +299,16 @@ test('Vista Expandida: buscar, agregar y facturar un producto desde el buscador 
   const errores = espiarErroresJS(page);
   let expandidaAlInicio = false;
   let codigoProducto = '';
+  let nombreProducto = '';
 
   await test.step('Abrir el POS y limpiar cualquier estado residual del carrito', async () => {
-    await cargarPosYCerrarModalSiAparece(pos);
+    // cargarPosDesdeDashboard() (no cargarPosYCerrarModalSiAparece) porque este
+    // test valida "cero errores de JS": una carga en frío directa a
+    // /pos/pointOfSale dispara varios ReferenceError ya conocidos del propio
+    // sistema (ver el comentario de cargarPosDesdeDashboard() en pos.page.ts),
+    // que precalentar la caché visitando el Dashboard primero evita —
+    // confirmado en vivo.
+    await pos.cargarPosDesdeDashboard();
     if ((await pos.obtenerClavesProductos()).length > 0) {
       await pos.vaciarCarrito();
     }
@@ -388,8 +322,19 @@ test('Vista Expandida: buscar, agregar y facturar un producto desde el buscador 
     if (await pos.vistaExpandidaActiva()) {
       await pos.alternarVistaExpandida();
     }
-    await pos.buscarProductoEnGrid(PRODUCTO_NORMAL);
-    codigoProducto = await pos.obtenerCodigoProducto(PRODUCTO_NORMAL);
+    nombreProducto = (await pos.obtenerPrimerProductoNormal()).nombre;
+    await pos.buscarProductoEnGrid(nombreProducto);
+    codigoProducto = await pos.obtenerCodigoProducto(nombreProducto);
+
+    // buscarProductoEnGrid() agrega el producto al carrito como efecto
+    // secundario del propio Enter cuando hay una única coincidencia
+    // (confirmado en vivo; mismo comportamiento ya documentado en
+    // pos-crear.spec.ts para buscarProductoYAgregarAlCarrito) — hay que
+    // limpiar ese residuo antes de tomar el carrito como línea base para el
+    // buscador interno de Vista Expandida.
+    if ((await pos.obtenerClavesProductos()).length > 0) {
+      await pos.vaciarCarrito();
+    }
   });
 
   await test.step('Cambiar a Vista Expandida y validar que el cambio ocurrió realmente', async () => {
@@ -397,6 +342,19 @@ test('Vista Expandida: buscar, agregar y facturar un producto desde el buscador 
       await pos.alternarVistaExpandida();
     }
     expect(await pos.vistaExpandidaActiva(), 'La vista no quedó en modo Expandida').toBe(true);
+
+    // Evidencia adicional, explícita, de que Vista Expandida realmente habilitó
+    // su buscador interno — en vez de depender únicamente de que el próximo
+    // .fill() falle si no lo estuviera.
+    const buscadorInterno = page.locator('#search_product_parameter');
+    await expect(
+      buscadorInterno,
+      'El buscador interno de Vista Expandida (#search_product_parameter) no quedó visible tras activar Vista Expandida'
+    ).toBeVisible();
+    await expect(
+      buscadorInterno,
+      'El buscador interno de Vista Expandida (#search_product_parameter) no quedó habilitado (interactuable) tras activar Vista Expandida'
+    ).toBeEnabled();
   });
 
   await test.step('Usar el buscador interno de Vista Expandida para localizar y agregar el producto', async () => {
@@ -407,15 +365,38 @@ test('Vista Expandida: buscar, agregar y facturar un producto desde el buscador 
       clavesDespues.length,
       'El producto no quedó agregado al carrito tras usar el buscador interno de Vista Expandida'
     ).toBeGreaterThan(clavesAntes.length);
+
+    // Identificar la clave nueva y validar, reutilizando obtenerDatosLineaCarrito(),
+    // que la línea agregada corresponde realmente al producto esperado (no solo que
+    // el carrito creció).
+    const clavesNuevas = clavesDespues.filter((clave) => !clavesAntes.includes(clave));
+    expect(
+      clavesNuevas.length,
+      `Se esperaba exactamente una clave nueva en el carrito tras agregar el producto vía buscador interno, pero se encontraron ${clavesNuevas.length}: ${clavesNuevas.join(', ')}`
+    ).toBe(1);
+
+    const lineaAgregada = await pos.obtenerDatosLineaCarrito(clavesNuevas[0]);
+    expect(
+      lineaAgregada.nombre,
+      `El producto agregado vía buscador interno de Vista Expandida no coincide: se esperaba "${nombreProducto}" pero el carrito muestra "${lineaAgregada.nombre}"`
+    ).toBe(nombreProducto);
+    expect(
+      lineaAgregada.cantidad,
+      `La cantidad de "${nombreProducto}" agregado vía buscador interno no es la esperada (1): se obtuvo ${lineaAgregada.cantidad}`
+    ).toBe(1);
+    expect(
+      lineaAgregada.neto,
+      `El precio de "${nombreProducto}" agregado vía buscador interno no es mayor que cero: se obtuvo ${lineaAgregada.neto}`
+    ).toBeGreaterThan(0);
   });
 
   await test.step('Facturar el producto', async () => {
-    await abrirModalDePago(pos);
+    await pos.abrirModalDePago();
     await pos.seleccionarPagoExacto(METODO.TRANSACCION);
   });
 
   await test.step('Confirmar la factura y esperar la confirmación real', async () => {
-    await confirmarPagoAbriendoCajaSiEsNecesario(pos, page);
+    await pos.confirmarPagoAbriendoCajaSiEsNecesario();
   });
 
   await test.step('Validar que la factura se completó correctamente', async () => {
@@ -439,7 +420,7 @@ test('Vaciar Carrito', async ({ page }) => {
   const pos = new PosPage(page);
 
   await test.step('Abrir el POS y limpiar cualquier estado residual del carrito', async () => {
-    await cargarPosYCerrarModalSiAparece(pos);
+    await pos.cargarPosYCerrarModalSiAparece();
     if ((await pos.obtenerClavesProductos()).length > 0) {
       await pos.vaciarCarrito();
     }
@@ -448,10 +429,10 @@ test('Vaciar Carrito', async ({ page }) => {
   const errores = espiarErroresJS(page);
 
   await test.step('Agregar varios productos al carrito', async () => {
-    await pos.buscarProductoEnGrid(PRODUCTO_NORMAL);
-    await pos.agregarProductoPorNombre(PRODUCTO_NORMAL);
-    await pos.buscarProductoEnGrid(PRODUCTO_SECUNDARIO);
-    await pos.agregarProductoPorNombre(PRODUCTO_SECUNDARIO);
+    const primero = await pos.obtenerPrimerProductoNormal();
+    await pos.agregarProductoAlCarrito(primero);
+    const segundo = await pos.obtenerSegundoProductoNormalDistinto(primero.nombre);
+    await pos.agregarProductoAlCarrito(segundo);
   });
 
   await test.step('Validar que existen productos en el carrito', async () => {

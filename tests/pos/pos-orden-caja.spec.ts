@@ -1,107 +1,17 @@
 import { test, expect, Page } from '@playwright/test';
-import { PosPage, TIMEOUTS, DESCUENTO_INDIVIDUAL_PCT, DESCUENTO_GENERAL_PCT, PRECIO_PRODUCTO_RAPIDO } from './pos.page';
+import { PosPage, TIMEOUTS, DESCUENTO_INDIVIDUAL_PCT, DESCUENTO_GENERAL_PCT, espiarErroresJS } from './pos.page';
 
-// Producto real y estable del catálogo, ya usado por el resto de la suite
-// (pos.spec.ts) para "producto normal" — evita depender de la posición en
-// el grid o de un producto de precio variable.
-const PRODUCTO_NORMAL = 'FRENOS';
 const NOMBRE_TERCERO = 'Tercero De Prueba QA';
 
 // ─── Helpers compartidos ────────────────────────────────────────────────────
 // Todos componen métodos ya existentes de PosPage — ninguno reimplementa
 // lógica de agregar productos, clientes, descuentos ni esperas.
 
-/**
- * Registra los errores de JavaScript NO capturados (excepciones reales,
- * "pageerror") desde el momento en que se llama, no desde el inicio de la
- * página. Confirmado en vivo: cargarPosDesdeDashboard() dispara de forma
- * consistente un error preexistente y ajeno a esta suite ("$(...).steps is
- * not a function", de un conflicto de plugins en el Dashboard) que no tiene
- * relación con "Enviar a caja" — por eso el espía se arma DESPUÉS de cargar
- * el POS y agregar productos, para no reportar como propio un error que ya
- * existía antes de tocar nada de Orden de Caja.
- */
-function espiarErroresJS(page: Page): string[] {
-  const errores: string[] = [];
-  page.on('pageerror', (err) => errores.push(err.message));
-  return errores;
-}
-
 /** Carga el POS y agrega un producto de precio fijo — punto de partida común a todos los escenarios. */
 async function cargarPosConProducto(pos: PosPage) {
   await pos.cargarPosDesdeDashboard();
-  await pos.cerrarModalNotificacionesSiAparece();
-  await pos.cerrarAvisoConsecutivoSiAparece();
-  await pos.cerrarTodosLosToastsSiAparecen();
+  await pos.cerrarOverlaysConocidos();
   await pos.agregarPrimerProductoDePrecioFijo();
-}
-
-/**
- * Agrega un Producto Rápido mínimo (sin tocar CABYS/IVA, no relevante para
- * estos escenarios) — mismo criterio ya confirmado en pos.spec.ts
- * (agregarProductoRapidoParaValidacionIva con activarIva=false): no tocar
- * el checkbox de IVA es la forma real de guardarlo sin IVA en este
- * ambiente.
- */
-async function agregarProductoRapidoSimple(pos: PosPage, nombre: string, precio: string) {
-  await pos.abrirProductoRapido();
-  await pos.llenarDatosBasicosProductoRapido(nombre, precio);
-  await pos.guardarProductoRapidoYObtenerRespuesta();
-  await expect(pos.modalProductoRapido).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
-}
-
-/**
- * Crea un Producto Fraccionado nuevo (mínimo: nombre + fraccionar + precio
- * por caja/fracción, únicos campos obligatorios — mismo criterio ya
- * probado en pos-crear.spec.ts) y lo agrega al carrito. Recarga el POS
- * después de crearlo (cargarPosDesdeDashboard, igual que
- * buscarProductoYAgregarAlCarrito en pos-crear.spec.ts) porque el grid por
- * defecto no refleja productos recién creados — por eso esta función debe
- * llamarse ANTES de agregar cualquier otro producto al carrito en el mismo
- * test: la recarga vacía el carrito.
- */
-async function crearYAgregarProductoFraccionado(pos: PosPage, nombre: string): Promise<string> {
-  await pos.abrirCrearProducto();
-  await pos.llenarNombreProducto(nombre);
-  await pos.avanzarPasoInfoGeneralProducto();
-  await pos.llenarCostoProducto('1000');
-  await pos.activarFraccionarProducto();
-  await pos.llenarCostosFraccionadoProducto('9000', '850', '12', '10');
-  await pos.avanzarPasoCostosProducto();
-  await pos.finalizarCrearProducto();
-
-  await pos.cargarPosDesdeDashboard();
-  await pos.cerrarModalNotificacionesSiAparece();
-  await pos.cerrarAvisoConsecutivoSiAparece();
-  await pos.cerrarTodosLosToastsSiAparecen();
-
-  const clavesAntes = await pos.obtenerClavesProductos();
-  await pos.buscarProductoEnGrid(nombre);
-  await pos.agregarProductoFraccionadoPorNombre(nombre, '1');
-  await expect.poll(
-    async () => (await pos.obtenerClavesProductos()).length,
-    { timeout: TIMEOUTS.PRODUCTS_LOAD }
-  ).toBeGreaterThan(clavesAntes.length);
-
-  const clavesDespues = await pos.obtenerClavesProductos();
-  return clavesDespues.find((c) => !clavesAntes.includes(c))!;
-}
-
-/**
- * Agrega los tres tipos de producto pedidos (fraccionado primero, ver el
- * comentario de crearYAgregarProductoFraccionado). El producto normal se
- * busca con buscarProductoEnGrid() antes de agregarlo por nombre —
- * confirmado en vivo que la vista por defecto del grid está limitada a un
- * cupo alfabético fijo (mismo caveat ya documentado para
- * PRODUCTO_BUSCADOR_GRID en pos.page.ts) y, tras la cantidad de productos
- * ya creados por el resto de la suite, "FRENOS" dejó de aparecer ahí sin
- * buscarlo explícitamente.
- */
-async function agregarProductosMultiples(pos: PosPage, sufijo: string) {
-  await crearYAgregarProductoFraccionado(pos, `Fraccionado Orden Caja ${sufijo}`);
-  await pos.buscarProductoEnGrid(PRODUCTO_NORMAL);
-  await pos.agregarProductoPorNombre(PRODUCTO_NORMAL);
-  await agregarProductoRapidoSimple(pos, `Rápido Orden Caja ${sufijo}`, PRECIO_PRODUCTO_RAPIDO);
 }
 
 /** Ninguna línea de error visible en el carrito — mismo criterio ya usado en pos-crear.spec.ts. */
@@ -453,15 +363,13 @@ test.describe('Orden de Caja — Crear', () => {
       test.setTimeout(TIMEOUTS.TEST);
       const pos = new PosPage(page);
       await pos.cargarPosDesdeDashboard();
-      await pos.cerrarModalNotificacionesSiAparece();
-      await pos.cerrarAvisoConsecutivoSiAparece();
-      await pos.cerrarTodosLosToastsSiAparecen();
+      await pos.cerrarOverlaysConocidos();
       const erroresJS = espiarErroresJS(page);
 
       let clavesAntes: string[] = [];
       await test.step('Agregar producto normal, rápido y fraccionado', async () => {
         clavesAntes = await pos.obtenerClavesProductos();
-        await agregarProductosMultiples(pos, `contado ${Date.now()}`);
+        await pos.agregarProductoNormalFraccionadoYRapido('Orden Caja', `contado ${Date.now()}`);
         await expect.poll(async () => (await pos.obtenerClavesProductos()).length).toBeGreaterThan(clavesAntes.length);
       });
 
@@ -488,12 +396,10 @@ test.describe('Orden de Caja — Crear', () => {
       test.setTimeout(TIMEOUTS.TEST);
       const pos = new PosPage(page);
       await pos.cargarPosDesdeDashboard();
-      await pos.cerrarModalNotificacionesSiAparece();
-      await pos.cerrarAvisoConsecutivoSiAparece();
-      await pos.cerrarTodosLosToastsSiAparecen();
+      await pos.cerrarOverlaysConocidos();
       const erroresJS = espiarErroresJS(page);
 
-      await agregarProductosMultiples(pos, `contado desc ${Date.now()}`);
+      await pos.agregarProductoNormalFraccionadoYRapido('Orden Caja', `contado desc ${Date.now()}`);
 
       let totalAntes = 0;
       await test.step(`Activar descuento general del ${DESCUENTO_GENERAL_PCT}% y validar que se aplicó`, async () => {
@@ -524,12 +430,10 @@ test.describe('Orden de Caja — Crear', () => {
       test.setTimeout(TIMEOUTS.TEST);
       const pos = new PosPage(page);
       await pos.cargarPosDesdeDashboard();
-      await pos.cerrarModalNotificacionesSiAparece();
-      await pos.cerrarAvisoConsecutivoSiAparece();
-      await pos.cerrarTodosLosToastsSiAparecen();
+      await pos.cerrarOverlaysConocidos();
       const erroresJS = espiarErroresJS(page);
 
-      await agregarProductosMultiples(pos, `credito ${Date.now()}`);
+      await pos.agregarProductoNormalFraccionadoYRapido('Orden Caja', `credito ${Date.now()}`);
 
       // Crédito exige cliente real (ver test 5) — se selecciona antes de abrir el menú.
       await pos.seleccionarClienteExistente();
@@ -550,12 +454,10 @@ test.describe('Orden de Caja — Crear', () => {
       test.setTimeout(TIMEOUTS.TEST);
       const pos = new PosPage(page);
       await pos.cargarPosDesdeDashboard();
-      await pos.cerrarModalNotificacionesSiAparece();
-      await pos.cerrarAvisoConsecutivoSiAparece();
-      await pos.cerrarTodosLosToastsSiAparecen();
+      await pos.cerrarOverlaysConocidos();
       const erroresJS = espiarErroresJS(page);
 
-      await agregarProductosMultiples(pos, `credito desc ${Date.now()}`);
+      await pos.agregarProductoNormalFraccionadoYRapido('Orden Caja', `credito desc ${Date.now()}`);
 
       let totalAntes = 0;
       await test.step(`Activar descuento general del ${DESCUENTO_GENERAL_PCT}% y validar que se aplicó`, async () => {

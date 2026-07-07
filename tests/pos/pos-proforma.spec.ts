@@ -1,10 +1,5 @@
 import { test, expect, Response } from '@playwright/test';
-import { PosPage, TIMEOUTS, TipoProforma, DESCUENTO_INDIVIDUAL_PCT, DESCUENTO_GENERAL_PCT, PRECIO_PRODUCTO_RAPIDO } from './pos.page';
-
-// Producto real y estable del catálogo, ya usado por el resto de la suite
-// (pos-orden-caja.spec.ts) como "producto normal" — evita depender de la
-// posición en el grid o de un producto de precio variable.
-const PRODUCTO_NORMAL = 'FRENOS';
+import { PosPage, TIMEOUTS, TipoProforma, DESCUENTO_INDIVIDUAL_PCT, DESCUENTO_GENERAL_PCT } from './pos.page';
 
 const TIPOS_PROFORMA: { tipo: TipoProforma; etiqueta: string }[] = [
   { tipo: 'normal', etiqueta: 'Normal' },
@@ -19,26 +14,9 @@ const TIPOS_PROFORMA: { tipo: TipoProforma; etiqueta: string }[] = [
 /** Carga el POS y agrega un producto de precio fijo — punto de partida común a todos los escenarios. */
 async function cargarPosConProducto(pos: PosPage) {
   await pos.cargarPosDesdeDashboard();
-  await pos.cerrarModalNotificacionesSiAparece();
-  await pos.cerrarAvisoConsecutivoSiAparece();
-  await pos.cerrarTodosLosToastsSiAparecen();
-  await pos.buscarProductoEnGrid(PRODUCTO_NORMAL);
-  await pos.agregarProductoPorNombre(PRODUCTO_NORMAL);
-}
-
-/**
- * Agrega los tres tipos de producto pedidos (fraccionado primero: crea uno
- * nuevo y recarga el POS, lo que vaciaría cualquier producto ya agregado —
- * mismo orden y motivo ya usados en pos-orden-caja.spec.ts). El producto
- * normal se busca con buscarProductoEnGrid() antes de agregarlo por nombre,
- * igual que el resto de la suite, para no depender de la vista por defecto
- * del grid.
- */
-async function agregarProductosMixtos(pos: PosPage, sufijo: string) {
-  await pos.crearYAgregarProductoFraccionadoSimple(`Fraccionado Proforma ${sufijo}`);
-  await pos.buscarProductoEnGrid(PRODUCTO_NORMAL);
-  await pos.agregarProductoPorNombre(PRODUCTO_NORMAL);
-  await pos.agregarProductoRapidoSimple(`Rápido Proforma ${sufijo}`, PRECIO_PRODUCTO_RAPIDO);
+  await pos.cerrarOverlaysConocidos();
+  const productoNormal = await pos.obtenerPrimerProductoNormal();
+  await pos.agregarProductoAlCarrito(productoNormal);
 }
 
 /** Abre "Crear Proforma", selecciona el tipo y guarda — sin tocar cliente ni vendedor. */
@@ -166,16 +144,14 @@ test.describe('Proformas — Crear', () => {
         test.setTimeout(TIMEOUTS.TEST);
         const pos = new PosPage(page);
         await pos.cargarPosDesdeDashboard();
-        await pos.cerrarModalNotificacionesSiAparece();
-        await pos.cerrarAvisoConsecutivoSiAparece();
-        await pos.cerrarTodosLosToastsSiAparecen();
+        await pos.cerrarOverlaysConocidos();
 
         const monedaOriginal = tipo === 'taller' ? await pos.asegurarMonedaBaseActiva() : null;
         try {
           let clavesAntes: string[] = [];
           await test.step('Agregar producto normal, rápido y fraccionado', async () => {
             clavesAntes = await pos.obtenerClavesProductos();
-            await agregarProductosMixtos(pos, `${etiqueta} ${Date.now()}`);
+            await pos.agregarProductoNormalFraccionadoYRapido('Proforma', `${etiqueta} ${Date.now()}`);
             await expect.poll(async () => (await pos.obtenerClavesProductos()).length).toBeGreaterThanOrEqual(clavesAntes.length + 3);
           });
 
@@ -200,13 +176,11 @@ test.describe('Proformas — Crear', () => {
         test.setTimeout(TIMEOUTS.TEST);
         const pos = new PosPage(page);
         await pos.cargarPosDesdeDashboard();
-        await pos.cerrarModalNotificacionesSiAparece();
-        await pos.cerrarAvisoConsecutivoSiAparece();
-        await pos.cerrarTodosLosToastsSiAparecen();
+        await pos.cerrarOverlaysConocidos();
 
         const monedaOriginal = tipo === 'taller' ? await pos.asegurarMonedaBaseActiva() : null;
         try {
-          await agregarProductosMixtos(pos, `Desc Individual ${etiqueta} ${Date.now()}`);
+          await pos.agregarProductoNormalFraccionadoYRapido('Proforma', `Desc Individual ${etiqueta} ${Date.now()}`);
           await pos.desactivarDescuentoGeneral();
 
           let clavesProductos: string[] = [];
@@ -252,13 +226,11 @@ test.describe('Proformas — Crear', () => {
         test.setTimeout(TIMEOUTS.TEST);
         const pos = new PosPage(page);
         await pos.cargarPosDesdeDashboard();
-        await pos.cerrarModalNotificacionesSiAparece();
-        await pos.cerrarAvisoConsecutivoSiAparece();
-        await pos.cerrarTodosLosToastsSiAparecen();
+        await pos.cerrarOverlaysConocidos();
 
         const monedaOriginal = tipo === 'taller' ? await pos.asegurarMonedaBaseActiva() : null;
         try {
-          await agregarProductosMixtos(pos, `Desc General ${etiqueta} ${Date.now()}`);
+          await pos.agregarProductoNormalFraccionadoYRapido('Proforma', `Desc General ${etiqueta} ${Date.now()}`);
 
           // Mismo criterio ya usado en pos-orden-caja.spec.ts (test "Crear una
           // Orden de Caja utilizando descuento general"): activar, expandir el

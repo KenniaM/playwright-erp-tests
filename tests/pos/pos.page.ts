@@ -106,6 +106,19 @@ const L = {
   CAT_VARIANTES:     '#btn_cate_id_174',
   CAT_ACTIVE_CLASS:  'left_category_active',
 
+  // Contenedor con scroll infinito del grid de productos (Vista Cuadrícula,
+  // el estilo activo por defecto — ver VISTA_ESTILO_ACTUAL). Confirmado en
+  // vivo en pos.js (bindProductBoxScroll()): un listener de scroll real
+  // ligado a esta misma clase dispara search_product(1)/search_service(1)
+  // al acercarse al final, cargando la siguiente página del catálogo
+  // (is_append=1, misma respuesta HTML de getPosProductSearch) — es el
+  // mecanismo genuino de paginación de la propia UI, no un endpoint
+  // reverse-engineered con parámetros propios. Se usa para ampliar cuántas
+  // tarjetas hay disponibles al buscar un producto por característica
+  // (ver localizarPrimerProducto()) sin depender de ningún término de
+  // búsqueda ni categoría.
+  GRID_SCROLL_CONTENEDOR: '.content_product_style_box',
+
   // Toggle de vista de productos: lista vs. cuadrícula
   VISTA_LISTA:            '#style_list',
   VISTA_CUADRICULA:       '#style_box',
@@ -504,6 +517,39 @@ const L = {
   // el toast "Error al enviar proforma!").
   AJAX_ENVIAR_PROFORMA_CORREO: 'sendProformByEmail',
 
+  // ─── "Generar Apartado" (mismo menú que "Enviar a caja"/Proforma, L.ORDEN_CAJA_MENU_BTN) ──
+  // Confirmado en vivo (Fase 1 + investigación de Riesgo #1): a diferencia de
+  // Proforma/Enviar a caja, "Generar Apartado" NO abre un modal propio — reutiliza
+  // el mismo modal de pago normal (#dialog_payment), alternando cuál botón de
+  // confirmación queda visible (#make_layaway en vez de #make_payment). Por eso
+  // no existe un DIALOG_APARTADO propio: el botón #make_layaway es la única señal
+  // confiable de que el modal quedó en modo Apartado.
+  APARTADO_MENU_ITEM:  'li.btn_layaway_sale',
+  APARTADO_BTN_GENERAR: '#make_layaway',
+
+  // Búsqueda de cliente DENTRO del modal de pago (Forma 2) — confirmado en vivo
+  // que es un input propio (#search_pos_customer_modal), distinto al de arriba
+  // del carrito (CLIENTE_INPUT_BUSQUEDA), que dispara el mismo AJAX
+  // (CLIENTE_AJAX_BUSQUEDA). A diferencia de lo que sugería una primera lectura
+  // del código (que apuntaba a las tarjetas .customer-list-pos compartidas con
+  // Forma 1): esas tarjetas SÍ se renderizan pero quedan anidadas dentro de un
+  // contenedor que permanece display:none mientras el modal está abierto
+  // (confirmado en vivo inspeccionando todo el árbol del DOM) — no son lo que
+  // el usuario ve ni puede clickear. El control real y VISIBLE es un Chosen
+  // (#payment_credit_client_chosen) — mismo patrón que
+  // ORDEN_CAJA_CLIENTE_CHOSEN. Confirmado en vivo que elegir una opción ahí sí
+  // sincroniza #customer_select (el campo que add_layaway() realmente lee),
+  // pese a no tener un handler .change() explícito localizado en pos.js.
+  APARTADO_CLIENTE_INPUT_BUSQUEDA: '#search_pos_customer_modal',
+  APARTADO_CLIENTE_BTN_BUSCAR:     '.modal_search_customer_a .search_parameter_addon',
+  APARTADO_CLIENTE_CHOSEN:         '#payment_credit_client_chosen',
+
+  // Petición AJAX real que crea el Apartado (confirmado en vivo interceptando
+  // la red tras confirmar el SweetAlert de advertencia "¿Está seguro de
+  // realizar este Apartado?"). Responde texto plano: el id numérico creado
+  // (éxito) o "0"/vacío (fallo) — mismo contrato que el resto de la suite.
+  AJAX_GUARDAR_APARTADO: 'addPosLayaway',
+
   // ─── Moneda (header principal del POS, fuera de cualquier modal) ───────────
   // Mismo tipo de botón MDL que el resto de menús del POS (#menu_cash,
   // #demo-menu-top-right) — confirmado en vivo que overlays conocidos
@@ -642,13 +688,6 @@ export type TipoPagoOrdenCaja = 'contado' | 'credito';
 // excluyentes, confirmado en vivo (Fase 1).
 export type TipoProforma = 'normal' | 'consignacion' | 'taller';
 
-// Nombre de un servicio real y único en el catálogo del tab "Servicios" —
-// confirmado contando coincidencias exactas en el DOM en vivo (30 servicios
-// visibles, "0-ST-01" aparece una sola vez). Varios servicios del catálogo
-// comparten nombre (p. ej. "4x4 no funciona" aparece 3 veces), así que no
-// cualquier nombre sirve para una búsqueda por texto exacto.
-export const NOMBRE_SERVICIO = '0-ST-01';
-
 // Tipo de vehículo para el wizard "End. Pintura": a diferencia de parte/pieza/
 // servicio (catálogo configurable por la empresa), el tipo de vehículo es una
 // lista fija del <select> de la interfaz (Hatchback, Crossover, Minivan, SUV,
@@ -682,13 +721,6 @@ export const CABYS_BUSQUEDA_SIN_IVA = 'leche';
 // Precio base para el producto rápido de prueba; sin IVA aplicado hasta que
 // se selecciona un CABYS (ver esperarIvaAutocompletado()).
 export const PRECIO_PRODUCTO_RAPIDO = '1000';
-
-// Término de búsqueda de producto para el formulario "Crear Combo" — mismo
-// producto real que ya usa el resto de la suite (facturar dos productos con
-// descuento individual), en vez de un término genérico que trae productos de
-// prueba con datos inconsistentes (nombres/cantidades basura confirmados en
-// vivo con búsquedas genéricas como "producto").
-export const COMBO_BUSQUEDA_PRODUCTO = 'FRENOS';
 
 // ─── Tipos de resultado del descuento individual ───────────────────────────────
 
@@ -794,6 +826,46 @@ export type LineaCarrito = {
                                     // pos.js:695, comentado en seleccionarIvaManualmente()).
 };
 
+// ─── Metadatos funcionales de una tarjeta de producto del grid ─────────────────
+//
+// Investigado en vivo, no asumido: cada tarjeta del grid (`.product_box_name`)
+// lleva un onclick="add_to_table(...)" cuyos argumentos son EXACTAMENTE los
+// parámetros reales de la función (confirmada leyendo el pos.js servido en
+// vivo, no solo infiriéndolos de los valores observados):
+//
+//   function add_to_table(id, name, price, max_discount, quantity, apply_iva,
+//     item_type, company_id, product_warehouse_id = 0, is_fragmented,
+//     quantity_sale, is_variant, complete_name, ...)
+//
+// Esto es evidencia funcional real del propio sistema —no un nombre, ni una
+// categoría— para cada característica que un escenario pueda necesitar:
+//   - apply_iva (posición 6): '1'/'0' → si el producto tiene IVA aplicado.
+//   - item_type (posición 7): '1' = producto, '2' = servicio — confirmado en
+//     vivo contrastando el tab "Servicios" (siempre item_type=2) contra el
+//     grid de productos (siempre item_type=1 en este ambiente).
+//   - is_fragmented (posición 10): '1'/'0' → si es un Producto Fraccionado —
+//     confirmado en vivo contrastando la categoría "Productos Fraccionados"
+//     (siempre is_fragmented=1) contra productos simples (siempre '0'). Ya
+//     NO se usa esa categoría para localizarlos (ver localizarPrimerProducto),
+//     solo sirvió para confirmar el significado de este parámetro.
+//   - quantity (posición 5): inventario disponible del producto (puede ser
+//     negativo si la compañía permite vender con inventario en contra,
+//     confirmado en vivo: `allow_negative_products=1` en la búsqueda real del
+//     grid) — para servicios es un tope arbitrario (300 en todos los
+//     servicios observados), no inventario real, así que "con inventario"
+//     solo aplica a item_type=1.
+export type MetadatoProducto = {
+  indice: number;      // posición dentro de los `.product_box_name` actualmente cargados
+  locator: Locator;
+  id: string;
+  nombre: string;
+  precio: number;
+  cantidadDisponible: number;
+  aplicaIva: boolean;
+  tipoItem: number;     // 1 = producto, 2 = servicio
+  esFraccionado: boolean;
+};
+
 // ─── Page Object ──────────────────────────────────────────────────────────────
 
 export class PosPage {
@@ -838,11 +910,28 @@ export class PosPage {
   }
 
   /**
+   * Carga el POS y decide qué hacer con el modal "Abrir Caja" si aparece: lo valida y
+   * lo cierra sin completar la apertura, ya que agregar productos no requiere la caja
+   * abierta (eso se decide más adelante, al facturar). Comportamiento esperado, no un
+   * error. Centralizado aquí: existía duplicado de forma idéntica como función local
+   * en pos-cierre-caja.spec.ts, pos-navegacion.spec.ts y pos.spec.ts.
+   */
+  async cargarPosYCerrarModalSiAparece() {
+    await this.irAlPos();
+    await this.esperarEstadoInicial();
+    if (await this.modalAbrirCajaVisible()) {
+      await expect(this.modalAbrirCaja).toBeVisible();
+      await expect(this.modalAbrirCaja.getByText(CAJA_TEXTO)).toBeVisible();
+      await this.cerrarModalAbrirCaja();
+    }
+  }
+
+  /**
    * Navega al POS pasando primero por el Dashboard, en la misma pestaña, y
    * resuelve el modal "Abrir Caja" si aparece. Pensado únicamente para el
    * flujo de "Producto Rápido" — el resto de la suite sigue entrando
-   * directo vía irAlPos() (usado por cargarPosYCerrarModalSiAparece en
-   * pos.spec.ts), que no necesita este paso extra.
+   * directo vía irAlPos() (usado por cargarPosYCerrarModalSiAparece(), más
+   * arriba en esta misma clase), que no necesita este paso extra.
    *
    * Motivo (condición de carrera real de la aplicación, no un problema de
    * automatización): dentro del mismo bloque `$(document).ready()` de
@@ -1079,6 +1168,18 @@ export class PosPage {
   }
 
   /**
+   * Presiona el primer "Facturar" (abre el modal de pago). Este botón nunca requiere
+   * abrir la caja —eso solo puede ocurrir al confirmar el pago, más adelante— así que
+   * aquí no se valida ni se intenta abrir la caja en ningún caso. Centralizado aquí:
+   * existía duplicado de forma idéntica como función local en pos-crear.spec.ts,
+   * pos-facturar.spec.ts, pos-navegacion.spec.ts y pos.spec.ts.
+   */
+  async abrirModalDePago() {
+    await this.presionarFacturar();
+    await this.esperarModalPago();
+  }
+
+  /**
    * Agrega al carrito el primer producto que se pueda facturar directamente,
    * recorriendo el catálogo completo (sin depender de qué producto sea ni de
    * en qué posición esté). Si un producto requiere un paso adicional antes de
@@ -1182,6 +1283,22 @@ export class PosPage {
     await this.page.waitForTimeout(PAUSES.VER_MONTO);
   }
 
+  /**
+   * Variante de seleccionarPagoExacto() con un monto explícito en vez del
+   * total de la factura — necesaria para el abono inicial de Apartado con
+   * tarjeta/SINPE/transacción: a diferencia de Facturar (donde estos 3
+   * métodos siempre exigen el monto exacto del total), el abono de un
+   * Apartado nunca puede ser igual ni mayor al total (confirmado en vivo,
+   * Fase 1 — ver make_layaway()/confirm_add_layaway() en pos_layaway.js),
+   * así que reutiliza el mismo cambio de checkbox (_cambiarMetodoPago) pero
+   * sin forzar el monto al total completo.
+   */
+  async seleccionarPagoParcial(metodo: MetodoPago, monto: string) {
+    await this._cambiarMetodoPago(metodo.checkboxId);
+    await this.page.locator(metodo.montoLocator).fill(monto);
+    await this.page.waitForTimeout(PAUSES.VER_MONTO);
+  }
+
   /** Aviso de "consecutivo de facturación fuera de rango": advertencia informativa del sistema, no bloqueante. */
   get avisoConsecutivoFueraDeRango() {
     return this.page.locator('.noty_bar').filter({ hasText: /consecutivo/i });
@@ -1223,6 +1340,21 @@ export class PosPage {
   }
 
   /**
+   * Cierra, en este orden, los tres overlays opcionales que el POS puede
+   * mostrar tras cargar (modal de permisos de notificación, aviso de
+   * consecutivo fuera de rango, y cualquier toast "noty" restante). Ninguno
+   * de los tres es parte del flujo de negocio bajo prueba; su ausencia es
+   * igual de válida que su aparición. Centralizado aquí: esta misma
+   * secuencia de 3 llamadas, en este mismo orden, estaba duplicada de forma
+   * idéntica en la mayoría de los tests de la suite tras cargar el POS.
+   */
+  async cerrarOverlaysConocidos() {
+    await this.cerrarModalNotificacionesSiAparece();
+    await this.cerrarAvisoConsecutivoSiAparece();
+    await this.cerrarTodosLosToastsSiAparecen();
+  }
+
+  /**
    * Presiona el botón "Facturar" del modal de pago (confirma el pago), sin esperar
    * su resultado. Es este botón —no el que abre el modal de pago— el que puede
    * mostrar el modal "Abrir Caja" si la caja está cerrada.
@@ -1240,6 +1372,73 @@ export class PosPage {
     await this.page.waitForTimeout(PAUSES.VER_FACTURA);
     await printPage.close();
     await this.page.waitForTimeout(PAUSES.POST_CIERRE);
+  }
+
+  /**
+   * Presiona el "Facturar" del modal de pago (confirma el pago) y monitorea lo que
+   * ocurre después, sin asumir que el modal "Abrir Caja" —si aparece— lo hace
+   * inmediatamente: el backend puede tardar en procesar la solicitud antes de
+   * mostrarlo. Por la misma razón, la ventana de impresión puede abrirse de forma
+   * síncrona junto con la respuesta del click, así que la espera de ambos eventos
+   * (popup y modal) se arma ANTES de cada click —incluidos los reintentos—, nunca
+   * después: un listener registrado después del click puede perderse el evento.
+   *
+   * Si el modal "Abrir Caja" aparece en cualquier momento antes de terminar la
+   * facturación (comportamiento esperado, no un error), se valida, se completa la
+   * apertura, se confirma que desapareció y se vuelve a presionar "Facturar" —con
+   * las esperas nuevamente armadas antes de ese click— hasta obtener el resultado
+   * final: la ventana de impresión, que sí forma parte del flujo real del sistema.
+   *
+   * Centralizado aquí: existía duplicado (idéntico salvo un puñado de líneas de
+   * comentario) como función local en pos-crear.spec.ts, pos-facturar.spec.ts,
+   * pos-navegacion.spec.ts y pos.spec.ts.
+   */
+  async confirmarPagoAbriendoCajaSiEsNecesario() {
+    const MAX_INTENTOS = 3;
+
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      const popupPromise = this.page.waitForEvent('popup', { timeout: TIMEOUTS.PRINT_POPUP })
+        .then((printPage) => ({ tipo: 'popup' as const, printPage }));
+      const modalPromise = this.modalAbrirCaja.waitFor({ state: 'visible', timeout: TIMEOUTS.PRINT_POPUP })
+        .then(() => ({ tipo: 'modalAbrirCaja' as const }));
+
+      await this.presionarConfirmarPago();
+      await this.cerrarAvisoConsecutivoSiAparece();
+
+      const resultado = await Promise.race([popupPromise, modalPromise]);
+
+      if (resultado.tipo === 'popup') {
+        await this.mostrarYCerrarVentanaImpresion(resultado.printPage);
+
+        // El sistema puede mostrar además un SweetAlert "¿Desea imprimir copia?"
+        // independiente del popup ya cerrado (confirmado en vivo) — la venta ya
+        // se completó, así que se descarta con "Cancelar" en vez de pedir una
+        // copia extra. Su overlay, si queda abierto, bloquea clicks posteriores.
+        const avisoCopia = this.page.locator('.sweet-alert.visible', { hasText: '¿Desea imprimir copia?' });
+        const aparecioAvisoCopia = await avisoCopia
+          .waitFor({ state: 'visible', timeout: 5_000 })
+          .then(() => true)
+          .catch(() => false);
+        if (aparecioAvisoCopia) {
+          await avisoCopia.locator('button.cancel').click();
+          await avisoCopia.waitFor({ state: 'hidden', timeout: TIMEOUTS.PAYMENT_MODAL }).catch(() => {});
+        }
+
+        return;
+      }
+
+      // El modal "Abrir Caja" apareció: se valida, se completa la apertura y se
+      // confirma que desapareció antes de volver al inicio del ciclo, donde se arma
+      // una nueva espera de popup/modal antes del siguiente click en "Facturar".
+      await expect(this.modalAbrirCaja).toBeVisible();
+      await this.completarAperturaCaja();
+      await expect(this.modalAbrirCaja).toBeHidden();
+    }
+
+    throw new Error(
+      `La facturación no se completó tras ${MAX_INTENTOS} intentos de abrir la caja: ` +
+      'el sistema siguió pidiendo abrir la caja o nunca mostró la ventana de impresión.'
+    );
   }
 
   /** Verifica que no quedan filas en el carrito tras la venta. */
@@ -1330,6 +1529,242 @@ export class PosPage {
       [...document.querySelectorAll('#table_buy_list p[id^="drag_and_drop_"]')]
         .map(el => el.id.replace('drag_and_drop_', ''))
     );
+  }
+
+  // ─── Localización de productos por característica funcional (sin nombres) ──
+  //
+  // Ninguno de los métodos de esta sección busca un producto por nombre,
+  // código ni categoría: todos leen argumentos reales de add_to_table() (ver
+  // el comentario de MetadatoProducto) para decidir qué tarjeta cumple la
+  // característica pedida, así que funcionan sin importar cómo se llamen los
+  // productos del catálogo del ambiente donde corra la suite.
+
+  /**
+   * Parsea el onclick="add_to_table(...)" de cada tarjeta actualmente
+   * cargada usando el propio motor JS del navegador (`new Function`), no un
+   * regex: los nombres de producto pueden traer comillas, backslashes y
+   * otros caracteres que un regex tendría que escapar caso por caso
+   * (confirmado en vivo con un producto de prueba cuyo nombre es únicamente
+   * símbolos) — el intérprete real de JS los maneja sin ambigüedad. Se
+   * sobreescribe temporalmente `window.add_to_table` para CAPTURAR los
+   * argumentos sin ejecutar sus efectos secundarios reales (no agrega nada
+   * al carrito, no dispara ningún AJAX).
+   *
+   * También se captura el texto VISIBLE de cada tarjeta (`textContent`),
+   * por separado del argumento `name` ya capturado: confirmado en vivo que
+   * para nombres con backslashes ambos DIFIEREN (el name capturado ya pasó
+   * por el des-escapado de cadenas de JS al ejecutar el onclick, mientras
+   * que el texto visible es HTML plano, sin ese des-escapado — un producto
+   * de prueba real con backslashes en el nombre expuso esto: 4 backslashes
+   * en el texto visible contra 2 en el argumento). `productoPorNombre()` y
+   * el resto de la suite que busca "por nombre" comparan contra el texto
+   * VISIBLE, así que `MetadatoProducto.nombre` debe ser ese mismo texto —
+   * de lo contrario, un producto localizado aquí podría no encontrarse
+   * nunca al buscarlo luego por su propio nombre.
+   */
+  private async _extraerArgumentosAddToTable(): Promise<{ args: (string | number)[] | null; textoVisible: string }[]> {
+    return this.page.evaluate((selector) => {
+      const cards = [...document.querySelectorAll(selector)];
+      const original = (window as any).add_to_table;
+      const out: any[] = [];
+      cards.forEach((el) => {
+        const textoVisible = (el.textContent || '').trim();
+        const onclick = el.getAttribute('onclick') || '';
+        if (!onclick.trim().startsWith('add_to_table')) { out.push({ args: null, textoVisible }); return; }
+        let capturados: any[] | null = null;
+        (window as any).add_to_table = (...args: any[]) => { capturados = args; };
+        try { new Function(onclick)(); } catch { /* tarjeta con un onclick inesperado: se descarta */ }
+        out.push({ args: capturados, textoVisible });
+      });
+      (window as any).add_to_table = original;
+      return out;
+    }, L.PRODUCTO);
+  }
+
+  /**
+   * Devuelve los metadatos funcionales de todas las tarjetas de producto
+   * actualmente cargadas en el grid (la categoría/tab que esté activa en
+   * este momento), en el mismo orden que `this.page.locator(L.PRODUCTO)`.
+   */
+  async obtenerMetadatosProductosVisibles(): Promise<MetadatoProducto[]> {
+    const crudos = await this._extraerArgumentosAddToTable();
+    const productos = this.page.locator(L.PRODUCTO);
+    const metadatos: MetadatoProducto[] = [];
+    crudos.forEach(({ args, textoVisible }, indice) => {
+      if (!args) return;
+      const [id, , precio, , cantidad, aplicaIva, tipoItem, , , esFraccionado] = args;
+      metadatos.push({
+        indice,
+        locator: productos.nth(indice),
+        id: String(id),
+        nombre: textoVisible,
+        precio: parseFloat(String(precio)),
+        cantidadDisponible: parseFloat(String(cantidad)),
+        aplicaIva: String(aplicaIva) === '1',
+        tipoItem: parseInt(String(tipoItem), 10),
+        esFraccionado: String(esFraccionado) === '1',
+      });
+    });
+    return metadatos;
+  }
+
+  /**
+   * Dispara la paginación real del grid (Vista Cuadrícula, estilo activo por
+   * defecto): lleva el scroll de GRID_SCROLL_CONTENEDOR al final y despacha
+   * un evento "scroll" real, el mismo gesto que bindProductBoxScroll() en
+   * pos.js escucha para pedir la siguiente página (search_product(1) /
+   * search_service(1), según el tab activo). Devuelve false cuando la
+   * cantidad de tarjetas no creció tras el intento — señal de que el
+   * catálogo ya está completo — para que quien llama deje de insistir.
+   */
+  private async _cargarMasProductosScrolleando(cantidadAntes: number): Promise<boolean> {
+    const contenedor = this.page.locator(L.GRID_SCROLL_CONTENEDOR);
+    await contenedor.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+      el.dispatchEvent(new Event('scroll'));
+    });
+    return expect.poll(
+      async () => this.page.locator(L.PRODUCTO).count(),
+      { timeout: 5_000 }
+    ).toBeGreaterThan(cantidadAntes).then(() => true).catch(() => false);
+  }
+
+  /**
+   * Localiza el primer producto (en el grid/tab actualmente activo) que
+   * cumpla `predicado`, paginando con scroll real cuantas veces haga falta
+   * — nunca buscando por nombre ni cambiando de categoría. Falla con un
+   * mensaje explícito, indicando cuántas tarjetas se llegaron a revisar, si
+   * el catálogo entero (ya sin más páginas que cargar) no tiene ninguna que
+   * cumpla la condición.
+   */
+  async localizarPrimerProducto(
+    predicado: (metadato: MetadatoProducto) => boolean,
+    descripcion: string
+  ): Promise<MetadatoProducto> {
+    const MAX_PAGINACIONES = 20;
+    for (let intento = 0; intento <= MAX_PAGINACIONES; intento++) {
+      const metadatos = await this.obtenerMetadatosProductosVisibles();
+      const encontrado = metadatos.find(predicado);
+      if (encontrado) return encontrado;
+
+      const hayMas = await this._cargarMasProductosScrolleando(metadatos.length);
+      if (!hayMas) {
+        throw new Error(
+          `No se encontró ningún producto que cumpla "${descripcion}" tras revisar ` +
+          `las ${metadatos.length} tarjetas de todo el catálogo visible (no hay más ` +
+          'páginas que cargar). Se requiere al menos un producto con esa característica ' +
+          'en el ambiente de prueba — este helper no crea uno automáticamente.'
+        );
+      }
+    }
+    throw new Error(
+      `No se encontró ningún producto que cumpla "${descripcion}" tras ${MAX_PAGINACIONES} ` +
+      'cargas adicionales del catálogo (posible bucle: revisar manualmente).'
+    );
+  }
+
+  /** Primer producto normal: item_type=1 (no servicio) y no Fraccionado. */
+  async obtenerPrimerProductoNormal(): Promise<MetadatoProducto> {
+    return this.localizarPrimerProducto(
+      (m) => m.tipoItem === 1 && !m.esFraccionado,
+      'producto normal (no fraccionado, no servicio)'
+    );
+  }
+
+  /**
+   * Segundo producto normal, distinto del ya localizado por
+   * `obtenerPrimerProductoNormal()` — para escenarios que necesitan dos
+   * líneas de producto real y diferente en el carrito (p. ej. descuento
+   * individual por línea), sin depender de dos nombres fijos del catálogo.
+   */
+  async obtenerSegundoProductoNormalDistinto(nombrePrimero: string): Promise<MetadatoProducto> {
+    return this.localizarPrimerProducto(
+      (m) => m.tipoItem === 1 && !m.esFraccionado && m.nombre !== nombrePrimero,
+      `un segundo producto normal distinto de "${nombrePrimero}"`
+    );
+  }
+
+  /** Primer Producto Fraccionado (is_fragmented=1), sin importar su nombre ni su categoría. */
+  async obtenerPrimerProductoFraccionado(): Promise<MetadatoProducto> {
+    return this.localizarPrimerProducto((m) => m.esFraccionado, 'producto Fraccionado');
+  }
+
+  /** Primer producto (no servicio) con IVA aplicado (apply_iva=1). */
+  async obtenerPrimerProductoConIva(): Promise<MetadatoProducto> {
+    return this.localizarPrimerProducto((m) => m.tipoItem === 1 && m.aplicaIva, 'producto con IVA');
+  }
+
+  /** Primer producto (no servicio) sin IVA aplicado (apply_iva=0). */
+  async obtenerPrimerProductoSinIva(): Promise<MetadatoProducto> {
+    return this.localizarPrimerProducto((m) => m.tipoItem === 1 && !m.aplicaIva, 'producto sin IVA');
+  }
+
+  /** Primer producto (no servicio) con inventario disponible real (cantidad > 0). */
+  async obtenerPrimerProductoConInventario(): Promise<MetadatoProducto> {
+    return this.localizarPrimerProducto(
+      (m) => m.tipoItem === 1 && m.cantidadDisponible > 0,
+      'producto con inventario disponible'
+    );
+  }
+
+  /**
+   * Primer servicio del tab "Servicios" (item_type=2). Cambia a ese tab si
+   * no está ya activo — idempotente, seguro de llamar aunque el test ya
+   * haya hecho el cambio explícitamente antes.
+   */
+  async obtenerPrimerServicio(): Promise<MetadatoProducto> {
+    if (!(await this.tabEstaActivo(this.tabServicios))) {
+      await this.tabServicios.click();
+      await expect.poll(() => this.tabEstaActivo(this.tabServicios), { timeout: TIMEOUTS.PRODUCTS_LOAD }).toBe(true);
+    }
+    return this.localizarPrimerProducto((m) => m.tipoItem === 2, 'servicio');
+  }
+
+  /**
+   * Agrega al carrito un producto ya localizado por cualquiera de los
+   * métodos `obtenerPrimer...` de esta sección (excepto el Fraccionado, que
+   * necesita completar el modal "Seleccionar Cantidad" — ver
+   * `agregarProductoFraccionadoAlCarrito`). Devuelve la clave de la línea
+   * agregada.
+   */
+  async agregarProductoAlCarrito(metadato: MetadatoProducto): Promise<string> {
+    const clavesAntes = await this.obtenerClavesProductos();
+    await metadato.locator.click();
+    await expect.poll(
+      async () => (await this.obtenerClavesProductos()).length,
+      { timeout: TIMEOUTS.PRODUCTS_LOAD }
+    ).toBeGreaterThan(clavesAntes.length);
+    const clavesDespues = await this.obtenerClavesProductos();
+    return clavesDespues.find((c) => !clavesAntes.includes(c))!;
+  }
+
+  /**
+   * Agrega al carrito un producto Fraccionado ya localizado con
+   * `obtenerPrimerProductoFraccionado()`, completando el modal "Seleccionar
+   * Cantidad" que ese tipo de producto siempre abre — mismo comportamiento
+   * ya documentado en `agregarProductoFraccionadoPorNombre` (click vía
+   * evaluate(), no locator.click(), por la misma condición de carrera con
+   * el modal recién abierto).
+   */
+  async agregarProductoFraccionadoAlCarrito(metadato: MetadatoProducto, cantidadFracciones = '1'): Promise<string> {
+    const clavesAntes = await this.obtenerClavesProductos();
+    await metadato.locator.evaluate((el: HTMLElement) => el.click());
+
+    await expect(
+      this.page.locator(L.DIALOG_CANTIDAD_FRACCIONADA),
+      'El modal "Seleccionar Cantidad" no apareció tras clickear el producto Fraccionado'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    await this.page.locator(L.PRODUCTO_FRACCIONADO_CANTIDAD_FRACCIONES).fill(cantidadFracciones);
+    await this.page.locator(L.PRODUCTO_FRACCIONADO_BTN_AGREGAR).click();
+    await expect(this.page.locator(L.DIALOG_CANTIDAD_FRACCIONADA)).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    await expect.poll(
+      async () => (await this.obtenerClavesProductos()).length,
+      { timeout: TIMEOUTS.PRODUCTS_LOAD }
+    ).toBeGreaterThan(clavesAntes.length);
+    const clavesDespues = await this.obtenerClavesProductos();
+    return clavesDespues.find((c) => !clavesAntes.includes(c))!;
   }
 
   /** Indica si el checkbox de descuento general está activo. */
@@ -2213,6 +2648,59 @@ export class PosPage {
     return respuestaPromise;
   }
 
+  /**
+   * Agrega un producto rápido al carrito para las pruebas de validación de
+   * IVA, con la cantidad indicada. Compone métodos ya existentes de esta
+   * misma clase —abrirProductoRapido, llenarDatosBasicosProductoRapido,
+   * manejarCabysSiAplica, seleccionarIvaManualmente— en vez de duplicar su
+   * lógica.
+   *
+   * Ya NO lee ni depende del checkbox del formulario "Producto Rápido"
+   * (#check_quick_product_apply_tax) para determinar qué validar después: ese
+   * checkbox solo sirve aquí para CONFIGURAR el producto al crearlo —sigue
+   * siendo la forma real de decirle al sistema si debe llevar impuesto—, pero
+   * la verificación de qué quedó realmente aplicado se hace por separado,
+   * después de guardar, contra `product_hide_apply_iva_<clave>` (la única
+   * fuente de verdad confirmada por el trace de red) y contra el checkbox
+   * `#show_price_with_iva` (arriba del carrito) para saber qué total leer —
+   * ver `validarLineaCarrito()`.
+   *
+   * Cuando `activarIva` es true: si el CABYS aparece, lo completa (el IVA se
+   * autocompleta a partir de él); si no aparece, lo selecciona manualmente.
+   * Cuando es false: no toca CABYS ni el checkbox de IVA en absoluto —queda
+   * en su estado por defecto, sin marcar—, que es la forma real de guardar
+   * un producto sin IVA en este ambiente (confirmado en vivo: el país
+   * configurado actualmente para esta compañía no exige CABYS para poder
+   * guardar).
+   *
+   * Centralizado aquí: existía duplicado de forma idéntica como función
+   * local en pos-crear.spec.ts, pos-facturar.spec.ts y pos.spec.ts.
+   */
+  async agregarProductoRapidoParaValidacionIva(
+    nombre: string,
+    precio: string,
+    activarIva: boolean,
+    cantidad = 1
+  ) {
+    await this.abrirProductoRapido();
+    await this.llenarDatosBasicosProductoRapido(nombre, precio);
+    if (cantidad !== 1) {
+      await this.establecerCantidadProductoRapido(cantidad);
+    }
+
+    if (activarIva) {
+      const cabysAplicado = await this.manejarCabysSiAplica(CABYS_BUSQUEDA);
+      if (cabysAplicado) {
+        await this.esperarIvaAutocompletado();
+      } else {
+        await this.seleccionarIvaManualmente();
+      }
+    }
+
+    await this.guardarProductoRapidoYObtenerRespuesta();
+    await expect(this.modalProductoRapido).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
   // ─── "Crear Combo" ──────────────────────────────────────────────────────────
 
   /** Locator del modal "Crear Combo". */
@@ -2343,6 +2831,157 @@ export class PosPage {
     );
     await this.page.locator(L.COMBO_BTN_GUARDAR).click({ force: true });
     return respuestaPromise;
+  }
+
+  /**
+   * Fija un precio válido y guarda el combo ya configurado, validando la
+   * respuesta real de red (save_company_combo) — mismo cierre reutilizado
+   * por crearComboConIva()/crearComboSinIva(). Centralizado aquí: existía
+   * duplicado de forma idéntica como función local en pos-crear.spec.ts y
+   * pos.spec.ts.
+   */
+  async guardarComboConfigurado() {
+    await this.establecerPrecioValidoCombo();
+
+    const respuesta = await this.guardarComboYObtenerRespuesta();
+    expect(respuesta.ok(), `La petición a save_company_combo no respondió OK (status ${respuesta.status()})`).toBe(true);
+    await expect(this.modalCrearCombo).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /**
+   * Pasos comunes a ambos escenarios de "Crear Combo": abrir el modal, llenar
+   * nombre/cantidad y agregar un producto real. El manejo del checkbox de IVA
+   * y de CABYS es responsabilidad de cada escenario (crearComboConIva /
+   * crearComboSinIva), porque el orden entre ambos —no solo su presencia—
+   * determina el resultado (ver el comentario de activarIvaCombo()):
+   * factorizarlo aquí evitaría poder expresar ese orden.
+   *
+   * El producto que se agrega al combo se localiza por característica
+   * funcional (obtenerPrimerProductoNormal()) ANTES de abrir el modal —el
+   * propio grid del POS, no el buscador del combo—, y su nombre real se usa
+   * como término de búsqueda dentro de "Crear Combo"
+   * (buscarYAgregarPrimerProductoAlCombo ya toma "el primer resultado
+   * disponible", nunca un nombre exacto): garantiza una coincidencia real sin
+   * depender de ningún nombre fijo del catálogo.
+   *
+   * Centralizado aquí: existía duplicado de forma idéntica como función
+   * local en pos-crear.spec.ts y pos.spec.ts.
+   */
+  async abrirCrearComboConProducto(nombre: string) {
+    const productoReal = await this.obtenerPrimerProductoNormal();
+    await this.abrirCrearCombo();
+    await this.llenarDatosBasicosCombo(nombre);
+    await this.buscarYAgregarPrimerProductoAlCombo(productoReal.nombre);
+  }
+
+  /**
+   * Escenario "Crear Combo con IVA": activa el checkbox "¿Aplicar impuesto?"
+   * PRIMERO y verifica que quedó marcado, y solo después maneja CABYS (si el
+   * formulario lo ofrece en este ambiente — depende del país configurado para
+   * la compañía, no es fijo). Ese orden es obligatorio, no cosmético:
+   * confirmado en vivo que el select de tasa (`#tax_rate_list`) SOLO se
+   * autosincroniza con la tasa real del CABYS aplicado si el checkbox ya
+   * estaba activado en ese momento — con el checkbox desmarcado, aplicar el
+   * mismo CABYS deja el select en su valor por defecto ("0% Exento") sin
+   * tocarlo. Por eso, a diferencia de una versión anterior de este helper,
+   * activarIvaCombo() ya no se limita a ser un respaldo para cuando CABYS no
+   * aparece: es el primer paso siempre.
+   *
+   * Si CABYS aparece, se aplica (CABYS_BUSQUEDA = "aceite", tasa 13%) y se
+   * valida que la tasa seleccionada en el combo coincide exactamente con la
+   * tasa que el propio CABYS sugiere (validarIvaCoincideConCabysCombo()) — no
+   * solo que "algo" quedó aplicado. Si CABYS no aparece, no se lo toca: el
+   * checkbox ya activado en el paso anterior es la única señal de "con IVA"
+   * disponible en ese ambiente.
+   *
+   * Devuelve si CABYS terminó aplicado, para que el test lo registre.
+   * Centralizado aquí: existía duplicado de forma idéntica como función
+   * local en pos-crear.spec.ts y pos.spec.ts.
+   */
+  async crearComboConIva(nombre: string): Promise<boolean> {
+    await this.abrirCrearComboConProducto(nombre);
+
+    await this.activarIvaCombo();
+    await expect(
+      this.checkboxIvaCombo,
+      'El checkbox "¿Aplicar impuesto?" de "Crear Combo" no quedó activado'
+    ).toBeChecked();
+
+    const cabysAplicado = await this.manejarCabysSiAplica(CABYS_BUSQUEDA, this.configCabysCombo);
+    if (cabysAplicado) {
+      await this.validarIvaCoincideConCabysCombo();
+    }
+
+    await this.guardarComboConfigurado();
+    return cabysAplicado;
+  }
+
+  /**
+   * Escenario "Crear Combo sin IVA": "sin IVA" es simplemente no agregarlo —
+   * el checkbox "¿Aplicar impuesto?" ya está desactivado por defecto al abrir
+   * el modal, así que no hace falta tocarlo de entrada. "Sin IVA" tampoco se
+   * simula buscando deliberadamente un CABYS de clasificación "Exento":
+   * CABYS es un campo fiscal obligatorio independiente del checkbox, así que
+   * se usa el mismo término que el escenario "con IVA" (CABYS_BUSQUEDA,
+   * "aceite") si el formulario lo ofrece en este ambiente.
+   *
+   * Aplicar ese CABYS SÍ activa el checkbox de IVA como efecto secundario —
+   * confirmado en vivo, con un desfase de ~500ms (ver
+   * esperarIvaAutocompletadoCombo(), homóloga de esperarIvaAutocompletado()
+   * de Producto Rápido) — así que hay que ESPERAR esa activación automática
+   * antes de revertirla: desactivar el checkbox de inmediato, sin esperar,
+   * corre el riesgo de ganarle la carrera al propio sistema y terminar con
+   * el checkbox marcado de todos modos.
+   *
+   * Nota de comportamiento real del sistema (confirmado en vivo): esperando
+   * correctamente esa auto-activación antes de revertirla, el checkbox
+   * termina realmente desactivado, y el combo queda guardado con
+   * `product_hide_apply_iva_<clave>="0"` e IVA real = 0 en el carrito, sin
+   * importar si se aplicó un CABYS o no.
+   *
+   * Devuelve si CABYS terminó aplicado, para que el test lo registre.
+   * Centralizado aquí: existía duplicado de forma idéntica como función
+   * local en pos-crear.spec.ts y pos.spec.ts.
+   */
+  async crearComboSinIva(nombre: string): Promise<boolean> {
+    await this.abrirCrearComboConProducto(nombre);
+
+    const cabysAplicado = await this.manejarCabysSiAplica(CABYS_BUSQUEDA, this.configCabysCombo);
+    if (cabysAplicado) {
+      await this.esperarIvaAutocompletadoCombo();
+      await this.desactivarIvaCombo();
+    }
+
+    await expect(
+      this.checkboxIvaCombo,
+      'El checkbox "¿Aplicar impuesto?" de "Crear Combo" no quedó desactivado'
+    ).not.toBeChecked();
+
+    await this.guardarComboConfigurado();
+    return cabysAplicado;
+  }
+
+  /**
+   * Busca por nombre exacto el combo recién creado en la categoría "Combos"
+   * (reutilizando productoPorNombre/agregarProductoPorNombre, igual que el
+   * resto de la suite para cualquier producto del catálogo) y devuelve la
+   * clave de la línea que se agregó al carrito. Centralizado aquí: existía
+   * duplicado de forma idéntica como función local en pos-crear.spec.ts y
+   * pos.spec.ts.
+   */
+  async buscarComboYAgregarAlCarrito(nombre: string): Promise<string> {
+    await this.categoriaCombos.click();
+    await esperarQuedaActivo(() => this.categoriaEstaActiva(this.categoriaCombos));
+    await expect(
+      this.productoPorNombre(nombre),
+      `El combo "${nombre}" no aparece en la categoría "Combos"`
+    ).toHaveCount(1, { timeout: TIMEOUTS.PRODUCTS_LOAD });
+
+    const clavesAntes = await this.obtenerClavesProductos();
+    await this.agregarProductoPorNombre(nombre);
+    await expect.poll(async () => (await this.obtenerClavesProductos()).length).toBeGreaterThan(clavesAntes.length);
+    const clavesDespues = await this.obtenerClavesProductos();
+    return clavesDespues.find((c) => !clavesAntes.includes(c))!;
   }
 
   // ─── "Crear Producto" (primera tarjeta del grid de productos del POS) ──────
@@ -3285,11 +3924,10 @@ export class PosPage {
 
   // ─── Composiciones reutilizables de "agregar un producto más" ─────────────
   // Ambas centralizan una composición que ya existía duplicada como helper
-  // local en pos-orden-caja.spec.ts (agregarProductoRapidoSimple /
-  // crearYAgregarProductoFraccionado) — al necesitarse también en
-  // pos-proforma.spec.ts, se centralizan aquí en vez de sumar una tercera
-  // copia. Ninguna de las dos agrega lógica nueva: solo componen métodos ya
-  // existentes de este mismo Page Object.
+  // local en pos-orden-caja.spec.ts (agregarProductoRapidoSimple) — al
+  // necesitarse también en pos-proforma.spec.ts, se centralizan aquí en vez
+  // de sumar una tercera copia. Ninguna de las dos agrega lógica nueva: solo
+  // componen métodos ya existentes de este mismo Page Object.
 
   /**
    * Agrega un Producto Rápido mínimo al carrito (sin CABYS/IVA, irrelevante
@@ -3306,39 +3944,35 @@ export class PosPage {
   }
 
   /**
-   * Crea un Producto Fraccionado nuevo (mínimo: nombre + fraccionar + precio
-   * por caja/fracción, únicos campos obligatorios) y lo agrega al carrito.
-   * Recarga el POS después de crearlo (cargarPosDesdeDashboard) porque el
-   * grid por defecto no refleja productos recién creados — por eso debe
-   * llamarse ANTES de agregar cualquier otro producto al carrito en el mismo
-   * test: la recarga vacía el carrito. Devuelve la clave de la línea
+   * Localiza un Producto Fraccionado YA EXISTENTE en el catálogo —por
+   * evidencia funcional real (is_fragmented=1 en add_to_table(), ver
+   * `obtenerPrimerProductoFraccionado`), nunca por nombre ni por categoría—
+   * y lo agrega al carrito, en vez de crear uno nuevo solo para tener "algo
+   * fraccionado" que facturar/enviar a caja/cotizar, que es todo lo que
+   * estos escenarios necesitan realmente. Devuelve la clave de la línea
    * agregada.
    */
-  async crearYAgregarProductoFraccionadoSimple(nombre: string): Promise<string> {
-    await this.abrirCrearProducto();
-    await this.llenarNombreProducto(nombre);
-    await this.avanzarPasoInfoGeneralProducto();
-    await this.llenarCostoProducto('1000');
-    await this.activarFraccionarProducto();
-    await this.llenarCostosFraccionadoProducto('9000', '850', '12', '10');
-    await this.avanzarPasoCostosProducto();
-    await this.finalizarCrearProducto();
+  async agregarProductoFraccionadoExistente(cantidadFracciones = '1'): Promise<string> {
+    const metadato = await this.obtenerPrimerProductoFraccionado();
+    return this.agregarProductoFraccionadoAlCarrito(metadato, cantidadFracciones);
+  }
 
-    await this.cargarPosDesdeDashboard();
-    await this.cerrarModalNotificacionesSiAparece();
-    await this.cerrarAvisoConsecutivoSiAparece();
-    await this.cerrarTodosLosToastsSiAparecen();
-
-    const clavesAntes = await this.obtenerClavesProductos();
-    await this.buscarProductoEnGrid(nombre);
-    await this.agregarProductoFraccionadoPorNombre(nombre, '1');
-    await expect.poll(
-      async () => (await this.obtenerClavesProductos()).length,
-      { timeout: TIMEOUTS.PRODUCTS_LOAD }
-    ).toBeGreaterThan(clavesAntes.length);
-
-    const clavesDespues = await this.obtenerClavesProductos();
-    return clavesDespues.find((c) => !clavesAntes.includes(c))!;
+  /**
+   * Agrega al carrito los tres tipos de producto que necesitan Orden de Caja
+   * y Proforma: un Fraccionado y un normal ya existentes en el catálogo
+   * (localizados por característica funcional, nunca por nombre ni
+   * categoría) y un Producto Rápido nuevo. `contexto` (p. ej. "Orden Caja" /
+   * "Proforma") y `sufijo` solo etiquetan el nombre del Producto Rápido
+   * creado, para distinguirlo en el carrito entre ejecuciones. Centralizado
+   * aquí: existía duplicado (idéntico salvo esa etiqueta) como función local
+   * en pos-orden-caja.spec.ts (agregarProductosMultiples) y
+   * pos-proforma.spec.ts (agregarProductosMixtos).
+   */
+  async agregarProductoNormalFraccionadoYRapido(contexto: string, sufijo: string) {
+    await this.agregarProductoFraccionadoExistente();
+    const productoNormal = await this.obtenerPrimerProductoNormal();
+    await this.agregarProductoAlCarrito(productoNormal);
+    await this.agregarProductoRapidoSimple(`Rápido ${contexto} ${sufijo}`, PRECIO_PRODUCTO_RAPIDO);
   }
 
   // ─── Moneda del POS ─────────────────────────────────────────────────────────
@@ -3666,6 +4300,149 @@ export class PosPage {
     return popupPromise;
   }
 
+  // ─── "Generar Apartado" ─────────────────────────────────────────────────────
+  //
+  // A diferencia de Proforma y Enviar a caja, "Generar Apartado" NO abre un
+  // modal propio: reutiliza el modal de pago normal (#dialog_payment),
+  // mostrando #make_layaway en vez de #make_payment (confirmado en vivo,
+  // Fase 1). Todo lo demás del modal (cliente Forma 1/2, vendedor, métodos de
+  // pago, descuentos) son los MISMOS campos que ya usa el resto de la suite —
+  // ver seleccionarClienteExistente(), seleccionarPagoEfectivo(),
+  // seleccionarPagoExacto()/seleccionarPagoParcial(), seleccionarPagoMixto(),
+  // aplicarDescuentoIndividual(), activarDescuentoGeneral().
+
+  /** Locator del botón "GENERAR APARTADO" — única señal confiable de que el modal de pago quedó en modo Apartado. */
+  get botonGenerarApartado() {
+    return this.page.locator(L.APARTADO_BTN_GENERAR);
+  }
+
+  /**
+   * Abre el menú de acciones junto a "Facturar" (mismo menú MDL que "Enviar a
+   * caja"/"Proforma", L.ORDEN_CAJA_MENU_BTN) y selecciona "Generar Apartado".
+   * Reutiliza el mismo patrón de reintento + cierre de overlays ya probado en
+   * abrirMenuOrdenCaja()/abrirCrearProforma(), cambiando únicamente el ítem y
+   * la señal de éxito esperada (el botón #make_layaway, no un modal propio).
+   *
+   * IMPORTANTE (confirmado en vivo tras investigar a fondo un falso positivo):
+   * el POS debe haberse cargado con cargarPosDesdeDashboard() —no con
+   * cargarPosYCerrarModalSiAparece()—, igual que ya hacen pos-proforma.spec.ts
+   * y pos-orden-caja.spec.ts. Cargar directo a la URL del POS dispara una
+   * condición de carga en frío ya documentada (ver el comentario de
+   * cargarPosDesdeDashboard()) que puede abortar la inicialización de un
+   * widget no relacionado (Selectize de #invoice_customer_email) y, por
+   * efecto colateral, impedir que este botón llegue a mostrarse.
+   */
+  async abrirCrearApartado() {
+    await this.cerrarModalNotificacionesSiAparece();
+    await this.cerrarAvisoConsecutivoSiAparece();
+
+    await this.page.locator('ul.mdl-menu[data-mdl-for="demo-menu-top-right"][data-upgraded*="MaterialMenu"]')
+      .waitFor({ state: 'attached', timeout: TIMEOUTS.PRODUCTS_LOAD })
+      .catch(() => {});
+
+    const item = this.page.locator(L.APARTADO_MENU_ITEM);
+    const MAX_INTENTOS = 4;
+    let abierto = false;
+    for (let intento = 1; intento <= MAX_INTENTOS && !abierto; intento++) {
+      await this.cerrarModalNotificacionesSiAparece();
+      await this.cerrarAvisoConsecutivoSiAparece();
+
+      await this.page.evaluate(
+        (sel) => (document.querySelector(sel) as HTMLElement)?.click(),
+        L.ORDEN_CAJA_MENU_BTN
+      );
+      abierto = await item.waitFor({ state: 'visible', timeout: 2_000 }).then(() => true).catch(() => false);
+    }
+    expect(abierto, `La opción "Generar Apartado" no apareció en el menú de acciones tras ${MAX_INTENTOS} intentos`).toBe(true);
+
+    await this.page.evaluate(
+      (sel) => (document.querySelector(sel) as HTMLElement)?.click(),
+      L.APARTADO_MENU_ITEM
+    );
+
+    await expect(this.botonGenerarApartado, 'El botón "GENERAR APARTADO" no apareció tras seleccionar la opción del menú').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /**
+   * Busca y selecciona un cliente DENTRO del modal de pago (Forma 2): escribe
+   * en el input propio del modal (APARTADO_CLIENTE_INPUT_BUSQUEDA, distinto al
+   * de arriba del carrito), dispara el mismo AJAX (CLIENTE_AJAX_BUSQUEDA) y
+   * elige la primera opción real de un Chosen (APARTADO_CLIENTE_CHOSEN).
+   *
+   * Confirmado en vivo, corrigiendo un supuesto inicial equivocado: NO
+   * reutiliza las tarjetas .customer-list-pos de Forma 1 —esas sí se
+   * renderizan con los datos correctos, pero quedan anidadas dentro de un
+   * contenedor que permanece display:none mientras el modal está abierto, así
+   * que no son clickeables ni visibles para un usuario real—. El control
+   * realmente visible es el Chosen #payment_credit_client_chosen (mismo
+   * patrón que seleccionarClienteEnOrdenCaja()); confirmado en vivo que elegir
+   * una opción ahí sí sincroniza #customer_select, el campo que add_layaway()
+   * efectivamente lee al guardar.
+   */
+  async seleccionarClienteEnModalApartado(terminoBusqueda = ''): Promise<string> {
+    await this.page.locator(L.APARTADO_CLIENTE_INPUT_BUSQUEDA).fill(terminoBusqueda);
+
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.CLIENTE_AJAX_BUSQUEDA),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await this.page.locator(L.APARTADO_CLIENTE_BTN_BUSCAR).click();
+    await respuestaPromise;
+
+    await this._seleccionarPrimeraOpcionChosen(L.APARTADO_CLIENTE_CHOSEN);
+
+    const nombreCliente = await this._obtenerTextoChosenSeleccionado(L.APARTADO_CLIENTE_CHOSEN);
+    expect(nombreCliente, 'El nombre del cliente seleccionado en "Generar Apartado" no quedó visible').not.toBe('');
+
+    await expect(
+      this.page.locator(L.CLIENTE_SELECT_OCULTO),
+      'El cliente elegido en el modal no quedó registrado en #customer_select'
+    ).not.toHaveValue('');
+
+    console.log(`[seleccionarClienteEnModalApartado] Cliente seleccionado: "${nombreCliente}"`);
+    return nombreCliente;
+  }
+
+  /**
+   * Presiona "GENERAR APARTADO", confirma el SweetAlert de advertencia
+   * ("¿Está seguro de realizar este Apartado?") y espera la respuesta real de
+   * red que efectivamente lo crea (AJAX_GUARDAR_APARTADO) — mismo patrón ya
+   * usado en enviarOrdenCaja()/guardarProformaYObtenerRespuesta(): la espera
+   * del AJAX se arma ANTES de confirmar el SweetAlert, no después.
+   */
+  async guardarApartadoYObtenerRespuesta(): Promise<Response> {
+    await this.botonGenerarApartado.click();
+
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_GUARDAR_APARTADO),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await this._confirmarSweetAlertV1('No apareció la confirmación "¿Está seguro de realizar este Apartado?"');
+    return respuestaPromise;
+  }
+
+  /**
+   * Valida que "Generar Apartado" terminó exitosamente: la respuesta real de
+   * AJAX_GUARDAR_APARTADO respondió OK con un id numérico (>=1, mismo
+   * contrato que el resto de la suite), el modal de pago se cerró y el
+   * carrito quedó vacío. A diferencia de Proforma, Apartado NO tiene un modal
+   * de "Gestión" posterior (confirmado en vivo, Fase 1) — solo cierra
+   * #dialog_payment y limpia el carrito.
+   */
+  async validarApartadoCreado(respuesta: Response) {
+    expect(respuesta.ok(), `${L.AJAX_GUARDAR_APARTADO} no respondió OK (status ${respuesta.status()})`).toBe(true);
+
+    const cuerpo = (await respuesta.text()).trim();
+    expect(parseInt(cuerpo, 10), `${L.AJAX_GUARDAR_APARTADO} no devolvió un id válido (respondió "${cuerpo}")`).toBeGreaterThanOrEqual(1);
+
+    await expect(
+      this.botonGenerarApartado,
+      'El modal de pago no se cerró tras confirmar el Apartado'
+    ).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    await this.validarCarritoVacio();
+  }
+
   // ─── Precio visible de producto (grid) ─────────────────────────────────────
 
   /**
@@ -3695,7 +4472,10 @@ export class PosPage {
    * grilla sigue visible (Vista Normal), antes de activar Vista Expandida.
    */
   async obtenerCodigoProducto(nombre: string): Promise<string> {
-    return this.productoPorNombre(nombre)
+    const producto = this.productoPorNombre(nombre);
+    await expect(producto, `No se encontró exactamente un producto llamado "${nombre}" en el catálogo`).toHaveCount(1, { timeout: TIMEOUTS.PRODUCTS_LOAD });
+
+    return producto
       .locator('xpath=ancestor::*[contains(@class,"product_box")][1]')
       .locator(L.PRODUCTO_CODIGO_OCULTO)
       .inputValue();
@@ -3827,16 +4607,27 @@ export class PosPage {
 
 /**
  * Registra los errores de JavaScript NO capturados ("pageerror") desde el
- * momento en que se llama, no desde el inicio de la página — mismo patrón ya
- * usado en pos-orden-caja.spec.ts (duplicado ahí como función local antes de
- * esta tarea). Se centraliza aquí, como función independiente (no método de
- * PosPage: no usa `this.page`, solo recibe un Page), para que
- * pos-navegacion.spec.ts pueda reutilizarla sin sumar una tercera copia de la
- * misma lógica — sin modificar pos-orden-caja.spec.ts, que conserva su propia
- * copia intacta.
+ * momento en que se llama, no desde el inicio de la página — función
+ * independiente (no método de PosPage: no usa `this.page`, solo recibe un
+ * Page), reutilizada por pos-navegacion.spec.ts y pos-orden-caja.spec.ts.
+ * Centralizada aquí: existía duplicada de forma idéntica como función local
+ * en pos-orden-caja.spec.ts.
  */
 export function espiarErroresJS(page: Page): string[] {
   const errores: string[] = [];
   page.on('pageerror', (err) => errores.push(err.message));
   return errores;
+}
+
+/**
+ * Espera (con reintentos reales, no una pausa fija) a que la condición de
+ * "activo" dada se cumpla — usado para confirmar que una categoría o un tab
+ * quedó seleccionado tras hacer click. Mismo patrón que espiarErroresJS: función
+ * independiente, no método de PosPage (no usa `this.page`, solo recibe un
+ * predicado arbitrario). Centralizada aquí: existía duplicada de forma
+ * idéntica como función local en pos-crear.spec.ts, pos-navegacion.spec.ts y
+ * pos.spec.ts.
+ */
+export async function esperarQuedaActivo(chequeoActivo: () => Promise<boolean>) {
+  await expect.poll(chequeoActivo).toBe(true);
 }

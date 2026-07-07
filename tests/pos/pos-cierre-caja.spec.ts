@@ -1,21 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { PosPage, CAJA_TEXTO, TIMEOUTS } from './pos.page';
 
-/**
- * Carga el POS y decide qué hacer con el modal "Abrir Caja" si aparece: lo valida y
- * lo cierra sin completar la apertura, ya que agregar productos no requiere la caja
- * abierta (eso se decide más adelante, al facturar). Comportamiento esperado, no un error.
- */
-async function cargarPosYCerrarModalSiAparece(pos: PosPage) {
-  await pos.irAlPos();
-  await pos.esperarEstadoInicial();
-  if (await pos.modalAbrirCajaVisible()) {
-    await expect(pos.modalAbrirCaja).toBeVisible();
-    await expect(pos.modalAbrirCaja.getByText(CAJA_TEXTO)).toBeVisible();
-    await pos.cerrarModalAbrirCaja();
-  }
-}
-
 test('Cerrar caja', async ({ page }) => {
   test.setTimeout(TIMEOUTS.TEST);
   const pos = new PosPage(page);
@@ -25,7 +10,7 @@ test('Cerrar caja', async ({ page }) => {
     // "Caja"), sin importar el estado real de la caja: hay que cerrarlo para poder
     // continuar. Cerrarlo con "Cancelar" no abre la caja, así que no interfiere con
     // la detección de estado que hace el propio flujo de "Abrir/Cerrar Caja (F12)".
-    await cargarPosYCerrarModalSiAparece(pos);
+    await pos.cargarPosYCerrarModalSiAparece();
   });
 
   await test.step('Verificar y descartar modales/mensajes opcionales antes del flujo principal', async () => {
