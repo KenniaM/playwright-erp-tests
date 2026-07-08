@@ -550,6 +550,26 @@ const L = {
   // (éxito) o "0"/vacío (fallo) — mismo contrato que el resto de la suite.
   AJAX_GUARDAR_APARTADO: 'addPosLayaway',
 
+  // ─── "Importar Factura" ─────────────────────────────────────────────────────
+  // A diferencia de Proforma/Apartado/Enviar a caja (ítems del menú desplegable
+  // junto a "Facturar"), "Importar Factura" es la pestaña superior con id
+  // técnico estable #btn_import_invoice_option, ya registrada en
+  // PESTANAS_POS_A_RECORRER — confirmado en vivo que visitarPestanaPos() la
+  // abre sin cambios. Selectores confirmados en vivo, no por lectura de código:
+  // cada factura es una tarjeta .pos_order_list_item_content (mismo patrón que
+  // .brand-card de otras listas) cuyo click dispara getPosSaleReceipView y abre
+  // el modal de detalle; ese modal expone un único botón .import-button
+  // (onclick="add_pos_invoice_import_to_table(...)") que dispara
+  // getPosImportInvoiceItemList y reemplaza #table_buy_list con las líneas de
+  // la factura. Confirmado en vivo que esas líneas NO usan el id
+  // "drag_and_drop_" que sí usa el resto de la suite (CARRITO_CLAVES/
+  // obtenerClavesProductos): hay que contarlas por tr.main_row.
+  IMPORTAR_FACTURA_FILA:            '.pos_order_list_item_content',
+  AJAX_DETALLE_IMPORTAR_FACTURA:    'getPosSaleReceipView',
+  IMPORTAR_FACTURA_BTN_IMPORTAR:    '.import-button',
+  AJAX_IMPORTAR_FACTURA:            'getPosImportInvoiceItemList',
+  IMPORTAR_FACTURA_CARRITO_FILAS:   '#table_buy_list tr.main_row',
+
   // ─── Moneda (header principal del POS, fuera de cualquier modal) ───────────
   // Mismo tipo de botón MDL que el resto de menús del POS (#menu_cash,
   // #demo-menu-top-right) — confirmado en vivo que overlays conocidos
@@ -4441,6 +4461,92 @@ export class PosPage {
     ).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
 
     await this.validarCarritoVacio();
+  }
+
+  // ─── "Importar Factura" ─────────────────────────────────────────────────────
+
+  /**
+   * Visita la pestaña "Importar factura". A diferencia de Proforma/Apartado/
+   * Enviar a caja (que abren un ítem del menú desplegable junto a "Facturar"),
+   * esta es una pestaña superior con id técnico estable, ya registrada en
+   * PESTANAS_POS_A_RECORRER (confirmado en vivo). Envuelve visitarPestanaPos()
+   * únicamente para mantener la misma simetría de nombres ("abrirX") que
+   * abrirCrearProforma()/abrirMenuOrdenCaja()/abrirCrearApartado() — no
+   * duplica ninguna lógica propia.
+   */
+  async abrirImportarFactura() {
+    const pestana = PESTANAS_POS_A_RECORRER.find((p) => p.etiqueta === 'Importar factura')!;
+    await this.visitarPestanaPos(pestana);
+  }
+
+  /**
+   * Selecciona la primera factura disponible en la pestaña ya abierta
+   * (abrirImportarFactura()) y la importa — mismo criterio "primera
+   * disponible" que el resto de la suite ya usa para catálogos sin nombre
+   * estable (clientes, productos, vendedores). Funciona igual sin importar si
+   * la factura tiene un cliente asociado o es "Cliente de contado": confirmado
+   * en vivo que la propia app sincroniza #customer_select en ambos casos
+   * (con el id real, o dejándolo en 0), sin necesitar lógica especial aquí.
+   *
+   * Confirmado en vivo, a diferencia de Apartado/Enviar a caja/Proforma: NO
+   * hay SweetAlert de confirmación antes de importar — el click en "IMPORTAR"
+   * ejecuta directo. Valida que las líneas de producto realmente se cargaron
+   * usando IMPORTAR_FACTURA_CARRITO_FILAS (tr.main_row), no CARRITO_CLAVES:
+   * confirmado en vivo que las filas importadas no llevan el id
+   * "drag_and_drop_" que sí usa el resto de la suite.
+   *
+   * Prefiere la factura de MENOR monto visible entre las cargadas en la
+   * página actual del listado. Motivo: se observó en vivo, más de una vez,
+   * que facturas de monto alto (~$2900+) pueden hacer aparecer un formulario
+   * de "Estudio de Crédito" que bloquea la confirmación de pago — pero un
+   * reintento posterior con un monto idéntico NO lo reprodujo, así que la
+   * causa raíz exacta queda sin confirmar (no depende únicamente del monto;
+   * posiblemente de la factura/cliente específico). Elegir la de menor monto
+   * es una medida defensiva para reducir ese riesgo mientras se investiga a
+   * fondo, no la corrección de una causa ya probada — no es una distinción de
+   * escenario (ambos montos siguen siendo válidos para Facturar en general).
+   * También ayuda a no depender de qué factura del catálogo compartido —en
+   * constante cambio— quede primera en la lista. Si no puede leerse el monto
+   * de ninguna fila, usa la primera de todas igual.
+   */
+  async importarPrimeraFacturaDisponible() {
+    const filas = this.page.locator(L.IMPORTAR_FACTURA_FILA);
+    await expect(filas.first(), 'No hay ninguna factura disponible para importar').toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+
+    const montos = await filas.evaluateAll((elementos) =>
+      elementos.map((el) => {
+        const texto = el.querySelector('strong[style*="font-size: 1.1em"]')?.textContent ?? '';
+        const monto = parseFloat(texto.replace(/[^0-9.]/g, ''));
+        return isNaN(monto) ? Infinity : monto;
+      })
+    );
+    const indiceMenorMonto = montos.reduce(
+      (mejorIndice, monto, indice) => (monto < montos[mejorIndice] ? indice : mejorIndice),
+      0
+    );
+    const primeraFila = montos[indiceMenorMonto] === Infinity ? filas.first() : filas.nth(indiceMenorMonto);
+
+    const respuestaDetalle = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_DETALLE_IMPORTAR_FACTURA),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await primeraFila.click();
+    await respuestaDetalle;
+
+    const botonImportar = this.page.locator(L.IMPORTAR_FACTURA_BTN_IMPORTAR);
+    await expect(botonImportar, 'El botón "IMPORTAR" no apareció en el modal de detalle de la factura').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    const respuestaImportar = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_IMPORTAR_FACTURA),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await botonImportar.click();
+    await respuestaImportar;
+
+    await expect(
+      this.page.locator(L.IMPORTAR_FACTURA_CARRITO_FILAS).first(),
+      'No se cargó ninguna línea de producto tras importar la factura'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
   }
 
   // ─── Precio visible de producto (grid) ─────────────────────────────────────
