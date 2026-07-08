@@ -125,7 +125,8 @@ const L = {
   VISTA_ACTIVE_CLASS:     'product_style_active',
   VISTA_ESTILO_ACTUAL:    '#current_product_style', // oculto en el DOM; refleja el estado inicial ("box")
 
-  // Tabs Servicios / End. Pintura
+  // Tabs Productos / Servicios / End. Pintura
+  TAB_PRODUCTOS:       '#ck_view_products',
   TAB_SERVICIOS:       '#ck_view_services',
   TAB_PINTURA:         '#ck_view_straightening_and_paint',
   TAB_ACTIVE_CLASS:    'btn_sale_selected',
@@ -401,6 +402,35 @@ const L = {
   PRODUCTO_FRACCIONADO_CANTIDAD_FRACCIONES: '#prod_frag_q',
   PRODUCTO_FRACCIONADO_BTN_AGREGAR: '#btn_set_product_fragment_quantity',
 
+  // Modal "Monto a comprar" (#dialog_sale_by_amount) — el OTRO caso confirmado
+  // (junto con el Fraccionado) en el que un click normal sobre una tarjeta del
+  // grid NO agrega la línea directamente. Un camino CONFIRMADO hacia este
+  // modal, leyendo add_to_table() en pos.js: el propio click ejecuta
+  // setVehicleProductItemModal(...) y hace return false ANTES de tocar el
+  // carrito, cuando el producto trae #input_product_sale_is_vehicle_poroduct_<id>=1,
+  // #input_product_sale_is_vehicle_poroduct_data_in_pos_<id>=1 y
+  // #input_product_sale_vehicle_info_<id> distinto de "[]" — pero NO es el
+  // único: confirmado en vivo con un producto real de este catálogo
+  // (cantidadDisponible fraccionaria, ej. 5.8571 — consistente con un
+  // producto que se vende "por monto"/peso) que el mismo modal se abre SIN
+  // que esos tres inputs siquiera existan en el DOM para ese id, así que debe
+  // haber otro disparador en pos.js que aún no se localizó con certeza — de
+  // cualquier forma, ninguno es un argumento de add_to_table() (a diferencia
+  // de apply_iva/item_type/is_fragmented, que sí vienen en el onclick y ya
+  // alimentan MetadatoProducto), de ahí que no se pueda anticipar este caso
+  // antes del click, sea cual sea la condición real. El campo "Monto"
+  // (#dsba_amount) autocalcula "Cantidad" (#dsba_quantity) en vivo; basta con
+  // llenar uno de los dos. El botón "Continuar" (#apply_sale_by_amount) NO
+  // dispara ningún AJAX propio: llama directo, en el cliente, al mismo
+  // add_to_table() que agrega cualquier producto normal (con la cantidad ya
+  // calculada a partir del monto) — mismo mecanismo de guardado diferido
+  // hasta Facturar que ya documenta el resto de la suite. Confirmado en vivo
+  // (DOM real del modal): título "Monto a comprar", valida que Monto y
+  // Cantidad sean > 0 antes de agregar la línea.
+  DIALOG_MONTO_A_COMPRAR:        '#dialog_sale_by_amount',
+  MONTO_A_COMPRAR_INPUT_MONTO:   '#dsba_amount',
+  MONTO_A_COMPRAR_BTN_CONFIRMAR: '#apply_sale_by_amount',
+
   // "Agregar" → "Nombre del cliente": factura solo con un nombre, sin
   // seleccionar un cliente registrado. editQuickCustomerName() y
   // setTemporalCustomerName() son puro DOM (sin AJAX). Confirmado en vivo
@@ -465,6 +495,79 @@ const L = {
   // interceptando la red tras confirmar el SweetAlert de advertencia
   // ("¿Está seguro de enviar esta venta a caja?").
   AJAX_ENVIAR_ORDEN_CAJA: 'sendPosProductSale',
+
+  // ─── "Orden de Ruteo" (mismo menú desplegable que Proforma/Apartado/Enviar a
+  // caja, L.ORDEN_CAJA_MENU_BTN — confirmado en vivo, NO la pestaña superior
+  // "Ruteo" de PESTANAS_POS_A_RECORRER: esa lista órdenes ya creadas, esta
+  // sección crea una nueva) ───────────────────────────────────────────────────
+  // El ítem del menú es <li id="btn_routingorder_footer" class="... btn_routingorder
+  // ..." onclick="create_routing_order()">, confirmado en vivo inspeccionando
+  // el menú #demo-menu-top-right ya desplegado. create_routing_order() (en
+  // pos_routing.js, un archivo propio distinto de pos.js) valida que haya al
+  // menos un producto en el carrito y abre el modal #dialog_add_routing_order.
+  RUTEO_MENU_ITEM: '#btn_routingorder_footer',
+  DIALOG_RUTEO:    '#dialog_add_routing_order',
+
+  // Cliente, Forma 2 (buscador propio del modal) — confirmado en vivo que
+  // usa su PROPIO input (#search_routing_customer_send_sale, no
+  // #search_pos_customer_modal de Apartado ni #search_pos_customer_send_sale
+  // de Enviar a caja) pero dispara el mismo AJAX compartido
+  // (CLIENTE_AJAX_BUSQUEDA/getCustomerByPosOption): get_customer_by_pos_option()
+  // en pos.js decide cuál input leer según cuál modal esté visible
+  // ($('#dialog_add_routing_order').is(":visible")). Los resultados llenan un
+  // <select> Chosen propio (#payment_send_routing_order_client), mismo patrón
+  // que ORDEN_CAJA_CLIENTE_CHOSEN/APARTADO_CLIENTE_CHOSEN — confirmado en vivo
+  // que SÍ reutiliza ese mismo patrón general (a diferencia de lo que
+  // sugeriría asumir sin verificar), solo que con sus propios ids.
+  RUTEO_CLIENTE_INPUT_BUSQUEDA: '#search_routing_customer_send_sale',
+  RUTEO_CLIENTE_BTN_BUSCAR:     '#dialog_add_routing_order .search_parameter_addon',
+  RUTEO_CLIENTE_CHOSEN:         '#payment_send_routing_order_client_chosen',
+
+  // Ruta y Repartidor — ambos <select> Chosen obligatorios (confirm_send_routing_order()
+  // en pos_routing.js rechaza el envío con un toast de advertencia si
+  // cualquiera de los dos queda en su placeholder), poblados con catálogo
+  // real y configurable por la empresa (rutas y usuarios reales de la
+  // compañía, confirmado en vivo: nunca hardcodeados). Confirmado en vivo que
+  // elegir una Ruta puede autocompletar el Repartidor con el primer
+  // "dealer_list" asociado a esa ruta (set_agent_in_modal_routing_order()) —
+  // pero solo si la ruta tiene repartidores propios asignados; en este
+  // ambiente ambas rutas de prueba traen dealer_list vacío ("[]"), así que no
+  // hay que depender de ese autocompletado y el Repartidor se selecciona
+  // siempre de forma explícita.
+  RUTEO_RUTA_CHOSEN:       '#send_routing_order_route_chosen',
+  RUTEO_REPARTIDOR_CHOSEN: '#send_routing_order_agent_assigned_chosen',
+
+  // Dirección — <select> Chosen OPCIONAL, poblado dinámicamente con las
+  // direcciones registradas del cliente ya seleccionado (customer.client_address,
+  // JSON propio del cliente) — confirmado en vivo que un cliente sin
+  // direcciones registradas deja este <select> con únicamente su placeholder
+  // "Seleccionar dirección" (ninguna opción real). A diferencia de
+  // Subcategoría/Sub sección de "Crear Producto" (mismo caso "catálogo
+  // dependiente que puede venir vacío"), aquí NO se puede reutilizar
+  // _seleccionarPrimeraOpcionChosenSiHayOpciones() tal cual: confirmado en
+  // vivo que su fallback (abrir el Chosen y presionar Escape cuando no hay
+  // opciones) deja un <div class="modal-backdrop"> huérfano cubriendo TODO
+  // el modal —incluido el campo de Observaciones, que queda permanentemente
+  // no interactuable— en vez de cerrar el desplegable, algo que no ocurre en
+  // los otros dos usos porque no viven dentro de un modal ya abierto. Por eso
+  // seleccionarDireccionRuteoSiExiste() comprueba primero, sobre el <select>
+  // real (RUTEO_DIRECCION_SELECT), si existe alguna opción real ANTES de
+  // abrir el Chosen — así nunca necesita cancelarlo.
+  RUTEO_DIRECCION_SELECT: '#send_routing_order_client_address',
+  RUTEO_DIRECCION_CHOSEN: '#send_routing_order_client_address_chosen',
+
+  RUTEO_OBSERVACION: '#send_routing_order_observation',
+  RUTEO_BTN_ENVIAR:  '#send_routing_order',
+
+  // Petición AJAX real que crea la Orden de Ruteo — confirmado en vivo
+  // interceptando la red tras confirmar el SweetAlert de advertencia
+  // ("¿Enviar órden a ruteo?"). Responde texto plano: el id numérico creado
+  // (éxito) o "0" (fallo) — mismo contrato que AJAX_GUARDAR_APARTADO. No hay
+  // impresión automática en este ambiente (setting_print_command en 0/ausente
+  // — confirmado en vivo que no se abrió ningún popup tras crear la orden),
+  // así que, a diferencia de Facturar/Cerrar Caja, no hay ninguna ventana de
+  // impresión que esperar ni cerrar aquí.
+  AJAX_GUARDAR_RUTEO: 'sendPosRoutingOrder',
 
   // Panel de detalle avanzado de totales (subtotal / descuento general /
   // impuestos) — oculto por defecto (showBillDetail()); se expande con un
@@ -568,7 +671,36 @@ const L = {
   AJAX_DETALLE_IMPORTAR_FACTURA:    'getPosSaleReceipView',
   IMPORTAR_FACTURA_BTN_IMPORTAR:    '.import-button',
   AJAX_IMPORTAR_FACTURA:            'getPosImportInvoiceItemList',
+
+  // Botón "AGREGAR ITEMS" (#add_btn_items), visible junto al carrito únicamente
+  // después de importar una factura — confirmado en vivo que no existe antes de
+  // importar. Es infraestructura GENÉRICA del POS (pos.js la reutiliza también
+  // para Taller/Proforma/Enviar a caja/Ruteo, decidido por
+  // #product_hide_item_from_id), no exclusiva de "Importar Factura", pero esta
+  // suite solo la ejerce desde este flujo. El click abre el catálogo normal
+  // (Productos/Servicios) dejando el tab "Productos" activo por defecto y
+  // sustituye este botón por "Volver" (#hide_btn_items) en el mismo lugar de la
+  // interfaz — confirmado en vivo que "Volver" regresa a la pestaña de origen
+  // (aquí, "Importar factura") conservando TODAS las líneas del carrito, tanto
+  // las importadas (sin id "drag_and_drop_") como las agregadas manualmente
+  // desde el catálogo (con ese id).
+  IMPORTAR_FACTURA_BTN_AGREGAR_ITEM: '#add_btn_items',
+  IMPORTAR_FACTURA_BTN_VOLVER:       '#hide_btn_items',
   IMPORTAR_FACTURA_CARRITO_FILAS:   '#table_buy_list tr.main_row',
+
+  // ─── Pestaña "Órdenes de caja" (seleccionar una Orden de Caja ya existente,
+  // creada previamente con "Enviar a caja") ──────────────────────────────────
+  // A diferencia de "Importar Factura" (click en toda la tarjeta abre un modal
+  // de detalle con un botón "IMPORTAR" aparte), aquí el click real está
+  // acotado a un ícono anidado DENTRO de la tarjeta — confirmado en vivo
+  // inspeccionando el DOM: la tarjeta en sí (.pos_order_list_item_content,
+  // MISMA clase que IMPORTAR_FACTURA_FILA — reutilizada tal cual, es genérica
+  // entre pestañas de listado) no tiene onclick propio; el que sí lo tiene es
+  // un <div class="... rest_chev_right" onclick="add_pos_order_to_table(...)">
+  // anidado. Carga DIRECTO al carrito sin ningún modal de detalle ni botón de
+  // confirmación aparte (a diferencia de Importar Factura).
+  ORDEN_CAJA_LISTA_BTN_CARGAR: '.rest_chev_right',
+  AJAX_CARGAR_ORDEN_CAJA:      'getPosCashItemList',
 
   // ─── Moneda (header principal del POS, fuera de cualquier modal) ───────────
   // Mismo tipo de botón MDL que el resto de menús del POS (#menu_cash,
@@ -1741,6 +1873,33 @@ export class PosPage {
   }
 
   /**
+   * Localiza el primer combo YA EXISTENTE en el catálogo compartido
+   * (categoría "Combos"), sin crear ninguno nuevo — a diferencia de
+   * crearComboConIva()/crearComboSinIva() + buscarComboYAgregarAlCarrito(nombre),
+   * que sí crean un combo (wizard "Crear Combo"): ese flujo queda fuera del
+   * alcance de escenarios que solo necesitan usar un combo ya disponible.
+   * Confirmado en vivo que una tarjeta de combo en ese grid es funcionalmente
+   * idéntica a un producto normal — mismo onclick="add_to_table(...)", mismo
+   * item_type=1, mismo mecanismo de carrito (id "drag_and_drop_") — sin
+   * ningún modal ni confirmación adicional propia de "ser combo"; el único
+   * caso especial que podría disparar sigue siendo el genérico "Monto a
+   * comprar" que cualquier producto normal ya puede disparar (de ahí que se
+   * agregue con agregarProductoDelGridAlCarrito(), no
+   * agregarProductoAlCarrito()). Reutiliza localizarPrimerProducto() —mismo
+   * criterio "primera opción disponible", con paginación real por scroll—
+   * en vez de buscarComboYAgregarAlCarrito(), que exige conocer el nombre de
+   * antemano (solo tiene sentido para un combo recién creado por el propio
+   * test).
+   */
+  async obtenerPrimerCombo(): Promise<MetadatoProducto> {
+    if (!(await this.categoriaEstaActiva(this.categoriaCombos))) {
+      await this.categoriaCombos.click();
+      await esperarQuedaActivo(() => this.categoriaEstaActiva(this.categoriaCombos));
+    }
+    return this.localizarPrimerProducto(() => true, 'combo existente en la categoría "Combos"');
+  }
+
+  /**
    * Agrega al carrito un producto ya localizado por cualquiera de los
    * métodos `obtenerPrimer...` de esta sección (excepto el Fraccionado, que
    * necesita completar el modal "Seleccionar Cantidad" — ver
@@ -1778,6 +1937,65 @@ export class PosPage {
     await this.page.locator(L.PRODUCTO_FRACCIONADO_CANTIDAD_FRACCIONES).fill(cantidadFracciones);
     await this.page.locator(L.PRODUCTO_FRACCIONADO_BTN_AGREGAR).click();
     await expect(this.page.locator(L.DIALOG_CANTIDAD_FRACCIONADA)).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    await expect.poll(
+      async () => (await this.obtenerClavesProductos()).length,
+      { timeout: TIMEOUTS.PRODUCTS_LOAD }
+    ).toBeGreaterThan(clavesAntes.length);
+    const clavesDespues = await this.obtenerClavesProductos();
+    return clavesDespues.find((c) => !clavesAntes.includes(c))!;
+  }
+
+  /**
+   * Agrega al carrito un producto del grid ya localizado con cualquiera de los
+   * métodos `obtenerPrimer.../obtenerSegundo...` (obtenerPrimerProductoNormal(),
+   * obtenerSegundoProductoNormalDistinto(), obtenerPrimerServicio(), etc.),
+   * manejando el modal "Monto a comprar" (ver L.DIALOG_MONTO_A_COMPRAR) si el
+   * click lo dispara en vez de agregar la línea directamente.
+   *
+   * Investigado en vivo (código fuente de pos.js + DOM real del modal, no
+   * asumido — ver el comentario de L.DIALOG_MONTO_A_COMPRAR): a diferencia del
+   * caso Fraccionado (esFraccionado, ya filtrado por localizarPrimerProducto()
+   * antes de llegar aquí), este caso NO es detectable de antemano desde
+   * MetadatoProducto, así que no se puede evitar eligiendo otro producto —
+   * solo se sabe si aparece después del click. Confirmado en vivo con un
+   * producto real de este catálogo (cantidadDisponible fraccionaria, ej.
+   * 5.8571 — consistente con un producto que se vende "por monto"/peso, no por
+   * unidad entera) que el modal SÍ puede abrir incluso sin los inputs ocultos
+   * de "vehicle product" (is_vehicle_product/vehicle_info) que documenta
+   * setVehicleProductItemModal() en pos.js: esa función es UN camino
+   * confirmado hacia este mismo modal, pero no el único — de ahí que la
+   * espera de abajo no pueda acotarse a "solo si es vehicle product". Por eso
+   * este método existe aparte de agregarProductoAlCarrito(): en vez de asumir
+   * que el click siempre agrega la línea directo (lo que
+   * agregarProductoAlCarrito() sí asume, y seguirá asumiendo para no alterar
+   * su contrato en el resto de la suite), aquí se espera a que el modal
+   * aparezca y, si lo hace, se completa con el monto indicado antes de
+   * continuar — nunca se descarta el producto ni se falla de inmediato.
+   *
+   * La espera del modal usa TIMEOUTS.PAYMENT_MODAL (no un timeout corto
+   * arbitrario): confirmado en vivo que un timeout de solo 3 s puede fallar
+   * en detectarlo bajo carga (headed/con trace) — el modal SÍ termina
+   * abriendo, pero después de que el chequeo ya dio por hecho que no
+   * aparecería, dejando el resto del método esperando indefinidamente una
+   * clave que nunca llega porque el modal quedó abierto sin confirmar.
+   */
+  async agregarProductoDelGridAlCarrito(metadato: MetadatoProducto, montoSiEsPorMonto = PRECIO_PRODUCTO_RAPIDO): Promise<string> {
+    const clavesAntes = await this.obtenerClavesProductos();
+    const modalMontoACompra = this.page.locator(L.DIALOG_MONTO_A_COMPRAR);
+
+    await metadato.locator.click();
+
+    const abrioModalMonto = await modalMontoACompra
+      .waitFor({ state: 'visible', timeout: TIMEOUTS.PAYMENT_MODAL })
+      .then(() => true)
+      .catch(() => false);
+
+    if (abrioModalMonto) {
+      await this.page.locator(L.MONTO_A_COMPRAR_INPUT_MONTO).fill(montoSiEsPorMonto);
+      await this.page.locator(L.MONTO_A_COMPRAR_BTN_CONFIRMAR).click();
+      await expect(modalMontoACompra, 'El modal "Monto a comprar" no se cerró tras presionar "Continuar"').toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    }
 
     await expect.poll(
       async () => (await this.obtenerClavesProductos()).length,
@@ -2036,6 +2254,7 @@ export class PosPage {
 
   // ─── Tabs Servicios / End. Pintura ────────────────────────────────────────
 
+  get tabProductos() { return this.page.locator(L.TAB_PRODUCTOS); }
   get tabServicios() { return this.page.locator(L.TAB_SERVICIOS); }
   get tabPintura() { return this.page.locator(L.TAB_PINTURA); }
 
@@ -3995,6 +4214,216 @@ export class PosPage {
     await this.agregarProductoRapidoSimple(`Rápido ${contexto} ${sufijo}`, PRECIO_PRODUCTO_RAPIDO);
   }
 
+  // ─── "Orden de Ruteo" ───────────────────────────────────────────────────────
+
+  /** Locator del modal "Crear Orden de Ruteo". */
+  get modalRuteo() {
+    return this.page.locator(L.DIALOG_RUTEO);
+  }
+
+  /**
+   * Abre "Crear Orden de Ruteo" desde el menú desplegable junto a "Facturar"
+   * (mismo menú que Proforma/Apartado/Enviar a caja, #demo-menu-top-right).
+   * Mismo patrón de reintento (hasta 4 intentos, cerrando overlays conocidos
+   * en cada vuelta) que abrirMenuOrdenCaja()/abrirCrearProforma()/
+   * abrirCrearApartado() ya usan cada uno por su cuenta para este mismo
+   * menú — necesario porque el modal requiere al menos un producto en el
+   * carrito (create_routing_order() lo valida y aborta con un aviso si no lo
+   * hay, dejando el modal sin abrir), así que quien llama debe agregar
+   * producto(s) antes.
+   */
+  async abrirCrearOrdenRuteo() {
+    await this.cerrarModalNotificacionesSiAparece();
+    await this.cerrarAvisoConsecutivoSiAparece();
+
+    await this.page.locator('ul.mdl-menu[data-mdl-for="demo-menu-top-right"][data-upgraded*="MaterialMenu"]')
+      .waitFor({ state: 'attached', timeout: TIMEOUTS.PRODUCTS_LOAD })
+      .catch(() => {});
+
+    const item = this.page.locator(L.RUTEO_MENU_ITEM);
+    const MAX_INTENTOS = 4;
+    let abierto = false;
+    for (let intento = 1; intento <= MAX_INTENTOS && !abierto; intento++) {
+      await this.cerrarModalNotificacionesSiAparece();
+      await this.cerrarAvisoConsecutivoSiAparece();
+
+      await this.page.evaluate(
+        (sel) => (document.querySelector(sel) as HTMLElement)?.click(),
+        L.ORDEN_CAJA_MENU_BTN
+      );
+      abierto = await item.waitFor({ state: 'visible', timeout: 2_000 }).then(() => true).catch(() => false);
+    }
+    expect(abierto, `La opción "Orden de Ruteo" no apareció en el menú de acciones tras ${MAX_INTENTOS} intentos`).toBe(true);
+
+    await this.page.evaluate(
+      (sel) => (document.querySelector(sel) as HTMLElement)?.click(),
+      L.RUTEO_MENU_ITEM
+    );
+
+    await expect(this.modalRuteo, 'El modal "Crear Orden de Ruteo" no apareció tras seleccionar la opción del menú').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /**
+   * Busca y selecciona un cliente DENTRO del modal "Crear Orden de Ruteo"
+   * (Forma 2) — confirmado en vivo (no asumido de Apartado/Enviar a caja) que
+   * usa su propio input (RUTEO_CLIENTE_INPUT_BUSQUEDA, distinto de ambos) pero
+   * dispara el mismo AJAX compartido (CLIENTE_AJAX_BUSQUEDA) y llena un
+   * <select> Chosen propio (RUTEO_CLIENTE_CHOSEN) — mismo mecanismo general
+   * que seleccionarClienteEnOrdenCaja()/seleccionarClienteEnModalApartado(),
+   * aplicado a los selectores reales de este modal. Una búsqueda vacía trae
+   * todos los clientes disponibles — confirmado en vivo. Reutiliza
+   * _seleccionarPrimeraOpcionChosen() para elegir la primera opción real (no
+   * el placeholder "Seleccionar cliente"). Devuelve el nombre del cliente
+   * realmente seleccionado.
+   */
+  async seleccionarClienteEnRuteo(terminoBusqueda = ''): Promise<string> {
+    await this.page.locator(L.RUTEO_CLIENTE_INPUT_BUSQUEDA).fill(terminoBusqueda);
+
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.CLIENTE_AJAX_BUSQUEDA),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await this.page.locator(L.RUTEO_CLIENTE_BTN_BUSCAR).click();
+    await respuestaPromise;
+
+    await this._seleccionarPrimeraOpcionChosen(L.RUTEO_CLIENTE_CHOSEN);
+
+    const nombreCliente = await this._obtenerTextoChosenSeleccionado(L.RUTEO_CLIENTE_CHOSEN);
+    expect(nombreCliente, 'El nombre del cliente seleccionado en "Crear Orden de Ruteo" no quedó visible').not.toBe('');
+    console.log(`[seleccionarClienteEnRuteo] Cliente seleccionado: "${nombreCliente}"`);
+    return nombreCliente;
+  }
+
+  /**
+   * Lee el nombre del cliente actualmente reflejado en el modal "Crear Orden
+   * de Ruteo" — sirve tanto para confirmar lo elegido por
+   * seleccionarClienteEnRuteo() (Forma 2) como para confirmar que un cliente
+   * elegido arriba del carrito (seleccionarClienteExistente(), Forma 1) sí se
+   * propagó aquí: confirmado en vivo (show_create_routing_order_modal() en
+   * pos_routing.js) que ambas formas comparten el mismo cliente ya
+   * seleccionado en el carrito (#customer_select/#customer_json_selected).
+   */
+  async obtenerClienteEnRuteo(): Promise<string> {
+    return this._obtenerTextoChosenSeleccionado(L.RUTEO_CLIENTE_CHOSEN);
+  }
+
+  /**
+   * Selecciona la primera ruta real disponible — catálogo configurable por la
+   * empresa sin nombre estable, mismo criterio que el resto de la suite
+   * (CABYS, tipo/tasa de IVA, vendedor de Enviar a caja). Obligatorio:
+   * confirmado en vivo (confirm_send_routing_order() en pos_routing.js) que
+   * el envío se rechaza con un aviso si queda en su placeholder. Devuelve el
+   * nombre de la ruta realmente seleccionada.
+   */
+  async seleccionarRutaRuteo(): Promise<string> {
+    await this._seleccionarPrimeraOpcionChosen(L.RUTEO_RUTA_CHOSEN);
+    const nombreRuta = await this._obtenerTextoChosenSeleccionado(L.RUTEO_RUTA_CHOSEN);
+    expect(nombreRuta, 'La ruta seleccionada en "Crear Orden de Ruteo" no quedó visible').not.toBe('');
+    console.log(`[seleccionarRutaRuteo] Ruta seleccionada: "${nombreRuta}"`);
+    return nombreRuta;
+  }
+
+  /**
+   * Selecciona el primer repartidor real disponible — mismo criterio que
+   * seleccionarRutaRuteo(). Obligatorio, igual que la ruta. No depende del
+   * autocompletado que set_agent_in_modal_routing_order() intenta tras elegir
+   * una ruta (ver el comentario de L.RUTEO_RUTA_CHOSEN): se selecciona
+   * siempre de forma explícita, sin asumir que la ruta ya lo dejó listo.
+   * Devuelve el nombre del repartidor realmente seleccionado.
+   */
+  async seleccionarRepartidorRuteo(): Promise<string> {
+    await this._seleccionarPrimeraOpcionChosen(L.RUTEO_REPARTIDOR_CHOSEN);
+    const nombreRepartidor = await this._obtenerTextoChosenSeleccionado(L.RUTEO_REPARTIDOR_CHOSEN);
+    expect(nombreRepartidor, 'El repartidor seleccionado en "Crear Orden de Ruteo" no quedó visible').not.toBe('');
+    console.log(`[seleccionarRepartidorRuteo] Repartidor seleccionado: "${nombreRepartidor}"`);
+    return nombreRepartidor;
+  }
+
+  /**
+   * Selecciona la primera dirección real del cliente si tiene alguna
+   * registrada, sin fallar si no tiene ninguna — a diferencia de Ruta/
+   * Repartidor, este campo es OPCIONAL (ver el comentario de
+   * L.RUTEO_DIRECCION_CHOSEN).
+   *
+   * NO reutiliza _seleccionarPrimeraOpcionChosenSiHayOpciones() (la variante
+   * "tolerante" que sí usan Subcategoría/Sub sección de "Crear Producto"):
+   * confirmado en vivo que su fallback de "abrir el Chosen y presionar
+   * Escape cuando no hay opciones" deja un backdrop huérfano cubriendo todo
+   * el modal de Ruteo (ver el comentario de L.RUTEO_DIRECCION_CHOSEN) — un
+   * problema propio de estar dentro de un modal ya abierto que Subcategoría/
+   * Sub sección no tienen. En su lugar, se comprueba de antemano sobre el
+   * <select> real (sin abrir nunca el Chosen) si existe alguna opción
+   * distinta del placeholder, y solo se abre el Chosen cuando sí la hay —
+   * evita por completo la necesidad de cancelarlo.
+   *
+   * Devuelve el texto actualmente reflejado (una dirección real, o el
+   * placeholder "Seleccionar dirección" si el cliente no tiene ninguna).
+   */
+  async seleccionarDireccionRuteoSiExiste(): Promise<string> {
+    const hayDirecciones = (await this.page.locator(`${L.RUTEO_DIRECCION_SELECT} option:not([value="0"])`).count()) > 0;
+    if (hayDirecciones) {
+      await this._seleccionarPrimeraOpcionChosen(L.RUTEO_DIRECCION_CHOSEN);
+    }
+    return this._obtenerTextoChosenSeleccionado(L.RUTEO_DIRECCION_CHOSEN);
+  }
+
+  /**
+   * Llena las observaciones de "Crear Orden de Ruteo" — mismo patrón de
+   * llenarObservacionesOrdenCaja() (un simple fill()), pero sobre el textarea
+   * propio de este modal (RUTEO_OBSERVACION, id distinto). A diferencia de
+   * ese método, devuelve el valor que realmente quedó en el campo: necesario
+   * porque esta suite sí debe validar explícitamente que la observación se
+   * registró, y no existía ningún método existente que expusiera ese valor
+   * sin tocar el locator crudo desde el test.
+   */
+  async llenarObservacionesRuteo(texto: string): Promise<string> {
+    const campo = this.page.locator(L.RUTEO_OBSERVACION);
+    await campo.fill(texto);
+    return campo.inputValue();
+  }
+
+  /**
+   * Presiona "Enviar Orden" y confirma el SweetAlert de advertencia
+   * ("¿Enviar órden a ruteo?") — mismo patrón que enviarOrdenCaja()/
+   * guardarProformaYObtenerRespuesta()/guardarApartadoYObtenerRespuesta():
+   * arma la espera de la respuesta AJAX ANTES del click, confirma el
+   * SweetAlert reutilizando _confirmarSweetAlertV1(), y devuelve la
+   * respuesta cruda para que el test decida cómo validarla.
+   */
+  async guardarOrdenRuteoYObtenerRespuesta(): Promise<Response> {
+    await this.page.locator(L.RUTEO_BTN_ENVIAR).click();
+
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_GUARDAR_RUTEO),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await this._confirmarSweetAlertV1('No apareció la confirmación "¿Enviar órden a ruteo?"');
+    return respuestaPromise;
+  }
+
+  /**
+   * Valida que "Crear Orden de Ruteo" terminó exitosamente: la respuesta real
+   * de AJAX_GUARDAR_RUTEO respondió OK con un id numérico (>=1, mismo
+   * contrato que AJAX_GUARDAR_APARTADO), el modal se cerró y el carrito quedó
+   * vacío (clear_product_table() en pos_routing.js, confirmado en vivo). Sin
+   * ventana de impresión que esperar ni cerrar (ver el comentario de
+   * L.AJAX_GUARDAR_RUTEO): a diferencia de Facturar/Cerrar Caja, este
+   * ambiente no tiene la impresión automática de comanda activada.
+   */
+  async validarOrdenRuteoCreada(respuesta: Response) {
+    expect(respuesta.ok(), `${L.AJAX_GUARDAR_RUTEO} no respondió OK (status ${respuesta.status()})`).toBe(true);
+
+    const cuerpo = (await respuesta.text()).trim();
+    expect(parseInt(cuerpo, 10), `${L.AJAX_GUARDAR_RUTEO} no devolvió un id válido (respondió "${cuerpo}")`).toBeGreaterThanOrEqual(1);
+
+    await expect(
+      this.modalRuteo,
+      'El modal "Crear Orden de Ruteo" no se cerró tras confirmar el envío'
+    ).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    await this.validarCarritoVacio();
+  }
+
   // ─── Moneda del POS ─────────────────────────────────────────────────────────
   //
   // Ningún método existente de esta clase toca moneda — sección enteramente
@@ -4495,36 +4924,21 @@ export class PosPage {
    * confirmado en vivo que las filas importadas no llevan el id
    * "drag_and_drop_" que sí usa el resto de la suite.
    *
-   * Prefiere la factura de MENOR monto visible entre las cargadas en la
-   * página actual del listado. Motivo: se observó en vivo, más de una vez,
-   * que facturas de monto alto (~$2900+) pueden hacer aparecer un formulario
-   * de "Estudio de Crédito" que bloquea la confirmación de pago — pero un
-   * reintento posterior con un monto idéntico NO lo reprodujo, así que la
-   * causa raíz exacta queda sin confirmar (no depende únicamente del monto;
-   * posiblemente de la factura/cliente específico). Elegir la de menor monto
-   * es una medida defensiva para reducir ese riesgo mientras se investiga a
-   * fondo, no la corrección de una causa ya probada — no es una distinción de
-   * escenario (ambos montos siguen siendo válidos para Facturar en general).
-   * También ayuda a no depender de qué factura del catálogo compartido —en
-   * constante cambio— quede primera en la lista. Si no puede leerse el monto
-   * de ninguna fila, usa la primera de todas igual.
+   * Selecciona SIEMPRE la primera fila tal como aparece en la lista (índice
+   * 0), sin ordenar ni filtrar por monto ni por ningún otro criterio de
+   * búsqueda. Motivo (indicado explícitamente para esta suite, no inferido
+   * aquí): el catálogo compartido de este ambiente de QA tiene facturas con
+   * descripciones de producto extremadamente largas que rompen selectores y
+   * validaciones del carrito ajenos al objetivo de estas pruebas — elegir por
+   * otro criterio (p. ej. la vieja lógica de "menor monto visible") puede
+   * aterrizar en una de esas sin ninguna forma de evitarlo de antemano,
+   * mientras que la primera de la lista no presenta ese problema. Si la lista
+   * está vacía, falla explícitamente en vez de buscar una alternativa.
    */
   async importarPrimeraFacturaDisponible() {
     const filas = this.page.locator(L.IMPORTAR_FACTURA_FILA);
-    await expect(filas.first(), 'No hay ninguna factura disponible para importar').toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
-
-    const montos = await filas.evaluateAll((elementos) =>
-      elementos.map((el) => {
-        const texto = el.querySelector('strong[style*="font-size: 1.1em"]')?.textContent ?? '';
-        const monto = parseFloat(texto.replace(/[^0-9.]/g, ''));
-        return isNaN(monto) ? Infinity : monto;
-      })
-    );
-    const indiceMenorMonto = montos.reduce(
-      (mejorIndice, monto, indice) => (monto < montos[mejorIndice] ? indice : mejorIndice),
-      0
-    );
-    const primeraFila = montos[indiceMenorMonto] === Infinity ? filas.first() : filas.nth(indiceMenorMonto);
+    const primeraFila = filas.first();
+    await expect(primeraFila, 'No hay ninguna factura disponible para importar').toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
 
     const respuestaDetalle = this.page.waitForResponse(
       (res) => res.url().includes(L.AJAX_DETALLE_IMPORTAR_FACTURA),
@@ -4547,6 +4961,166 @@ export class PosPage {
       this.page.locator(L.IMPORTAR_FACTURA_CARRITO_FILAS).first(),
       'No se cargó ninguna línea de producto tras importar la factura'
     ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  // ─── "Órdenes de Caja" (seleccionar una ya existente) ──────────────────────
+
+  /**
+   * Visita la pestaña "Órdenes de caja" — mismo patrón que abrirImportarFactura(),
+   * envuelve visitarPestanaPos() con la entrada ya registrada en
+   * PESTANAS_POS_A_RECORRER, sin duplicar esa lógica.
+   */
+  async abrirOrdenesCaja() {
+    const pestana = PESTANAS_POS_A_RECORRER.find((p) => p.etiqueta === 'Órdenes de caja')!;
+    await this.visitarPestanaPos(pestana);
+  }
+
+  /**
+   * Selecciona la primera Orden de Caja disponible en la pestaña ya abierta y
+   * la carga al carrito — mismo criterio "primera disponible, sin buscar"
+   * adoptado para Importar Factura (ver el comentario de
+   * importarPrimeraFacturaDisponible(): elegir por otro criterio, p. ej.
+   * menor monto, puede aterrizar en una orden con líneas problemáticas sin
+   * ninguna forma de evitarlo de antemano).
+   *
+   * A diferencia de importarPrimeraFacturaDisponible(), el click real está en
+   * un ícono anidado dentro de la tarjeta (L.ORDEN_CAJA_LISTA_BTN_CARGAR,
+   * confirmado en vivo que la tarjeta en sí no tiene onclick propio) y carga
+   * directo al carrito sin modal de detalle ni botón de confirmación aparte
+   * — confirmado en vivo interceptando la red (getPosCashItemList, sin
+   * ningún SweetAlert de por medio).
+   */
+  async cargarPrimeraOrdenCajaDisponible() {
+    const filas = this.page.locator(L.IMPORTAR_FACTURA_FILA);
+    const primeraFila = filas.first();
+    await expect(primeraFila, 'No hay ninguna Orden de Caja disponible').toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_CARGAR_ORDEN_CAJA),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await primeraFila.locator(L.ORDEN_CAJA_LISTA_BTN_CARGAR).click();
+    await respuestaPromise;
+
+    await expect(
+      this.page.locator(L.IMPORTAR_FACTURA_CARRITO_FILAS).first(),
+      'No se cargó ninguna línea de producto tras seleccionar la Orden de Caja'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /** Cuenta las filas actualmente cargadas en el carrito (`#table_buy_list tr.main_row`):
+   * a diferencia de `obtenerClavesProductos()` (que solo cuenta líneas con id
+   * "drag_and_drop_"), esta cuenta TODAS las filas sin importar su origen —
+   * incluye tanto las importadas de una factura (sin ese id) como las agregadas
+   * normalmente desde el catálogo (con ese id) — confirmado en vivo. Útil para
+   * validar que una factura importada realmente cargó líneas al carrito, algo
+   * que `obtenerClavesProductos()` no puede detectar por sí solo.
+   */
+  async obtenerCantidadFilasCarrito(): Promise<number> {
+    return this.page.locator(L.IMPORTAR_FACTURA_CARRITO_FILAS).count();
+  }
+
+  /**
+   * Devuelve el texto combinado de todas las líneas actualmente en el
+   * carrito (`#table_buy_list`), tanto las importadas de una factura como las
+   * agregadas normalmente desde el catálogo. Necesario para poder elegir un
+   * producto del catálogo que TODAVÍA NO esté en el carrito antes de
+   * agregarlo: confirmado en vivo que add_to_table() no crea una línea nueva
+   * para un producto que ya está presente (por ejemplo, uno que ya viene
+   * incluido en la factura recién importada) — en vez de eso, le suma la
+   * cantidad a la línea existente, así que ni obtenerClavesProductos() (no
+   * aparece ninguna clave nueva) ni obtenerCantidadFilasCarrito() (no aparece
+   * ninguna fila nueva) detectan ese "agregado" — comportamiento real del
+   * sistema, no un fallo de la suite ni del producto en particular.
+   */
+  async obtenerTextoCarrito(): Promise<string> {
+    return this.page.locator('#table_buy_list').innerText();
+  }
+
+  /**
+   * Localiza el primer producto normal (tipoItem=1, no fraccionado) o
+   * servicio (tipoItem=2) del catálogo que TODAVÍA NO esté en el carrito —
+   * necesario para escenarios que agregan productos DESPUÉS de cargar al
+   * carrito una venta ya existente (factura importada, Orden de Caja): ver
+   * el comentario de obtenerTextoCarrito() sobre por qué un producto ya
+   * presente no puede agregarse como línea nueva. Centraliza la lógica que
+   * antes vivía duplicada como función local en pos-importar-factura.spec.ts
+   * (agregarProductoYServicioDesdeCatalogo) — necesaria de nuevo aquí, así
+   * que se promueve a PosPage en vez de duplicarla una segunda vez.
+   */
+  async obtenerPrimerProductoNoPresenteEnCarrito(tipoItem: 1 | 2 = 1): Promise<MetadatoProducto> {
+    const textoCarrito = await this.obtenerTextoCarrito();
+    return this.localizarPrimerProducto(
+      (m) => m.tipoItem === tipoItem && !m.esFraccionado && !textoCarrito.includes(m.nombre),
+      tipoItem === 1 ? 'producto normal que todavía no esté en el carrito' : 'servicio que todavía no esté en el carrito'
+    );
+  }
+
+  /**
+   * Presiona "AGREGAR ITEMS" (#add_btn_items) para abrir el catálogo normal de
+   * Productos/Servicios y poder agregar más líneas a una venta ya armada
+   * (importada de una factura, cargada desde una Orden de Caja, etc.). El
+   * propio sistema deja el tab "Productos" activo por defecto al abrir esta
+   * vista (confirmado en vivo, sin necesidad de clickear tabProductos aparte)
+   * y sustituye este botón por "Volver" (ver volverDesdeAgregarItem()) en el
+   * mismo lugar de la interfaz. Generalizado desde
+   * abrirAgregarItemImportarFactura() (que ahora es un wrapper de este
+   * método): el botón y su comportamiento son 100% genéricos — nunca
+   * dependieron de "Importar Factura" en particular, confirmado en vivo que
+   * el mismo botón aparece igual tras cargar una Orden de Caja.
+   */
+  async abrirAgregarItem() {
+    const boton = this.page.locator(L.IMPORTAR_FACTURA_BTN_AGREGAR_ITEM);
+    await expect(boton, 'El botón "AGREGAR ITEMS" no apareció').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await boton.click();
+
+    await expect(
+      this.page.locator(PESTANA_POS_FACTURACION.contenedorContenido),
+      'El catálogo de Productos no quedó visible tras presionar "AGREGAR ITEMS"'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await expect.poll(
+      () => this.tabEstaActivo(this.tabProductos),
+      { timeout: TIMEOUTS.PAYMENT_MODAL, message: 'El tab "Productos" no quedó activo tras presionar "AGREGAR ITEMS"' }
+    ).toBe(true);
+  }
+
+  /** @deprecated Usar abrirAgregarItem() — se mantiene únicamente por compatibilidad con pos-importar-factura.spec.ts, sin duplicar lógica. */
+  async abrirAgregarItemImportarFactura() {
+    return this.abrirAgregarItem();
+  }
+
+  /**
+   * Presiona "Volver" (#hide_btn_items) para regresar de la vista de catálogo
+   * (abierta con abrirAgregarItem()) a la pestaña de origen indicada, sin
+   * perder ninguna línea ya cargada en el carrito — confirmado en vivo que
+   * #table_buy_list conserva tanto las líneas ya cargadas (importadas de una
+   * factura, o de una Orden de Caja) como las agregadas manualmente desde el
+   * catálogo en ambos sentidos de esta navegación, y que los descuentos ya
+   * aplicados (general) también se conservan. Generalizado desde
+   * volverDesdeAgregarItemImportarFactura() (que ahora es un wrapper de este
+   * método) para aceptar cualquier pestana de PESTANAS_POS_A_RECORRER, no
+   * solo "Importar factura" — el botón #hide_btn_items es el mismo en ambos
+   * casos, confirmado en vivo.
+   */
+  async volverDesdeAgregarItem(pestana: PestanaPos) {
+    const boton = this.page.locator(L.IMPORTAR_FACTURA_BTN_VOLVER);
+    await expect(boton, 'El botón "Volver" no apareció en la vista de catálogo').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await boton.click();
+
+    await expect(
+      this.page.locator(pestana.contenedorContenido),
+      `La pestaña "${pestana.etiqueta}" no quedó visible tras presionar "Volver"`
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await expect(
+      this.page.locator(pestana.selector),
+      `La pestaña "${pestana.etiqueta}" no quedó activa tras presionar "Volver"`
+    ).toHaveClass(new RegExp(L.PESTANA_POS_CLASE_ACTIVA));
+  }
+
+  /** @deprecated Usar volverDesdeAgregarItem(pestana) — se mantiene únicamente por compatibilidad con pos-importar-factura.spec.ts, sin duplicar lógica. */
+  async volverDesdeAgregarItemImportarFactura() {
+    const pestana = PESTANAS_POS_A_RECORRER.find((p) => p.etiqueta === 'Importar factura')!;
+    return this.volverDesdeAgregarItem(pestana);
   }
 
   // ─── Precio visible de producto (grid) ─────────────────────────────────────
