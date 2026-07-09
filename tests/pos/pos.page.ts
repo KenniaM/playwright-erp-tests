@@ -52,6 +52,43 @@ const L = {
   // otros tipos de producto con su propio modal que todavía no se han visto.
   MODAL_ABIERTO: '.modal.in',
 
+  // Dashboard — spinner del panel de notificaciones ("campana"). Se elimina
+  // del DOM justo cuando getUserNotifications responde — ver el comentario
+  // de cargarPosDesdeDashboard() para la evidencia completa.
+  DASHBOARD_BELL_LOADING: '.workshop-web-bell-loading',
+
+  // Dashboard — modal de tipo de cambio (Banco Central de Costa Rica), puede
+  // quedar abierto sobre el menú lateral e interceptar clicks — investigado
+  // en vivo (dashbmBccrCurrencyModal), ver _resolverUrlPosDesdeDashboard().
+  DASHBOARD_MODAL_MONEDA: '#dashbmBccrCurrencyModal',
+
+  // Dashboard — modal "Setup Inicial del Sistema": aparece cuando la
+  // compañía activa por defecto de la cuenta (la que carga el Dashboard sin
+  // haber elegido ninguna todavía) tiene pendiente su configuración inicial
+  // — confirmado en vivo con una cuenta real distinta a la de storageState
+  // por defecto, donde bloqueaba cualquier click en el sidebar
+  // (data-backdrop="static", data-keyboard="false", pero con botón de
+  // cierre real .setup-modal-close). No tiene relación con la compañía que
+  // el resto del flujo termina seleccionando (p. ej. HONDURAS) — es la
+  // compañía por defecto de la cuenta la que dispara este modal, no la
+  // elegida después.
+  DASHBOARD_MODAL_SETUP_INICIAL: '#setupInitialModal',
+
+  // Dashboard — link real que abre el flujo de selección de compañía/POS
+  // (onclick="get_company_pos_select(1)", texto visible "Crear factura" —
+  // el "1" coincide con pos_type_option=1, confirmado en vivo en
+  // sidebar-active.js). Vive colapsado dentro de un submenú "FACTURAR" hasta
+  // que se expande.
+  DASHBOARD_LINK_IR_A_POS: 'a[onclick*="get_company_pos_select(1)"]',
+
+  // Dashboard — modal "Seleccionar una compañía para continuar": solo
+  // aparece cuando el usuario pertenece a más de una compañía y ninguna
+  // quedó ya resuelta por la llamada AJAX síncrona de get_company_pos_select()
+  // — confirmado en vivo (dialog_select_company_pos / select_company_pos_content,
+  // vacío en el HTML inicial, se llena dinámicamente).
+  DASHBOARD_MODAL_SELECCIONAR_COMPANIA: '#dialog_select_company_pos',
+  DASHBOARD_LISTA_COMPANIAS: '#company_list li',
+
   // Modal de pago
   TOTAL_MODAL:       'total_sale_txt',         // ID sin # — se lee vía evaluate()
   BTN_CONFIRMAR:     '#make_payment',
@@ -827,8 +864,6 @@ export const METODO: Record<string, MetodoPago> = {
   TRANSACCION: { checkboxId: CHECKBOX_ID.TRANSACCION, montoLocator: '#payment_transaction_total'  },
 };
 
-// Efectivo permite superar el total (el sistema calcula el vuelto).
-export const MONTO_EFECTIVO = '100';
 export const DESCUENTO_INDIVIDUAL_PCT = '5';
 export const DESCUENTO_GENERAL_PCT = '10';
 
@@ -845,6 +880,14 @@ export type TipoProforma = 'normal' | 'consignacion' | 'taller';
 // lista fija del <select> de la interfaz (Hatchback, Crossover, Minivan, SUV,
 // Automóvil, Pick-up) — confirmado inspeccionando sus <option> en vivo.
 export const VEHICULO_PINTURA_TIPO = 'Hatchback';
+
+// Compañía a seleccionar en el modal "Seleccionar una compañía para
+// continuar" (ver _resolverUrlPosDesdeDashboard()) cuando la cuenta de
+// pruebas pertenece a más de una — la misma cuenta ya usada en toda la
+// suite (kadmin) pertenece a "TALLER ALPHA PREMIUM" (id=20, compañía
+// principal) y "HONDURAS" (id=37, la compañía real usada en el resto de las
+// pruebas del POS, confirmado en vivo vía el listado real del modal).
+export const COMPANIA_POS = 'HONDURAS';
 
 // Término de búsqueda para el catálogo CABYS del formulario "Producto
 // Rápido": devuelve resultados de forma consistente en pruebas repetidas
@@ -1028,6 +1071,18 @@ export class PosPage {
     return this.page.locator(L.DIALOG_ABRIR_CAJA);
   }
 
+  /**
+   * Locator del SweetAlert opcional "Información de pago" que puede aparecer
+   * tras presionar "Facturar", pidiendo confirmar con "Pagar" antes de que la
+   * venta continúe. Confirmado en vivo (con la cuenta QA/HONDURAS) que es
+   * distinto del aviso "¿Desea imprimir copia?" (otro `.sweet-alert` ya
+   * manejado aparte): éste usa la clase custom `confirm-complete-sale` en vez
+   * de `visible`, por lo que se filtra por esa clase para no confundirlos.
+   */
+  get confirmacionPago() {
+    return this.page.locator('.sweet-alert.confirm-complete-sale');
+  }
+
   /** Locator del primer producto disponible en el grid del POS. */
   get primerProducto() {
     return this.page.locator(L.PRODUCTO).first();
@@ -1109,15 +1164,182 @@ export class PosPage {
    * `ready()` completo corre sin abortar — confirmado experimentalmente de
    * forma consistente (3/3 intentos con este orden, 0/2 sin él, en pruebas
    * repetidas contra el ambiente real).
+   *
+   * `waitUntil: 'load'` NO es suficiente para considerar el Dashboard listo:
+   * investigado en vivo (4/4 corridas instrumentando request/response reales)
+   * que, en el instante exacto en que el evento `load` del navegador se
+   * dispara, siguen en vuelo 2-3 llamadas AJAX propias del Dashboard
+   * (`getUserNotifications`, `getMonth`, y a veces `addLogRegister`) — `load`
+   * solo garantiza que los recursos de la carga inicial (scripts/CSS/
+   * imágenes referenciados en el HTML) terminaron, no que la inicialización
+   * async que esos scripts disparan haya terminado. Navegar al POS de
+   * inmediato (como hacía este método antes) corta esas llamadas a mitad de
+   * camino.
+   *
+   * Se espera explícitamente a que desaparezca `.workshop-web-bell-loading`
+   * —el spinner real del panel de notificaciones ("campana")— en vez de usar
+   * `waitForTimeout()` o `networkidle`: confirmado en vivo que ese elemento
+   * se elimina del DOM exactamente cuando `getUserNotifications` responde
+   * (badge pasa de "0" placeholder a la cuenta real, `#workshop-web-bell-list`
+   * pasa de 1 hijo —el propio loader— a los ítems reales), y que
+   * `getUserNotifications` es, de las llamadas pendientes al momento de
+   * `load`, la última en resolver en las 4 corridas observadas (`getMonth`
+   * siempre terminó igual o antes). `addLogRegister` es una llamada de
+   * registro/auditoría sin ningún efecto visible para el usuario ni para el
+   * POS, así que no se espera por separado — y por eso tampoco se usa
+   * `networkidle`, que sí dependería de ella (y de cualquier otra petición no
+   * crítica, como un tracking pixel, que podría tardar mucho más o no
+   * resolver nunca). Con `.catch(() => {})`: si el elemento no llega a
+   * aparecer para esta cuenta/permiso, o si por algún motivo no desaparece,
+   * no debe bloquear el flujo — es una estabilización adicional, no una
+   * aserción de negocio.
    */
   async cargarPosDesdeDashboard() {
     await this.page.goto(DASHBOARD_URL, { waitUntil: 'load' });
-    await this.irAlPos();
+    await this.page.locator(L.DASHBOARD_BELL_LOADING)
+      .waitFor({ state: 'hidden', timeout: TIMEOUTS.PAYMENT_MODAL })
+      .catch(() => {});
+    await this._irAlPosResolviendoCompania();
     await this.esperarEstadoInicial();
     if (await this.modalAbrirCajaVisible()) {
       await expect(this.modalAbrirCaja.getByText(CAJA_TEXTO)).toBeVisible();
       await this.cerrarModalAbrirCaja();
     }
+  }
+
+  /**
+   * Cierra el modal de tipo de cambio (Banco Central de Costa Rica) si está
+   * abierto — puede quedar sobre el menú lateral del Dashboard e interceptar
+   * el click al link real hacia POS (confirmado en vivo: Playwright reporta
+   * "<div ... id=\"dashbmBccrCurrencyModal\"> ... intercepts pointer
+   * events"). Ajeno al flujo de compañía/POS, igual criterio que el resto de
+   * los overlays "conocidos" de esta clase: su ausencia es igual de válida
+   * que su aparición.
+   */
+  private async _cerrarModalMonedaSiAparece() {
+    const modal = this.page.locator(L.DASHBOARD_MODAL_MONEDA);
+    if (await modal.isVisible().catch(() => false)) {
+      await modal.locator('[data-dismiss="modal"]').first().click().catch(() => {});
+      await modal.waitFor({ state: 'hidden', timeout: TIMEOUTS.PAYMENT_MODAL }).catch(() => {});
+    }
+  }
+
+  /**
+   * Cierra el modal "Setup Inicial del Sistema" si está abierto — ver el
+   * comentario de L.DASHBOARD_MODAL_SETUP_INICIAL para la evidencia
+   * completa. Se descarta (botón de cierre real), nunca se completa el
+   * wizard: este método no forma parte de ningún flujo de configuración,
+   * solo despeja el overlay para poder continuar hacia POS.
+   *
+   * Usa TIMEOUTS.PRODUCTS_LOAD (no PAYMENT_MODAL, el que usa el modal de
+   * moneda) para el cierre: investigado en vivo que este modal en particular
+   * puede tardar ~45s en desaparecer del DOM tras el click de cierre —
+   * confirmado con un `locator.waitFor('hidden')` real que expiró a los 15s
+   * pese a que el modal sí terminó cerrándose poco después. No es un
+   * selector incorrecto ni una condición de carrera: es este modal
+   * específico (probablemente dispara limpieza/guardado en segundo plano al
+   * cerrarse) que es más lento que el resto de los overlays "conocidos" de
+   * esta clase.
+   */
+  private async _cerrarModalSetupInicialSiAparece() {
+    const modal = this.page.locator(L.DASHBOARD_MODAL_SETUP_INICIAL);
+    if (await modal.isVisible().catch(() => false)) {
+      await modal.locator('[data-dismiss="modal"]').first().click().catch(() => {});
+      await modal.waitFor({ state: 'hidden', timeout: TIMEOUTS.PRODUCTS_LOAD }).catch(() => {});
+    }
+  }
+
+  /**
+   * Navega del Dashboard al POS pasando por el flujo real de selección de
+   * compañía — investigado en vivo (DOM real, AJAX real, código fuente de
+   * general_functions.js/sidebar-active.js), no asumido:
+   *
+   * 1. El link real hacia POS es `a[onclick="get_company_pos_select(1)"]`
+   *    (texto visible "Crear factura", el "1" es pos_type_option=1) —
+   *    vive colapsado dentro de un submenú del sidebar ("FACTURAR") hasta
+   *    que se expande.
+   * 2. Al hacer click, `get_company_pos_select(1)` dispara un POST
+   *    SÍNCRONO (`async:false`) contra la URL de `#url_to_company_pos_select`.
+   *    Si la respuesta trae `result==1` (la cuenta ya tiene una compañía
+   *    resuelta — un solo acceso, o ya seleccionada antes), el propio
+   *    sistema navega de inmediato via `window.location` — nunca aparece
+   *    ningún modal. Si no, inyecta el listado de compañías en
+   *    `#select_company_pos_content` y abre `#dialog_select_company_pos`.
+   * 3. La URL real del POS **no se construye en este archivo**: viene del
+   *    elemento oculto `#url_to_pos` del Dashboard (la misma base en ambos
+   *    caminos), y — solo en el camino con modal — la función
+   *    `redirect_to_pos(company, redirect)` de la propia aplicación arma
+   *    `url_to_pos + "?company_pos=" + company + "&pos_type_option=" + redirect`
+   *    y navega. No se duplica esa construcción aquí: se deja que la propia
+   *    UI (el link, y si aparece, la tarjeta de la compañía) dispare su
+   *    propia navegación real, y este método únicamente espera esa
+   *    navegación.
+   * 4. Cada compañía es una `<li id="product_box_<id>">` dentro de
+   *    `#company_list` (lista, no `<select>` ni tarjetas independientes),
+   *    identificada por su nombre visible (`.company-name` contiene
+   *    "HONDURAS", "TALLER ALPHA PREMIUM", etc.) — nunca por su id numérico,
+   *    que es específico del ambiente.
+   *
+   * Condición funcional de "cambio de compañía terminado" (sin
+   * waitForTimeout ni networkidle): `page.waitForURL(/pointOfSale/)` — la
+   * navegación real hacia el POS, disparada por la propia aplicación en
+   * cualquiera de los dos caminos. Es la misma señal, sin importar si hubo
+   * modal o no.
+   */
+  private async _irAlPosResolviendoCompania() {
+    await this._cerrarModalSetupInicialSiAparece();
+    await this._cerrarModalMonedaSiAparece();
+
+    const linkIrAPos = this.page.locator(L.DASHBOARD_LINK_IR_A_POS).first();
+    if (!(await linkIrAPos.isVisible().catch(() => false))) {
+      // El link vive colapsado dentro de su submenú padre (treeview) — se
+      // expande haciendo click en el <a> inmediatamente superior, sin asumir
+      // su texto ("FACTURAR" en el ambiente investigado, pero configurable
+      // por empresa/ambiente).
+      await linkIrAPos.evaluate((el) => {
+        const li = el.closest('li');
+        const ul = li?.closest('ul');
+        const parentA = ul?.closest('li')?.querySelector<HTMLElement>(':scope > a');
+        parentA?.click();
+      });
+      await expect(linkIrAPos, 'El link real hacia POS no quedó visible tras expandir su submenú').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    }
+
+    // El modal de tipo de cambio (y, en cuentas cuya compañía por defecto
+    // tenga pendiente su configuración inicial, el modal "Setup Inicial del
+    // Sistema") pueden aparecer de forma asíncrona en cualquier momento
+    // hasta este click — confirmado en vivo: la comprobación de arriba
+    // (antes de expandir el submenú) puede pasar limpia y el modal igual
+    // terminar bloqueando este click segundos después (Playwright reportó
+    // ambos casos por separado, cada uno "... intercepts pointer events",
+    // en corridas reales pese a haberlos comprobado ya). Se reintenta
+    // cerrándolos antes de cada intento, acotado, en vez de asumir que la
+    // comprobación única de arriba basta.
+    const MAX_INTENTOS_CLICK = 3;
+    for (let intento = 1; intento <= MAX_INTENTOS_CLICK; intento++) {
+      await this._cerrarModalSetupInicialSiAparece();
+      await this._cerrarModalMonedaSiAparece();
+      try {
+        await linkIrAPos.click({ timeout: TIMEOUTS.PAYMENT_MODAL });
+        break;
+      } catch (e) {
+        if (intento === MAX_INTENTOS_CLICK) throw e;
+      }
+    }
+
+    const modalCompania = this.page.locator(L.DASHBOARD_MODAL_SELECCIONAR_COMPANIA);
+    const aparecioModalCompania = await modalCompania
+      .waitFor({ state: 'visible', timeout: TIMEOUTS.PAYMENT_MODAL })
+      .then(() => true)
+      .catch(() => false);
+
+    if (aparecioModalCompania) {
+      const opcionCompania = modalCompania.locator(L.DASHBOARD_LISTA_COMPANIAS, { hasText: COMPANIA_POS }).first();
+      await expect(opcionCompania, `No se encontró la compañía "${COMPANIA_POS}" en el selector`).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+      await opcionCompania.click();
+    }
+
+    await this.page.waitForURL(/pointOfSale/, { timeout: TIMEOUTS.NAVIGATE });
   }
 
   /**
@@ -1343,71 +1565,106 @@ export class PosPage {
    * catálogo puede tener —o sumar en el futuro— más de un tipo de producto que
    * no se agrega con un solo click. Si ninguno funciona, falla con un mensaje
    * explícito en vez de dejar el carrito vacío en silencio.
+   *
+   * Pagina con _cargarMasProductosScrolleando() —el mismo mecanismo de scroll
+   * real que ya usa localizarPrimerProducto()— cuando se agotan las tarjetas
+   * ya cargadas sin encontrar ninguna: investigado en vivo (catálogo
+   * compartido de QA) que la tanda inicial que el grid renderiza sin pedir
+   * más página ("cupo fijo", ver el comentario de L.PRODUCTO_BUSCADOR_GRID)
+   * puede llenarse por completo de productos Fraccionados o "por monto"
+   * generados por la propia suite, dejando productos de precio fijo reales
+   * más adelante en el catálogo, fuera del alcance de un recorrido que no
+   * pagina. No se delega en localizarPrimerProducto(): su `predicado` es puro
+   * (solo lee metadata ya conocida) y por eso puede reevaluar sin costo todas
+   * las tarjetas en cada vuelta de paginación, pero "¿este producto se agrega
+   * directo o abre un modal?" no es metadata disponible de antemano (mismo
+   * motivo documentado en agregarProductoDelGridAlCarrito() para el caso
+   * "Monto a comprar") — solo se sabe haciendo clic, y cada clic tiene efectos
+   * reales (abre/cierra un modal), así que cada tarjeta debe probarse una
+   * única vez con un cursor propio, no un predicado sin efectos secundarios.
    */
   async agregarPrimerProductoDePrecioFijo() {
     await this.cerrarModalNotificacionesSiAparece();
     const productos = this.page.locator(L.PRODUCTO);
     await productos.first().waitFor({ timeout: TIMEOUTS.PRODUCTS_LOAD });
-    const total = await productos.count();
-    if (total === 0) {
-      throw new Error('No hay ningún producto visible en el catálogo del POS para intentar facturar.');
-    }
 
     const modalAbierto = this.page.locator(L.MODAL_ABIERTO);
+    const MAX_PAGINACIONES = 20;
+    let indiceInicio = 0;
 
-    for (let i = 0; i < total; i++) {
-      // Se cuenta por las claves del carrito (L.CARRITO_CLAVES → #table_buy_list),
-      // no por L.CARRITO_FILAS (#table_sale_pos): ese id no existe en el DOM real
-      // — confirmado inspeccionando el DOM en vivo — así que su conteo siempre
-      // da 0 y nunca detectaría una fila agregada.
-      const clavesAntes = await this.page.locator(L.CARRITO_CLAVES).count();
-      await productos.nth(i).click();
-
-      const requiereInteraccionAdicional = await modalAbierto
-        .waitFor({ state: 'visible', timeout: 2_000 })
-        .then(() => true)
-        .catch(() => false);
-
-      if (requiereInteraccionAdicional) {
-        // Validar que el carrito efectivamente no creció —confirma que el
-        // producto no se agregó y que este modal es del tipo "requiere un
-        // paso adicional", no un efecto secundario inofensivo— antes de
-        // descartarlo y probar con el siguiente.
-        const clavesConModalAbierto = await this.page.locator(L.CARRITO_CLAVES).count();
-        expect(clavesConModalAbierto, 'El carrito creció pero además se abrió un modal: revisar manualmente.').toBe(clavesAntes);
-
-        // El modal de permisos de notificación puede aparecer de forma asíncrona
-        // en cualquier momento y quedar físicamente encima de este botón —
-        // confirmado en vivo (mismo comportamiento ya documentado en
-        // abrirMenuTresPuntos()) que force:true por sí solo NO protege contra
-        // esto: el navegador entrega el click al elemento que está arriba en esa
-        // coordenada, no al que Playwright pretendía clickear. Por eso se cierra
-        // explícitamente aquí, justo antes del click, en vez de asumir que el
-        // chequeo del inicio del método (una sola vez, antes del bucle) sigue
-        // siendo válido varias iteraciones después.
-        await this.cerrarModalNotificacionesSiAparece();
-        await modalAbierto.getByRole('button', { name: 'Cerrar', exact: true }).click({ force: true });
-        await expect(modalAbierto).toBeHidden();
-        continue; // este producto no se agrega directamente: probar el siguiente
+    for (let paginacion = 0; paginacion <= MAX_PAGINACIONES; paginacion++) {
+      const total = await productos.count();
+      if (total === 0) {
+        throw new Error('No hay ningún producto visible en el catálogo del POS para intentar facturar.');
       }
 
-      // No apareció ningún modal: confirmar que realmente se agregó al
-      // carrito antes de darlo por bueno — un click sin efecto no debe pasar
-      // desapercibido.
-      const agregado = await expect.poll(
-        () => this.page.locator(L.CARRITO_CLAVES).count(),
-        { timeout: 3_000 }
-      ).toBeGreaterThan(clavesAntes).then(() => true).catch(() => false);
+      for (let i = indiceInicio; i < total; i++) {
+        // Se cuenta por las claves del carrito (L.CARRITO_CLAVES → #table_buy_list),
+        // no por L.CARRITO_FILAS (#table_sale_pos): ese id no existe en el DOM real
+        // — confirmado inspeccionando el DOM en vivo — así que su conteo siempre
+        // da 0 y nunca detectaría una fila agregada.
+        const clavesAntes = await this.page.locator(L.CARRITO_CLAVES).count();
+        await productos.nth(i).click();
 
-      if (agregado) {
-        await this.page.waitForTimeout(PAUSES.VER_CARRITO);
-        return;
+        const requiereInteraccionAdicional = await modalAbierto
+          .waitFor({ state: 'visible', timeout: 2_000 })
+          .then(() => true)
+          .catch(() => false);
+
+        if (requiereInteraccionAdicional) {
+          // Validar que el carrito efectivamente no creció —confirma que el
+          // producto no se agregó y que este modal es del tipo "requiere un
+          // paso adicional", no un efecto secundario inofensivo— antes de
+          // descartarlo y probar con el siguiente.
+          const clavesConModalAbierto = await this.page.locator(L.CARRITO_CLAVES).count();
+          expect(clavesConModalAbierto, 'El carrito creció pero además se abrió un modal: revisar manualmente.').toBe(clavesAntes);
+
+          // El modal de permisos de notificación puede aparecer de forma asíncrona
+          // en cualquier momento y quedar físicamente encima de este botón —
+          // confirmado en vivo (mismo comportamiento ya documentado en
+          // abrirMenuTresPuntos()) que force:true por sí solo NO protege contra
+          // esto: el navegador entrega el click al elemento que está arriba en esa
+          // coordenada, no al que Playwright pretendía clickear. Por eso se cierra
+          // explícitamente aquí, justo antes del click, en vez de asumir que el
+          // chequeo del inicio del método (una sola vez, antes del bucle) sigue
+          // siendo válido varias iteraciones después.
+          await this.cerrarModalNotificacionesSiAparece();
+          await modalAbierto.getByRole('button', { name: 'Cerrar', exact: true }).click({ force: true });
+          await expect(modalAbierto).toBeHidden();
+          continue; // este producto no se agrega directamente: probar el siguiente
+        }
+
+        // No apareció ningún modal: confirmar que realmente se agregó al
+        // carrito antes de darlo por bueno — un click sin efecto no debe pasar
+        // desapercibido.
+        const agregado = await expect.poll(
+          () => this.page.locator(L.CARRITO_CLAVES).count(),
+          { timeout: 3_000 }
+        ).toBeGreaterThan(clavesAntes).then(() => true).catch(() => false);
+
+        if (agregado) {
+          await this.page.waitForTimeout(PAUSES.VER_CARRITO);
+          return;
+        }
+        // Ni modal ni fila nueva: seguir probando con el siguiente producto.
       }
-      // Ni modal ni fila nueva: seguir probando con el siguiente producto.
+
+      // Se agotaron las tarjetas ya cargadas sin encontrar ninguna de precio
+      // fijo: pedir la siguiente página del grid (mismo gesto de scroll real
+      // que _cargarMasProductosScrolleando() ya usa para localizarPrimerProducto())
+      // antes de rendirse, en vez de asumir que el catálogo completo es solo
+      // lo que el grid rindió sin que se le pidiera.
+      indiceInicio = total;
+      const hayMas = await this._cargarMasProductosScrolleando(total);
+      if (!hayMas) {
+        throw new Error(
+          `No se encontró ningún producto de precio fijo disponible para facturar entre los ${total} productos revisados de todo el catálogo (no hay más páginas que cargar).`
+        );
+      }
     }
 
     throw new Error(
-      `No se encontró ningún producto de precio fijo disponible para facturar entre los ${total} productos visibles del catálogo.`
+      `No se encontró ningún producto de precio fijo disponible tras ${MAX_PAGINACIONES} cargas adicionales del catálogo (posible bucle: revisar manualmente).`
     );
   }
 
@@ -1541,6 +1798,16 @@ export class PosPage {
    * las esperas nuevamente armadas antes de ese click— hasta obtener el resultado
    * final: la ventana de impresión, que sí forma parte del flujo real del sistema.
    *
+   * Un tercer resultado posible, igual de válido, es el SweetAlert opcional
+   * "Información de pago" (ver `confirmacionPago`): no todos los ambientes lo
+   * muestran (confirmado en vivo con la cuenta QA/HONDURAS que aparece en
+   * algunas corridas y en otras no), así que no se asume ni su presencia ni su
+   * ausencia. Cuando aparece, se confirma con "Pagar" —con la carrera vuelta a
+   * armar antes de ESE click, por la misma razón que antes de "Facturar": la
+   * ventana de impresión puede abrirse de forma síncrona junto con la
+   * respuesta del click— y se sigue esperando el resultado real, sin volver a
+   * presionar "Facturar" (el pago ya fue iniciado).
+   *
    * Centralizado aquí: existía duplicado (idéntico salvo un puñado de líneas de
    * comentario) como función local en pos-crear.spec.ts, pos-facturar.spec.ts,
    * pos-navegacion.spec.ts y pos.spec.ts.
@@ -1549,15 +1816,22 @@ export class PosPage {
     const MAX_INTENTOS = 3;
 
     for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
-      const popupPromise = this.page.waitForEvent('popup', { timeout: TIMEOUTS.PRINT_POPUP })
-        .then((printPage) => ({ tipo: 'popup' as const, printPage }));
-      const modalPromise = this.modalAbrirCaja.waitFor({ state: 'visible', timeout: TIMEOUTS.PRINT_POPUP })
-        .then(() => ({ tipo: 'modalAbrirCaja' as const }));
-
-      await this.presionarConfirmarPago();
+      let resultado = await this._armarCarreraFacturacion(() => this.presionarConfirmarPago(), true);
       await this.cerrarAvisoConsecutivoSiAparece();
 
-      const resultado = await Promise.race([popupPromise, modalPromise]);
+      // Si "confirmacionPago" ya estaba visible al armar la carrera anterior,
+      // no se vuelve a incluir en la siguiente: su `waitFor({state:'visible'})`
+      // resolvería de inmediato contra el MISMO modal todavía abierto (en vez
+      // de esperar una aparición nueva), lo que produciría un loop infinito de
+      // clicks en "Pagar" sin nunca progresar. Se asume una sola confirmación
+      // por intento de facturación — no hay evidencia de que el sistema la
+      // muestre dos veces seguidas.
+      if (resultado.tipo === 'confirmacionPago') {
+        resultado = await this._armarCarreraFacturacion(
+          () => this.confirmacionPago.locator('button.confirm').click(),
+          false
+        );
+      }
 
       if (resultado.tipo === 'popup') {
         await this.mostrarYCerrarVentanaImpresion(resultado.printPage);
@@ -1591,6 +1865,39 @@ export class PosPage {
       `La facturación no se completó tras ${MAX_INTENTOS} intentos de abrir la caja: ` +
       'el sistema siguió pidiendo abrir la caja o nunca mostró la ventana de impresión.'
     );
+  }
+
+  /**
+   * Arma la carrera entre los resultados válidos tras confirmar un pago
+   * (popup de impresión, modal "Abrir Caja" y, opcionalmente, el SweetAlert
+   * "Información de pago") ANTES de ejecutar `accionClick`, para no perder un
+   * evento que puede dispararse de forma síncrona junto con la respuesta del
+   * click — usado tanto para el click inicial en "Facturar" como para el
+   * click en "Pagar" cuando la confirmación opcional aparece.
+   *
+   * `incluirConfirmacionPago` se desactiva para el click en "Pagar": el modal
+   * de confirmación sigue técnicamente visible en el instante en que se arma
+   * esa segunda carrera (recién se está cerrando), así que incluirlo ahí
+   * resolvería la carrera de inmediato contra el mismo modal en vez de
+   * esperar una aparición nueva.
+   */
+  private async _armarCarreraFacturacion(accionClick: () => Promise<void>, incluirConfirmacionPago: boolean) {
+    const popupPromise = this.page.waitForEvent('popup', { timeout: TIMEOUTS.PRINT_POPUP })
+      .then((printPage) => ({ tipo: 'popup' as const, printPage }));
+    const modalPromise = this.modalAbrirCaja.waitFor({ state: 'visible', timeout: TIMEOUTS.PRINT_POPUP })
+      .then(() => ({ tipo: 'modalAbrirCaja' as const }));
+    const promesas: Promise<{ tipo: 'popup'; printPage: Page } | { tipo: 'modalAbrirCaja' } | { tipo: 'confirmacionPago' }>[] =
+      [popupPromise, modalPromise];
+    if (incluirConfirmacionPago) {
+      promesas.push(
+        this.confirmacionPago.waitFor({ state: 'visible', timeout: TIMEOUTS.PRINT_POPUP })
+          .then(() => ({ tipo: 'confirmacionPago' as const }))
+      );
+    }
+    const carrera = Promise.race(promesas);
+
+    await accionClick();
+    return carrera;
   }
 
   /** Verifica que no quedan filas en el carrito tras la venta. */
@@ -2320,6 +2627,52 @@ export class PosPage {
     await precio.click();
 
     await expect(this.modalSeleccionarPrecio).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /**
+   * Tras seleccionarPrimerServicioPintura(), determina cuál de los dos
+   * caminos válidos tomó el sistema — investigado en vivo (request/response
+   * reales de getServiceByPiece + DOM de la tarjeta del servicio):
+   *
+   * - "agregado_directo": la tarjeta del servicio ya trae el primer precio
+   *   pre-cableado como su propio onclick (fillContainerPrices() en
+   *   pos_straightening_and_painting.js asigna
+   *   prepare_service_before_add_item_to_table(prices[0].sip_id, ...) a la
+   *   tarjeta completa apenas se renderiza) — el click en
+   *   seleccionarPrimerServicioPintura() ya agregó la línea al carrito, sin
+   *   ningún modal de por medio.
+   * - "requiere_modal": el servicio no dejó ese onclick directo (o el
+   *   sistema decide mostrar el modal "Selecciona un precio" por alguna otra
+   *   condición de negocio) y #dialog_select_prices sí aparece — el
+   *   elemento sigue existiendo en el DOM (confirmado en vivo) aunque en el
+   *   camino de agregado directo nunca se abra.
+   *
+   * Se arman ambas esperas ANTES de decidir cuál ganó (mismo patrón que
+   * confirmarPagoAbriendoCajaSiEsNecesario() usa para popup/modalAbrirCaja),
+   * nunca con waitForTimeout(): cada rama se resuelve con su propio
+   * expect.poll()/locator.waitFor(), y la que no ocurre expira sola en
+   * background sin bloquear el resultado.
+   */
+  async esperarServicioPinturaAgregadoOModalPrecio(clavesAntes: string[]): Promise<'agregado_directo' | 'requiere_modal'> {
+    const agregadoDirecto = expect.poll(
+      async () => (await this.obtenerClavesProductos()).length,
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    ).toBeGreaterThan(clavesAntes.length)
+      .then(() => 'agregado_directo' as const)
+      .catch(() => null);
+
+    const requiereModal = this.modalSeleccionarPrecio
+      .waitFor({ state: 'visible', timeout: TIMEOUTS.PAYMENT_MODAL })
+      .then(() => 'requiere_modal' as const)
+      .catch(() => null);
+
+    const resultado = await Promise.race([agregadoDirecto, requiereModal]);
+    if (!resultado) {
+      throw new Error(
+        'Tras seleccionar el servicio de End. Pintura, ni el carrito creció ni apareció el modal "Selecciona un precio" — revisar manualmente.'
+      );
+    }
+    return resultado;
   }
 
   // ─── "Producto Rápido" ──────────────────────────────────────────────────────
@@ -5053,6 +5406,29 @@ export class PosPage {
     return this.localizarPrimerProducto(
       (m) => m.tipoItem === tipoItem && !m.esFraccionado && !textoCarrito.includes(m.nombre),
       tipoItem === 1 ? 'producto normal que todavía no esté en el carrito' : 'servicio que todavía no esté en el carrito'
+    );
+  }
+
+  /**
+   * Variante fraccionada de obtenerPrimerProductoNoPresenteEnCarrito(): mismo
+   * motivo exacto (add_to_table() no crea línea nueva para un producto ya
+   * presente en el carrito, solo le suma cantidad a la existente — ver el
+   * comentario de obtenerTextoCarrito()), pero para escenarios que agregan un
+   * Fraccionado DESPUÉS de cargar al carrito una Orden de Caja ya existente.
+   * Investigado en vivo (3/3 corridas): el primer Fraccionado del catálogo
+   * (obtenerPrimerProductoFraccionado(), determinístico) resultó estar YA
+   * presente en la Orden de Caja "primera disponible" que cargarPrimeraOrdenCajaDisponible()
+   * también elige de forma determinística — ambos "primeros" chocan
+   * consistentemente en este ambiente compartido, dejando
+   * agregarProductoFraccionadoAlCarrito() esperando para siempre una clave
+   * nueva que nunca aparece (el modal "Seleccionar Cantidad" sí se completa y
+   * cierra con éxito; el carrito simplemente no gana una línea nueva).
+   */
+  async obtenerPrimerProductoFraccionadoNoPresenteEnCarrito(): Promise<MetadatoProducto> {
+    const textoCarrito = await this.obtenerTextoCarrito();
+    return this.localizarPrimerProducto(
+      (m) => m.esFraccionado && !textoCarrito.includes(m.nombre),
+      'producto Fraccionado que todavía no esté en el carrito'
     );
   }
 

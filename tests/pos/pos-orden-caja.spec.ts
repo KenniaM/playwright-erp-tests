@@ -710,6 +710,17 @@ test.describe('Orden de Caja — Seleccionar y Facturar', () => {
     await pos.abrirAgregarItem();
 
     await test.step(`Activar el descuento general del ${DESCUENTO_GENERAL_PCT}% y validar que se aplicó`, async () => {
+      // La Orden de Caja "primera disponible" puede llegar con descuento
+      // general YA activo (creada por otro escenario de "Crear" que también
+      // lo aplica) — confirmado en vivo, 2/2 corridas: el checkbox y el
+      // monto de descuento ya traían un valor > 0 antes de tocar nada, lo
+      // que dejaba establecerPorcentajeDescuentoGeneral() satisfecho sin
+      // haber cambiado realmente nada (su espera solo valida monto > 0, no
+      // que haya cambiado desde el valor previo). Se desactiva primero —
+      // mismo criterio que ya usa el test 20 antes de un descuento
+      // individual — para partir de un estado conocido y que la
+      // comparación de abajo mida el efecto real de ESTE 10%.
+      await pos.desactivarDescuentoGeneral();
       const totalAntes = await pos.obtenerTotalVentaNumerico();
       await pos.activarDescuentoGeneral();
       await pos.mostrarDetalleAvanzadoFactura();
@@ -720,7 +731,7 @@ test.describe('Orden de Caja — Seleccionar y Facturar', () => {
 
     let clavesAntesDeVolver: string[] = [];
     await test.step('Agregar un producto fraccionado y un producto rápido', async () => {
-      const fraccionado = await pos.obtenerPrimerProductoFraccionado();
+      const fraccionado = await pos.obtenerPrimerProductoFraccionadoNoPresenteEnCarrito();
       await pos.agregarProductoFraccionadoAlCarrito(fraccionado);
       await pos.agregarProductoRapidoSimple(`Rápido Orden Caja DescGeneral ${Date.now()}`, PRECIO_PRODUCTO_RAPIDO);
 
@@ -771,7 +782,7 @@ test.describe('Orden de Caja — Seleccionar y Facturar', () => {
       // un paso anterior.
       await pos.categoriaTodos.click();
 
-      const fraccionado = await pos.obtenerPrimerProductoFraccionado();
+      const fraccionado = await pos.obtenerPrimerProductoFraccionadoNoPresenteEnCarrito();
       await pos.agregarProductoFraccionadoAlCarrito(fraccionado);
 
       const normal = await pos.obtenerPrimerProductoNoPresenteEnCarrito();

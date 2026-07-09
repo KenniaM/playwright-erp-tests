@@ -1,33 +1,79 @@
-import { test, expect, Response } from '@playwright/test';
+import { test as base, expect, Response, Page } from '@playwright/test';
 import { PosPage, TIMEOUTS, METODO, DESCUENTO_INDIVIDUAL_PCT, DESCUENTO_GENERAL_PCT, espiarErroresJS } from './pos.page';
+
+// ─── Sesión compartida (fixture de scope 'worker', NO mode: 'serial') ──────
+//
+// Mismo mecanismo ya adoptado en pos-ruteo.spec.ts y pos-orden-caja.spec.ts:
+// una fixture propia con `scope: 'worker'`, el mismo con el que Playwright ya
+// crea `browser` (una instancia por proceso worker, reutilizada en todos los
+// tests que ese worker ejecute) — no test.describe.configure({mode:'serial'}),
+// que obligaría a correr todo el archivo en un único worker y, si un test
+// falla, saltaría el resto en vez de ejecutarlos (reduce el valor de la
+// suite para QA) y entraría en conflicto con `fullyParallel: true` ya
+// configurado en playwright.config.ts.
+//
+// El login real sigue ocurriendo una única vez por corrida completa en el
+// proyecto "setup" (auth.setup.ts, storageState compartido, sin cambios); el
+// paso por Dashboard (cargarPosDesdeDashboard()) se hace como máximo una vez
+// POR WORKER, nunca una vez por test.
+type ApartadoFixtures = {
+  sharedPage: Page;
+  pos: PosPage;
+};
+
+const test = base.extend<{}, ApartadoFixtures>({
+  sharedPage: [async ({ browser }, use) => {
+    const page = await browser.newPage();
+    await use(page);
+    await page.close();
+  }, { scope: 'worker', timeout: TIMEOUTS.TEST }],
+
+  pos: [async ({ sharedPage }, use) => {
+    const pos = new PosPage(sharedPage);
+    // Único paso por Dashboard que este worker hará para todo el archivo:
+    // necesario para calentar la caché HTTP del navegador y evitar la
+    // condición de carrera de "Agregar" ya documentada en el comentario de
+    // cargarPosDesdeDashboard() (pos.page.ts).
+    await pos.cargarPosDesdeDashboard();
+    await pos.cerrarOverlaysConocidos();
+    await use(pos);
+  }, { scope: 'worker', timeout: TIMEOUTS.TEST }],
+});
+
+/**
+ * Deja el POS en un estado limpio y con la caja abierta antes de cada
+ * escenario, sin repetir el login ni el paso por Dashboard: navega directo a
+ * la URL del POS (pos.irAlPos(), ya seguro tras el cargarPosDesdeDashboard()
+ * único que la fixture "pos" ya hizo para este worker) y vuelve a resolver el
+ * estado inicial (grid de productos o modal "Abrir Caja").
+ *
+ * A diferencia de pos-ruteo.spec.ts/pos-orden-caja.spec.ts (que solo cancelan
+ * el modal "Abrir Caja" si aparece, pues ninguno de sus escenarios depende de
+ * tener la caja abierta), aquí SÍ se completa la apertura: "Generar Apartado"
+ * no tiene el manejo de "abrir caja sobre la marcha" que sí tiene Facturar
+ * (ver confirmarPagoAbriendoCajaSiEsNecesario() en pos.page.ts), así que la
+ * caja debe quedar abierta de antemano — mismo comportamiento que ya tenía
+ * cada test antes de esta migración (cargarPosConProducto()/cargarPos()),
+ * solo que ahora se resuelve una vez por test vía beforeEach en lugar de
+ * repetir además el paso completo por Dashboard.
+ */
+test.beforeEach(async ({ pos }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  await pos.irAlPos();
+  await pos.esperarEstadoInicial();
+  await pos.cerrarOverlaysConocidos();
+  if (await pos.modalAbrirCajaVisible()) {
+    await pos.completarAperturaCaja();
+  }
+});
 
 // ─── Helpers compartidos ────────────────────────────────────────────────────
 // Todos componen métodos ya existentes de PosPage — ninguno reimplementa
 // lógica de agregar productos, clientes, descuentos, pagos ni esperas.
-//
-// IMPORTANTE: siempre cargarPosDesdeDashboard(), nunca cargarPosYCerrarModalSiAparece()
-// (ver el comentario de abrirCrearApartado() en pos.page.ts) — cargar directo a
-// la URL del POS dispara una condición de carga en frío ya documentada que
-// puede impedir que el modal de Apartado llegue a mostrarse. Mismo patrón que
-// ya usan pos-proforma.spec.ts y pos-orden-caja.spec.ts.
 
-/** Carga el POS vía Dashboard, asegura la caja abierta y agrega un producto de precio fijo. */
-async function cargarPosConProducto(pos: PosPage) {
-  await pos.cargarPosDesdeDashboard();
-  await pos.cerrarOverlaysConocidos();
-  if (await pos.modalAbrirCajaVisible()) {
-    await pos.completarAperturaCaja();
-  }
+/** Agrega un producto de precio fijo — punto de partida común a varios escenarios. */
+async function agregarProductoDePrecioFijo(pos: PosPage) {
   await pos.agregarPrimerProductoDePrecioFijo();
-}
-
-/** Carga el POS vía Dashboard y asegura la caja abierta, sin agregar ningún producto todavía — usado por los escenarios que agregan su propia combinación de productos. */
-async function cargarPos(pos: PosPage) {
-  await pos.cargarPosDesdeDashboard();
-  await pos.cerrarOverlaysConocidos();
-  if (await pos.modalAbrirCajaVisible()) {
-    await pos.completarAperturaCaja();
-  }
 }
 
 /** Guarda el Apartado ya configurado y valida que se creó correctamente. */
@@ -63,17 +109,18 @@ async function aplicarDescuentoIndividualATodos(pos: PosPage) {
 // Apartados — Crear
 // ═══════════════════════════════════════════════════════════════════════════
 //
-// Cada test es independiente: carga su propio POS, agrega sus propios
-// productos y no depende del resultado de ningún otro test.
+// Cada test es funcionalmente independiente (agrega sus propios productos y
+// no depende del resultado de ningún otro) aunque, dentro de un mismo
+// worker, reutilicen la misma `page`/sesión ya autenticada — ver la fixture
+// "pos" y beforeEach() arriba.
 
 test.describe('Apartados — Crear', () => {
 
   test.describe('Cliente', () => {
-    test('1. Crear un Apartado seleccionando el cliente desde arriba del carrito (Forma 1)', async ({ page }) => {
+    test('1. Crear un Apartado seleccionando el cliente desde arriba del carrito (Forma 1)', async ({ pos, sharedPage }) => {
       test.setTimeout(TIMEOUTS.TEST);
-      const pos = new PosPage(page);
-      await cargarPosConProducto(pos);
-      const erroresJS = espiarErroresJS(page);
+      await agregarProductoDePrecioFijo(pos);
+      const erroresJS = espiarErroresJS(sharedPage);
 
       let nombreCliente = '';
       await test.step('Seleccionar un cliente existente desde arriba del carrito', async () => {
@@ -90,11 +137,10 @@ test.describe('Apartados — Crear', () => {
       expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
     });
 
-    test('2. Crear un Apartado seleccionando el cliente desde el modal (Forma 2)', async ({ page }) => {
+    test('2. Crear un Apartado seleccionando el cliente desde el modal (Forma 2)', async ({ pos, sharedPage }) => {
       test.setTimeout(TIMEOUTS.TEST);
-      const pos = new PosPage(page);
-      await cargarPosConProducto(pos);
-      const erroresJS = espiarErroresJS(page);
+      await agregarProductoDePrecioFijo(pos);
+      const erroresJS = espiarErroresJS(sharedPage);
 
       await test.step('Abrir "Generar Apartado" y seleccionar cliente desde el propio modal', async () => {
         await pos.abrirCrearApartado();
@@ -112,10 +158,9 @@ test.describe('Apartados — Crear', () => {
   });
 
   test.describe('Abonos', () => {
-    test('3. Crear un Apartado sin abono inicial', async ({ page }) => {
+    test('3. Crear un Apartado sin abono inicial', async ({ pos }) => {
       test.setTimeout(TIMEOUTS.TEST);
-      const pos = new PosPage(page);
-      await cargarPosConProducto(pos);
+      await agregarProductoDePrecioFijo(pos);
       await pos.seleccionarClienteExistente();
       await pos.abrirCrearApartado();
 
@@ -125,10 +170,9 @@ test.describe('Apartados — Crear', () => {
       });
     });
 
-    test('4. Crear un Apartado con abono inicial en efectivo', async ({ page }) => {
+    test('4. Crear un Apartado con abono inicial en efectivo', async ({ pos }) => {
       test.setTimeout(TIMEOUTS.TEST);
-      const pos = new PosPage(page);
-      await cargarPosConProducto(pos);
+      await agregarProductoDePrecioFijo(pos);
       await pos.seleccionarClienteExistente();
       await pos.abrirCrearApartado();
 
@@ -139,10 +183,9 @@ test.describe('Apartados — Crear', () => {
       });
     });
 
-    test('5. Crear un Apartado con abono inicial en tarjeta', async ({ page }) => {
+    test('5. Crear un Apartado con abono inicial en tarjeta', async ({ pos }) => {
       test.setTimeout(TIMEOUTS.TEST);
-      const pos = new PosPage(page);
-      await cargarPosConProducto(pos);
+      await agregarProductoDePrecioFijo(pos);
       await pos.seleccionarClienteExistente();
       await pos.abrirCrearApartado();
 
@@ -153,10 +196,9 @@ test.describe('Apartados — Crear', () => {
       });
     });
 
-    test('6. Crear un Apartado con abono inicial en SINPE (tercera opción)', async ({ page }) => {
+    test('6. Crear un Apartado con abono inicial en SINPE (tercera opción)', async ({ pos }) => {
       test.setTimeout(TIMEOUTS.TEST);
-      const pos = new PosPage(page);
-      await cargarPosConProducto(pos);
+      await agregarProductoDePrecioFijo(pos);
       await pos.seleccionarClienteExistente();
       await pos.abrirCrearApartado();
 
@@ -167,10 +209,9 @@ test.describe('Apartados — Crear', () => {
       });
     });
 
-    test('7. Crear un Apartado con abono inicial en transacción', async ({ page }) => {
+    test('7. Crear un Apartado con abono inicial en transacción', async ({ pos }) => {
       test.setTimeout(TIMEOUTS.TEST);
-      const pos = new PosPage(page);
-      await cargarPosConProducto(pos);
+      await agregarProductoDePrecioFijo(pos);
       await pos.seleccionarClienteExistente();
       await pos.abrirCrearApartado();
 
@@ -181,10 +222,9 @@ test.describe('Apartados — Crear', () => {
       });
     });
 
-    test('8. Crear un Apartado con abono inicial mixto (efectivo + tarjeta)', async ({ page }) => {
+    test('8. Crear un Apartado con abono inicial mixto (efectivo + tarjeta)', async ({ pos }) => {
       test.setTimeout(TIMEOUTS.TEST);
-      const pos = new PosPage(page);
-      await cargarPosConProducto(pos);
+      await agregarProductoDePrecioFijo(pos);
       await pos.seleccionarClienteExistente();
       await pos.abrirCrearApartado();
 
@@ -200,10 +240,8 @@ test.describe('Apartados — Crear', () => {
   });
 
   test.describe('Productos', () => {
-    test('9. Crear un Apartado con producto normal, rápido y fraccionado, con abono inicial', async ({ page }) => {
+    test('9. Crear un Apartado con producto normal, rápido y fraccionado, con abono inicial', async ({ pos }) => {
       test.setTimeout(TIMEOUTS.TEST);
-      const pos = new PosPage(page);
-      await cargarPos(pos);
 
       await test.step('Agregar producto normal, rápido y fraccionado', async () => {
         await pos.agregarProductoNormalFraccionadoYRapido('Apartado', `ConAbono ${Date.now()}`);
@@ -219,10 +257,8 @@ test.describe('Apartados — Crear', () => {
       });
     });
 
-    test('10. Crear un Apartado con producto normal, rápido y fraccionado, sin abono', async ({ page }) => {
+    test('10. Crear un Apartado con producto normal, rápido y fraccionado, sin abono', async ({ pos }) => {
       test.setTimeout(TIMEOUTS.TEST);
-      const pos = new PosPage(page);
-      await cargarPos(pos);
 
       await test.step('Agregar producto normal, rápido y fraccionado', async () => {
         await pos.agregarProductoNormalFraccionadoYRapido('Apartado', `SinAbono ${Date.now()}`);
@@ -239,10 +275,8 @@ test.describe('Apartados — Crear', () => {
   });
 
   test.describe('Descuento individual', () => {
-    test('11. Crear un Apartado con productos mixtos, descuento individual y abono inicial', async ({ page }) => {
+    test('11. Crear un Apartado con productos mixtos, descuento individual y abono inicial', async ({ pos }) => {
       test.setTimeout(TIMEOUTS.TEST);
-      const pos = new PosPage(page);
-      await cargarPos(pos);
       await pos.agregarProductoNormalFraccionadoYRapido('Apartado', `DescIndConAbono ${Date.now()}`);
 
       await test.step('Aplicar descuento individual a cada producto', async () => {
@@ -259,10 +293,8 @@ test.describe('Apartados — Crear', () => {
       });
     });
 
-    test('12. Crear un Apartado con productos mixtos, descuento individual, sin abono', async ({ page }) => {
+    test('12. Crear un Apartado con productos mixtos, descuento individual, sin abono', async ({ pos }) => {
       test.setTimeout(TIMEOUTS.TEST);
-      const pos = new PosPage(page);
-      await cargarPos(pos);
       await pos.agregarProductoNormalFraccionadoYRapido('Apartado', `DescIndSinAbono ${Date.now()}`);
 
       await test.step('Aplicar descuento individual a cada producto', async () => {
@@ -280,10 +312,8 @@ test.describe('Apartados — Crear', () => {
   });
 
   test.describe('Descuento general', () => {
-    test('13. Crear un Apartado con productos mixtos, descuento general y abono inicial', async ({ page }) => {
+    test('13. Crear un Apartado con productos mixtos, descuento general y abono inicial', async ({ pos }) => {
       test.setTimeout(TIMEOUTS.TEST);
-      const pos = new PosPage(page);
-      await cargarPos(pos);
       await pos.agregarProductoNormalFraccionadoYRapido('Apartado', `DescGenConAbono ${Date.now()}`);
 
       await test.step(`Activar el descuento general del ${DESCUENTO_GENERAL_PCT}% y validar que se aplicó`, async () => {
@@ -305,10 +335,8 @@ test.describe('Apartados — Crear', () => {
       });
     });
 
-    test('14. Crear un Apartado con productos mixtos, descuento general, sin abono', async ({ page }) => {
+    test('14. Crear un Apartado con productos mixtos, descuento general, sin abono', async ({ pos }) => {
       test.setTimeout(TIMEOUTS.TEST);
-      const pos = new PosPage(page);
-      await cargarPos(pos);
       await pos.agregarProductoNormalFraccionadoYRapido('Apartado', `DescGenSinAbono ${Date.now()}`);
 
       await test.step(`Activar el descuento general del ${DESCUENTO_GENERAL_PCT}% y validar que se aplicó`, async () => {
@@ -331,10 +359,8 @@ test.describe('Apartados — Crear', () => {
   });
 
   test.describe('Pago mixto', () => {
-    test('15. Crear un Apartado con productos mixtos, descuento individual y abono inicial en pago mixto (efectivo + tarjeta)', async ({ page }) => {
+    test('15. Crear un Apartado con productos mixtos, descuento individual y abono inicial en pago mixto (efectivo + tarjeta)', async ({ pos }) => {
       test.setTimeout(TIMEOUTS.TEST);
-      const pos = new PosPage(page);
-      await cargarPos(pos);
       await pos.agregarProductoNormalFraccionadoYRapido('Apartado', `PagoMixto ${Date.now()}`);
 
       await test.step('Aplicar descuento individual a cada producto', async () => {

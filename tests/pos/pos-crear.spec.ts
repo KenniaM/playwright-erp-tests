@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { PosPage, TIMEOUTS, CABYS_BUSQUEDA, CABYS_BUSQUEDA_SIN_IVA, MONTO_EFECTIVO, PRECIO_PRODUCTO_RAPIDO, LineaCarrito } from './pos.page';
+import { PosPage, TIMEOUTS, CABYS_BUSQUEDA, CABYS_BUSQUEDA_SIN_IVA, PRECIO_PRODUCTO_RAPIDO, LineaCarrito } from './pos.page';
 
 // Precios base para las pruebas de "Crear Producto" — arbitrarios pero
 // consistentes entre escenarios, igual que PRECIO_PRODUCTO_RAPIDO para
@@ -70,7 +70,9 @@ test('agregar producto rápido con IVA en POS', async ({ page }) => {
   });
 
   await test.step('Pagar en efectivo', async () => {
-    await pos.seleccionarPagoEfectivo(MONTO_EFECTIVO);
+    const total = await pos.obtenerTotalVentaNumerico();
+    expect(total).toBeGreaterThan(0);
+    await pos.seleccionarPagoEfectivo(String(total));
   });
 
   await test.step('Confirmar factura y cerrar impresión', async () => {
@@ -131,7 +133,9 @@ test('agregar producto rápido sin IVA en POS', async ({ page }) => {
   });
 
   await test.step('Pagar en efectivo', async () => {
-    await pos.seleccionarPagoEfectivo(MONTO_EFECTIVO);
+    const total = await pos.obtenerTotalVentaNumerico();
+    expect(total).toBeGreaterThan(0);
+    await pos.seleccionarPagoEfectivo(String(total));
   });
 
   await test.step('Confirmar factura y cerrar impresión', async () => {

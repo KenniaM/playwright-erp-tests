@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { PosPage, METODO, MONTO_EFECTIVO, DESCUENTO_INDIVIDUAL_PCT, TIMEOUTS, ResultadoDescuento, VEHICULO_PINTURA_TIPO, CABYS_BUSQUEDA, CABYS_BUSQUEDA_SIN_IVA, PRECIO_PRODUCTO_RAPIDO, LineaCarrito, PESTANA_POS_FACTURACION, PESTANAS_POS_A_RECORRER, esperarQuedaActivo } from './pos.page';
+import { PosPage, METODO, DESCUENTO_INDIVIDUAL_PCT, TIMEOUTS, ResultadoDescuento, VEHICULO_PINTURA_TIPO, CABYS_BUSQUEDA, CABYS_BUSQUEDA_SIN_IVA, PRECIO_PRODUCTO_RAPIDO, LineaCarrito, PESTANA_POS_FACTURACION, PESTANAS_POS_A_RECORRER, esperarQuedaActivo } from './pos.page';
 
 const NOMBRE_CLIENTE_FACTURA = 'Cliente De Prueba QA';
 
@@ -17,7 +17,9 @@ test('facturar producto con efectivo en POS', async ({ page }) => {
   });
 
   await test.step('Ingresar pago en efectivo', async () => {
-    await pos.seleccionarPagoEfectivo(MONTO_EFECTIVO);
+    const total = await pos.obtenerTotalVentaNumerico();
+    expect(total).toBeGreaterThan(0);
+    await pos.seleccionarPagoEfectivo(String(total));
   });
 
   await test.step('Confirmar factura y cerrar impresión', async () => {
@@ -230,7 +232,9 @@ test('facturar un servicio del tab Servicios en POS', async ({ page }) => {
   });
 
   await test.step('Pagar en efectivo', async () => {
-    await pos.seleccionarPagoEfectivo(MONTO_EFECTIVO);
+    const total = await pos.obtenerTotalVentaNumerico();
+    expect(total).toBeGreaterThan(0);
+    await pos.seleccionarPagoEfectivo(String(total));
   });
 
   await test.step('Confirmar factura y cerrar impresión', async () => {
@@ -256,22 +260,33 @@ test('facturar un servicio de End. Pintura en POS', async ({ page }) => {
     await esperarQuedaActivo(() => pos.tabEstaActivo(pos.tabPintura));
   });
 
-  await test.step('Recorrer el wizard: vehículo → parte → pieza → servicio', async () => {
+  await test.step('Recorrer el wizard: vehículo → parte → pieza', async () => {
     // El tipo de vehículo es una lista fija de la interfaz (se selecciona por
-    // nombre); parte, pieza y servicio son catálogo configurable por la empresa
-    // sin nombre estable, así que se toma la primera opción disponible en cada
+    // nombre); parte y pieza son catálogo configurable por la empresa sin
+    // nombre estable, así que se toma la primera opción disponible en cada
     // paso — mismo criterio que ya usa agregarPrimerProductoDePrecioFijo cuando
     // no hay un nombre por el cual buscar.
     await pos.seleccionarVehiculoPintura(VEHICULO_PINTURA_TIPO);
     await pos.seleccionarPrimeraParte();
     await pos.seleccionarPrimeraPieza();
-    await pos.seleccionarPrimerServicioPintura();
   });
 
   let clavesAntes: string[] = [];
-  await test.step('Seleccionar un precio en el modal y validar que el servicio se agregó al carrito', async () => {
+  await test.step('Seleccionar el servicio y, si el sistema lo requiere, un precio en el modal — validar que el servicio se agregó al carrito', async () => {
+    // clavesAntes se captura ANTES de seleccionarPrimerServicioPintura(): ese
+    // clic puede agregar la línea directo al carrito (precio único
+    // pre-cableado en la tarjeta del servicio — ver el comentario de
+    // esperarServicioPinturaAgregadoOModalPrecio() en pos.page.ts), así que
+    // capturarlo después ya incluiría esa línea y el poll de más abajo nunca
+    // detectaría el crecimiento.
     clavesAntes = await pos.obtenerClavesProductos();
-    await pos.seleccionarPrimerPrecioDisponible();
+    await pos.seleccionarPrimerServicioPintura();
+
+    const resultado = await pos.esperarServicioPinturaAgregadoOModalPrecio(clavesAntes);
+    if (resultado === 'requiere_modal') {
+      await pos.seleccionarPrimerPrecioDisponible();
+    }
+
     await expect.poll(async () => (await pos.obtenerClavesProductos()).length).toBeGreaterThan(clavesAntes.length);
   });
 
@@ -280,7 +295,9 @@ test('facturar un servicio de End. Pintura en POS', async ({ page }) => {
   });
 
   await test.step('Pagar en efectivo', async () => {
-    await pos.seleccionarPagoEfectivo(MONTO_EFECTIVO);
+    const total = await pos.obtenerTotalVentaNumerico();
+    expect(total).toBeGreaterThan(0);
+    await pos.seleccionarPagoEfectivo(String(total));
   });
 
   await test.step('Confirmar factura y cerrar impresión', async () => {
@@ -344,7 +361,9 @@ test('agregar y facturar un Producto Rápido en POS', async ({ page }) => {
   });
 
   await test.step('Pagar en efectivo', async () => {
-    await pos.seleccionarPagoEfectivo(MONTO_EFECTIVO);
+    const total = await pos.obtenerTotalVentaNumerico();
+    expect(total).toBeGreaterThan(0);
+    await pos.seleccionarPagoEfectivo(String(total));
   });
 
   await test.step('Confirmar factura y cerrar impresión', async () => {

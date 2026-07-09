@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { PosPage, MONTO_EFECTIVO, TIMEOUTS, PRECIO_PRODUCTO_RAPIDO } from './pos.page';
+import { PosPage, TIMEOUTS, PRECIO_PRODUCTO_RAPIDO } from './pos.page';
 
 const NOMBRE_CLIENTE_FACTURA = 'Cliente De Prueba QA';
 
@@ -26,7 +26,9 @@ test('facturar producto rápido con IVA y cliente existente en POS', async ({ pa
   });
 
   await test.step('Pagar en efectivo', async () => {
-    await pos.seleccionarPagoEfectivo(MONTO_EFECTIVO);
+    const total = await pos.obtenerTotalVentaNumerico();
+    expect(total).toBeGreaterThan(0);
+    await pos.seleccionarPagoEfectivo(String(total));
   });
 
   await test.step('Confirmar factura y cerrar impresión', async () => {
@@ -60,7 +62,9 @@ test('facturar producto rápido con IVA y nombre del cliente en POS', async ({ p
   });
 
   await test.step('Pagar en efectivo', async () => {
-    await pos.seleccionarPagoEfectivo(MONTO_EFECTIVO);
+    const total = await pos.obtenerTotalVentaNumerico();
+    expect(total).toBeGreaterThan(0);
+    await pos.seleccionarPagoEfectivo(String(total));
   });
 
   await test.step('Confirmar factura y cerrar impresión', async () => {
