@@ -439,6 +439,3 @@ Restricciones
 - Documentar cualquier modificación realizada y explicar por qué fue necesaria.
 - Si una funcionalidad no existe en este ambiente, omitir únicamente las pruebas relacionadas y continuar ejecutando el resto de la suite hasta finalizar el proceso completo.
 ```
- 
-> ⚠️ **Nota sobre credenciales:** este prompt incluye usuario y contraseña de un ambiente de QA en texto plano. Si el repositorio es público, considera mover estas credenciales a variables de entorno o a un archivo `.env` ignorado por git, y referenciarlas en el prompt en lugar de dejarlas hardcodeadas en el README.
- 
