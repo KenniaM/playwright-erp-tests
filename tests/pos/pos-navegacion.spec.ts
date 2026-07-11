@@ -129,6 +129,18 @@ test('Seleccionar los combos de la sección Categorías', async ({ page }) => {
   for (const combo of combos) {
     await test.step(`Seleccionar "${combo.nombre}" y validar que cambió la información`, async () => {
       const item = combo.obtenerLocator();
+
+      // "TODOS" y "Combos" son funciones del propio POS, siempre presentes;
+      // las otras tres son categorías de producto normales que esta cuenta
+      // tiene creadas con esos nombres — no necesariamente existen en
+      // cualquier compañía (confirmado en vivo que TALLER ALPHA PREMIUM no
+      // las tiene), así que se saltan en vez de esperar por siempre un
+      // elemento que nunca va a aparecer.
+      if ((await item.count()) === 0) {
+        console.log(`[Seleccionar los combos de la sección Categorías] "${combo.nombre}" no existe en esta compañía — se omite.`);
+        return;
+      }
+
       await item.click();
       await esperarQuedaActivo(() => pos.categoriaEstaActiva(item));
     });
@@ -322,9 +334,10 @@ test('Vista Expandida: buscar, agregar y facturar un producto desde el buscador 
     if (await pos.vistaExpandidaActiva()) {
       await pos.alternarVistaExpandida();
     }
-    nombreProducto = (await pos.obtenerPrimerProductoNormal()).nombre;
+    const { producto, codigo } = await pos.obtenerPrimerProductoNormalConCodigo();
+    nombreProducto = producto.nombre;
+    codigoProducto = codigo;
     await pos.buscarProductoEnGrid(nombreProducto);
-    codigoProducto = await pos.obtenerCodigoProducto(nombreProducto);
 
     // buscarProductoEnGrid() agrega el producto al carrito como efecto
     // secundario del propio Enter cuando hay una única coincidencia

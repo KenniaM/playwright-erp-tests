@@ -2,11 +2,11 @@ import { expect, Download, Locator, Page, Response } from '@playwright/test';
 
 // ─── URL ──────────────────────────────────────────────────────────────────────
 
-export const POS_URL =
-  'https://dev.designsoftcr.com/qa_talleralpha/public/pos/pointOfSale?company_pos=37&pos_type_option=1';
-
-// Usada únicamente por cargarPosDesdeDashboard() — ver el comentario de ese
-// método para el motivo.
+// Único punto de entrada real al POS: irAlPos() (y, por extensión,
+// cargarPosDesdeDashboard()) siempre pasan por aquí y dejan que la propia
+// aplicación resuelva la URL final del POS (incluido `company_pos`, que
+// varía por compañía/ambiente) — nunca se construye a mano ni se hardcodea
+// ningún id de compañía. Ver PosPage._irAlPosResolviendoCompania().
 export const DASHBOARD_URL =
   'https://dev.designsoftcr.com/qa_talleralpha/public/dash/dashboard';
 
@@ -18,6 +18,14 @@ export const TIMEOUTS = {
   PRODUCTS_LOAD: 120_000,
   PAYMENT_MODAL:  15_000,
   PRINT_POPUP:    15_000,
+  // closePosCash (cierre de caja) puede tardar más que el resto de los AJAX
+  // de esta clase — confirmado en vivo (TALLER ALPHA PREMIUM) que su propia
+  // respuesta puede llegar cerca de los 15s que usa PRINT_POPUP bajo carga
+  // normal del ambiente, sin que eso sea un bloqueo real (la petición sí se
+  // dispara y sí responde, solo que más lento). Presupuesto propio, no un
+  // waitForTimeout() artificial: sigue siendo una espera real sobre la
+  // respuesta de red.
+  CIERRE_CAJA:    30_000,
 } as const;
 
 // ─── Pausas visuales ──────────────────────────────────────────────────────────
@@ -90,6 +98,7 @@ const L = {
   DASHBOARD_LISTA_COMPANIAS: '#company_list li',
 
   // Modal de pago
+  DIALOG_PAGO:       '#dialog_payment',
   TOTAL_MODAL:       'total_sale_txt',         // ID sin # — se lee vía evaluate()
   BTN_CONFIRMAR:     '#make_payment',
   EFECTIVO_MONTO:    '#payment_cash_total',    // señal confiable de apertura del modal
@@ -136,11 +145,18 @@ const L = {
 
   // Categorías (barra lateral izquierda). "Lista de precios" no se incluye:
   // el propio sistema la mantiene oculta (display: none) para esta compañía.
+  // "TODOS" y "Combos" son funciones reales del propio POS con clase CSS
+  // estable, presentes en cualquier compañía. "Categoría", "Productos
+  // variantes" y "Productos fraccionados", en cambio, son categorías de
+  // producto normales y corrientes (con id numérico propio de cada
+  // compañía, confirmado en vivo comparando HONDURAS con TALLER ALPHA
+  // PREMIUM: los mismos ids no existen ahí) que esta cuenta de HONDURAS
+  // tiene creadas con esos nombres — se localizan por
+  // `data-category-name` (el mismo nombre real que ya usa el resto de la
+  // suite para etiquetarlas), nunca por el id numérico, pero pueden no
+  // existir en absoluto en otra compañía: ver `categoriaOpcionalPorNombre()`.
   CAT_TODOS:         '.left_category_all',
   CAT_COMBOS:        '.li_left_category_combo',
-  CAT_TIPO:          '#btn_cate_id_171',
-  CAT_FRACCIONADOS:  '#btn_cate_id_175',
-  CAT_VARIANTES:     '#btn_cate_id_174',
   CAT_ACTIVE_CLASS:  'left_category_active',
 
   // Contenedor con scroll infinito del grid de productos (Vista Cuadrícula,
@@ -882,12 +898,15 @@ export type TipoProforma = 'normal' | 'consignacion' | 'taller';
 export const VEHICULO_PINTURA_TIPO = 'Hatchback';
 
 // Compañía a seleccionar en el modal "Seleccionar una compañía para
-// continuar" (ver _resolverUrlPosDesdeDashboard()) cuando la cuenta de
-// pruebas pertenece a más de una — la misma cuenta ya usada en toda la
-// suite (kadmin) pertenece a "TALLER ALPHA PREMIUM" (id=20, compañía
-// principal) y "HONDURAS" (id=37, la compañía real usada en el resto de las
-// pruebas del POS, confirmado en vivo vía el listado real del modal).
-export const COMPANIA_POS = 'HONDURAS';
+// continuar" (ver _irAlPosResolviendoCompania()) cuando la cuenta de pruebas
+// pertenece a más de una. Configurable vía la variable de entorno
+// POS_COMPANIA para que la suite sea independiente de qué compañía tenga
+// asignada la cuenta del ambiente donde corra — nunca se busca por id
+// (distinto por ambiente/cuenta), solo por el nombre visible en el modal.
+// "HONDURAS" queda como valor por defecto únicamente para no romper el resto
+// de la suite existente (afinada contra esa compañía) cuando la variable no
+// se define.
+export const COMPANIA_POS = process.env.POS_COMPANIA ?? 'HONDURAS';
 
 // Término de búsqueda para el catálogo CABYS del formulario "Producto
 // Rápido": devuelve resultados de forma consistente en pruebas repetidas
@@ -1061,6 +1080,26 @@ export type MetadatoProducto = {
   esFraccionado: boolean;
 };
 
+// URL real del POS ya resuelta al menos una vez en este proceso worker
+// (capturada de `page.url()` tras `_irAlPosResolviendoCompania()`, nunca
+// construida a mano) — permite que `irAlPos()` reutilice la MISMA URL real
+// que la aplicación ya generó, sin volver a pasar por el Dashboard en cada
+// llamada y sin depender de ningún `company_pos` fijo.
+//
+// A propósito a nivel de MÓDULO, no de instancia: cada worker de Playwright
+// es un proceso Node separado (mismo aislamiento que ya usa la fixture `pos`
+// de scope "worker" en pos-apartado/pos-orden-caja/pos-ruteo/pos-importar-
+// factura.spec.ts), así que esto reproduce exactamente "como máximo una vez
+// por worker" también para los archivos que crean una `PosPage` nueva por
+// test (`page` fixture estándar, sin fixture propia) — confirmado en vivo
+// que cachear esto por INSTANCIA en cambio obliga a repetir el paso
+// completo por Dashboard (expandir submenú + click) en cada test, y ese paso
+// no es sólido bajo varios workers en paralelo: 8/11 pruebas de
+// pos.spec.ts fallaron por esto antes de mover el caché aquí. El valor es
+// válido para cualquier sesión de la misma cuenta (el `company_pos` es una
+// propiedad de la cuenta, no de un contexto de navegador puntual).
+let posUrlResueltaPorWorker: string | null = null;
+
 // ─── Page Object ──────────────────────────────────────────────────────────────
 
 export class PosPage {
@@ -1083,14 +1122,56 @@ export class PosPage {
     return this.page.locator('.sweet-alert.confirm-complete-sale');
   }
 
+  /**
+   * Locator del panel "Información del Cliente" (`#myNavClient`) que puede
+   * aparecer, DENTRO del propio modal de pago (`#dialog_payment`, nunca un
+   * modal ni SweetAlert separado — confirmado en vivo inspeccionando su
+   * `outerHTML`: es un `<div class="overlay overlay-hgt overlay-hgt-efect">`
+   * anidado en `#dialog_payment`), cuando el documento electrónico
+   * seleccionado (confirmado en vivo con "Factura Electrónica" en TALLER
+   * ALPHA PREMIUM) exige datos del cliente (nombre, identificación, correo,
+   * dirección, etc.) para completar la venta. No siempre aparece — depende
+   * del documento electrónico activo y, aun con el mismo documento, no es
+   * consistente entre intentos (confirmado en vivo: dos corridas
+   * consecutivas con "Factura Electrónica", una lo mostró y la otra no).
+   */
+  get panelInformacionCliente() {
+    return this.page.locator('#myNavClient');
+  }
+
   /** Locator del primer producto disponible en el grid del POS. */
   get primerProducto() {
     return this.page.locator(L.PRODUCTO).first();
   }
 
-  /** Navega al POS. No decide nada sobre el modal "Abrir Caja"; eso es responsabilidad del test. */
+  /**
+   * Único punto real de entrada al POS de esta clase. No decide nada sobre
+   * el modal "Abrir Caja"; eso es responsabilidad del test.
+   *
+   * Nunca construye ninguna URL: si esta instancia ya resolvió el POS antes
+   * (`_posUrlResuelta`, capturada de `page.url()` real tras
+   * `_irAlPosResolviendoCompania()`), navega directo a esa misma URL real —
+   * mismo mecanismo que ya usaban los archivos con fixture `pos` de scope
+   * "worker" (un solo paso por Dashboard por worker, reutilizado en cada
+   * test). Si todavía no la resolvió (primera vez en esta instancia — el
+   * caso de los archivos que llaman `cargarPosYCerrarModalSiAparece()`/
+   * `irAlPos()` con una `page` nueva por test, sin pasar antes por
+   * `cargarPosDesdeDashboard()`), la resuelve ahora mismo pasando por el
+   * Dashboard, EXACTAMENTE el mismo flujo real (mismo link, mismo modal de
+   * compañía si aparece) que usa `cargarPosDesdeDashboard()` — no hay dos
+   * mecanismos distintos, ambos terminan en `_irAlPosResolviendoCompania()`.
+   */
   async irAlPos() {
-    await this.page.goto(POS_URL, { waitUntil: 'commit', timeout: TIMEOUTS.NAVIGATE });
+    if (posUrlResueltaPorWorker) {
+      await this.page.goto(posUrlResueltaPorWorker, { waitUntil: 'commit', timeout: TIMEOUTS.NAVIGATE });
+      return;
+    }
+
+    await this.page.goto(DASHBOARD_URL, { waitUntil: 'load' });
+    await this.page.locator(L.DASHBOARD_BELL_LOADING)
+      .waitFor({ state: 'hidden', timeout: TIMEOUTS.PAYMENT_MODAL })
+      .catch(() => {});
+    await this._irAlPosResolviendoCompania();
   }
 
   /**
@@ -1217,11 +1298,7 @@ export class PosPage {
    * que su aparición.
    */
   private async _cerrarModalMonedaSiAparece() {
-    const modal = this.page.locator(L.DASHBOARD_MODAL_MONEDA);
-    if (await modal.isVisible().catch(() => false)) {
-      await modal.locator('[data-dismiss="modal"]').first().click().catch(() => {});
-      await modal.waitFor({ state: 'hidden', timeout: TIMEOUTS.PAYMENT_MODAL }).catch(() => {});
-    }
+    await this._cerrarOverlayDashboardSiAparece(this.page.locator(L.DASHBOARD_MODAL_MONEDA));
   }
 
   /**
@@ -1230,22 +1307,48 @@ export class PosPage {
    * completa. Se descarta (botón de cierre real), nunca se completa el
    * wizard: este método no forma parte de ningún flujo de configuración,
    * solo despeja el overlay para poder continuar hacia POS.
-   *
-   * Usa TIMEOUTS.PRODUCTS_LOAD (no PAYMENT_MODAL, el que usa el modal de
-   * moneda) para el cierre: investigado en vivo que este modal en particular
-   * puede tardar ~45s en desaparecer del DOM tras el click de cierre —
-   * confirmado con un `locator.waitFor('hidden')` real que expiró a los 15s
-   * pese a que el modal sí terminó cerrándose poco después. No es un
-   * selector incorrecto ni una condición de carrera: es este modal
-   * específico (probablemente dispara limpieza/guardado en segundo plano al
-   * cerrarse) que es más lento que el resto de los overlays "conocidos" de
-   * esta clase.
    */
   private async _cerrarModalSetupInicialSiAparece() {
-    const modal = this.page.locator(L.DASHBOARD_MODAL_SETUP_INICIAL);
-    if (await modal.isVisible().catch(() => false)) {
-      await modal.locator('[data-dismiss="modal"]').first().click().catch(() => {});
-      await modal.waitFor({ state: 'hidden', timeout: TIMEOUTS.PRODUCTS_LOAD }).catch(() => {});
+    await this._cerrarOverlayDashboardSiAparece(this.page.locator(L.DASHBOARD_MODAL_SETUP_INICIAL));
+  }
+
+  /**
+   * Cierra un modal del Dashboard (moneda o Setup Inicial) si está visible,
+   * reintentando el click de cierre en vez de esperar una sola vez.
+   *
+   * Causa raíz investigada en vivo (no asumida): el toast de notificaciones
+   * del navegador y el modal de moneda pueden REAPARECER de forma asíncrona
+   * y recurrente en cualquier momento — confirmado instrumentando el DOM en
+   * vivo: justo antes de un click ambos reportaban `isVisible()===false`, y
+   * milisegundos después, en el instante real del click, el propio log de
+   * Playwright mostraba a uno de los dos "intercepts pointer events" de
+   * nuevo. `force:true` no protege contra esto por sí solo: dispara el click
+   * en las coordenadas reales del botón sin esperar, pero si en ESE instante
+   * exacto otro overlay genuinamente ocupa ese punto, el evento aterriza en
+   * él, no en el botón de cierre deseado — confirmado en vivo que esta era
+   * la causa real de que "Setup Inicial" pudiera tardar hasta 120s en
+   * reportar `hidden` (el timeout completo de un único intento), no una
+   * lentitud propia del modal ni de la aplicación: con reintentos cortos
+   * (cerrando notificaciones + moneda antes de cada uno) el mismo modal cerró
+   * en 2-3 intentos, bien por debajo de 10 segundos en las corridas medidas.
+   *
+   * Cada intento usa un timeout corto y real (`waitFor('hidden')`, nunca
+   * `waitForTimeout`) — no se aumenta ningún timeout global, se reemplaza un
+   * único intento con espera larga por varios intentos con espera corta.
+   */
+  private async _cerrarOverlayDashboardSiAparece(modal: Locator) {
+    const MAX_INTENTOS = 8;
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      if (!(await modal.isVisible().catch(() => false))) return;
+
+      await this.cerrarModalNotificacionesSiAparece();
+      await modal.locator('[data-dismiss="modal"]').first().click({ force: true }).catch(() => {});
+
+      const cerrado = await modal
+        .waitFor({ state: 'hidden', timeout: 3_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (cerrado) return;
     }
   }
 
@@ -1287,8 +1390,19 @@ export class PosPage {
    * modal o no.
    */
   private async _irAlPosResolviendoCompania() {
-    await this._cerrarModalSetupInicialSiAparece();
+    // Orden confirmado en vivo (cuentas cuya compañía por defecto tiene
+    // pendiente el setup inicial): el modal de tipo de cambio puede abrirse
+    // POR ENCIMA del modal "Setup Inicial del Sistema" (mismo backdrop
+    // estático de ambos). Cerrar Setup Inicial primero deja su botón "×"
+    // (.setup-modal-close) físicamente cubierto por el modal de moneda
+    // encima — el click (sin force) queda reintentando contra "elemento
+    // intercepta pointer events" hasta agotar su propio timeout, sin cerrar
+    // nunca el modal, lo que deja el link real hacia POS inalcanzable. Cerrar
+    // primero el modal de moneda (su propio botón de cierre nunca queda
+    // cubierto, al ser siempre el más reciente/superior) libera el botón de
+    // Setup Inicial para el click siguiente.
     await this._cerrarModalMonedaSiAparece();
+    await this._cerrarModalSetupInicialSiAparece();
 
     const linkIrAPos = this.page.locator(L.DASHBOARD_LINK_IR_A_POS).first();
     if (!(await linkIrAPos.isVisible().catch(() => false))) {
@@ -1317,8 +1431,8 @@ export class PosPage {
     // comprobación única de arriba basta.
     const MAX_INTENTOS_CLICK = 3;
     for (let intento = 1; intento <= MAX_INTENTOS_CLICK; intento++) {
-      await this._cerrarModalSetupInicialSiAparece();
       await this._cerrarModalMonedaSiAparece();
+      await this._cerrarModalSetupInicialSiAparece();
       try {
         await linkIrAPos.click({ timeout: TIMEOUTS.PAYMENT_MODAL });
         break;
@@ -1334,12 +1448,36 @@ export class PosPage {
       .catch(() => false);
 
     if (aparecioModalCompania) {
+      // Estructura real confirmada en vivo (no una suposición): cada
+      // compañía es un <li id="product_box_<id>"> dentro de #company_list
+      // (lista, no <select> ni tarjetas independientes ni autocomplete),
+      // identificada únicamente por el texto visible de `.company-name`
+      // (L.DASHBOARD_LISTA_COMPANIAS) — nunca por su id numérico, que es
+      // específico del ambiente/cuenta.
       const opcionCompania = modalCompania.locator(L.DASHBOARD_LISTA_COMPANIAS, { hasText: COMPANIA_POS }).first();
-      await expect(opcionCompania, `No se encontró la compañía "${COMPANIA_POS}" en el selector`).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+      const existe = await opcionCompania.isVisible({ timeout: TIMEOUTS.PAYMENT_MODAL }).catch(() => false);
+
+      if (!existe) {
+        // Detener con un error claro (compañía solicitada + compañías
+        // realmente disponibles en este ambiente) en vez de seleccionar
+        // cualquier otra por error.
+        const disponibles = (await modalCompania.locator(L.DASHBOARD_LISTA_COMPANIAS).allTextContents())
+          .map((t) => t.trim())
+          .filter(Boolean);
+        throw new Error(
+          `La compañía "${COMPANIA_POS}" (configurada vía POS_COMPANIA) no existe en el modal de selección de este ambiente.\n` +
+          `Compañías disponibles: ${disponibles.length > 0 ? disponibles.join(', ') : '(ninguna encontrada en el modal)'}`
+        );
+      }
+
       await opcionCompania.click();
     }
 
     await this.page.waitForURL(/pointOfSale/, { timeout: TIMEOUTS.NAVIGATE });
+    // Recordar la URL REAL que la aplicación generó (nunca construida a
+    // mano) para que irAlPos() pueda reutilizarla en visitas posteriores de
+    // este mismo worker sin repetir el paso por Dashboard.
+    posUrlResueltaPorWorker = this.page.url();
   }
 
   /**
@@ -1505,9 +1643,9 @@ export class PosPage {
   async confirmarCerrarCaja() {
     const cierreConfirmadoPromise = this.page.waitForResponse(
       (res) => res.url().includes('closePosCash'),
-      { timeout: TIMEOUTS.PRINT_POPUP }
+      { timeout: TIMEOUTS.CIERRE_CAJA }
     );
-    const popupPromise = this.page.waitForEvent('popup', { timeout: TIMEOUTS.PRINT_POPUP }).catch(() => null);
+    const popupPromise = this.page.waitForEvent('popup', { timeout: TIMEOUTS.CIERRE_CAJA }).catch(() => null);
 
     // Ambos avisos opcionales se descartan ANTES de confirmar, nunca después: el
     // cierre exitoso recarga la página (confirmado inspeccionando el DOM real tras
@@ -1547,10 +1685,106 @@ export class PosPage {
    * aquí no se valida ni se intenta abrir la caja en ningún caso. Centralizado aquí:
    * existía duplicado de forma idéntica como función local en pos-crear.spec.ts,
    * pos-facturar.spec.ts, pos-navegacion.spec.ts y pos.spec.ts.
+   *
+   * No toca el tipo de documento electrónico aquí: la opción que el ambiente
+   * ya trae seleccionada por defecto se deja tal cual — solo
+   * confirmarPagoAbriendoCajaSiEsNecesario() la cambia, y solo si esa opción
+   * demuestra en la práctica que no deja completar la venta (ver
+   * _localizarSelectorDocumentoElectronico()).
    */
   async abrirModalDePago() {
     await this.presionarFacturar();
     await this.esperarModalPago();
+  }
+
+  /**
+   * Ubica (si existe) el control de tipo de documento electrónico del modal
+   * de pago — `#payment_electronic_document_type` dentro de `#dialog_payment`.
+   * Confirmado en vivo (TALLER ALPHA PREMIUM, leyendo el bundle real
+   * `pos.js` servido por el ambiente, no asumido) que este id es una
+   * constante del propio template de facturación electrónica de Costa Rica,
+   * no un valor específico de esta compañía: `pos.js` lo referencia por ese
+   * mismo id de forma hardcodeada decenas de veces (p. ej.
+   * `$('#payment_electronic_document_type').val(...)`) para inicializarlo y
+   * para leerlo en la validación de la venta — cualquier compañía con
+   * `is_electronic_billing_cr()` activo lo sirve con este mismo id. Devuelve
+   * null si el modal no tiene ningún control de este tipo — comportamiento
+   * válido (Escenario 5): la compañía no tiene facturación electrónica,
+   * continuar normalmente.
+   */
+  private async _localizarSelectorDocumentoElectronico(): Promise<Locator | null> {
+    const select = this.page.locator(`${L.DIALOG_PAGO} #payment_electronic_document_type`);
+    return (await select.count()) > 0 ? select : null;
+  }
+
+  /**
+   * Cambia el documento electrónico a "Tiquete Electrónico" si el select
+   * tiene esa opción y no está ya seleccionada. Se busca por su texto visible
+   * (nunca por posición): confirmado en vivo que "Tiquete Electrónico" es
+   * terminología fija de Hacienda (Costa Rica) — el mismo nombre para
+   * cualquier compañía costarricense con facturación electrónica, no un
+   * valor propio de esta compañía. Confirmado también en vivo, leyendo
+   * `pos.js`, que esta opción es la única con esa propiedad: la validación
+   * que exige datos del cliente (`get_and_validate_client_pos`, disparada
+   * desde `confirm_add_sale_validate()`) solo se ejecuta cuando
+   * `payment_electronic_document_type === 1` ("Factura Electrónica"); ninguna
+   * otra opción —incluida "Tiquete Electrónico"— entra a esa validación.
+   *
+   * Devuelve false (sin lanzar) si no hay select, si no existe la opción
+   * "Tiquete Electrónico" en este ambiente, o si ya estaba seleccionada —
+   * quien llama decide entonces que no hay forma automática de continuar.
+   */
+  private async _cambiarATiqueteElectronicoSiEsPosible(): Promise<boolean> {
+    const select = await this._localizarSelectorDocumentoElectronico();
+    if (!select) return false;
+
+    const { opciones, seleccionada } = await this._leerOpcionesDocumentoElectronico(select);
+    const indiceTiquete = opciones.findIndex((o) => /tiquete/i.test(o));
+    if (indiceTiquete === -1 || indiceTiquete === seleccionada) return false;
+
+    await this._seleccionarOpcionDocumentoElectronicoPorIndice(select, indiceTiquete);
+    await expect
+      .poll(() => select.evaluate((el: HTMLSelectElement) => el.selectedIndex))
+      .toBe(indiceTiquete);
+    return true;
+  }
+
+  /**
+   * Lee todas las opciones del selector de documento electrónico y cuál está
+   * seleccionada actualmente (por posición real en el DOM — `selectedIndex`
+   * del `<select>` real, que el widget "Chosen" ya mantiene sincronizado con
+   * la opción visible — nunca asumida por nombre).
+   */
+  private async _leerOpcionesDocumentoElectronico(select: Locator): Promise<{ opciones: string[]; seleccionada: number }> {
+    const opciones = await select.locator('option').allTextContents();
+    const seleccionada = await select.evaluate((el: HTMLSelectElement) => el.selectedIndex);
+    return { opciones: opciones.map((o) => o.trim()), seleccionada };
+  }
+
+  /**
+   * Selecciona una opción del documento electrónico por su POSICIÓN real en
+   * el `<select>` (nunca por el texto de la opción). Widget real confirmado
+   * en vivo: `<select>` oculto sincronizado con un dropdown "Chosen" (mismo
+   * patrón que el resto de esta clase: nunca `selectOption()` sobre el
+   * `<select>` oculto, se opera sobre `.chosen-single`/`.chosen-results`).
+   * Variante defensiva incluida para un `<select>` nativo visible (sin
+   * Chosen), por si algún otro ambiente no usa este widget — sin evidencia
+   * propia de que exista, solo cobertura acorde a "no asumir un único
+   * widget posible".
+   */
+  private async _seleccionarOpcionDocumentoElectronicoPorIndice(select: Locator, indice: number) {
+    const id = await select.getAttribute('id');
+    const contenedorChosen = id ? this.page.locator(`#${id}_chosen`) : null;
+
+    if (contenedorChosen && (await contenedorChosen.isVisible().catch(() => false))) {
+      await contenedorChosen.locator('.chosen-single').click();
+      await contenedorChosen.locator('.chosen-results li').nth(indice).click();
+      return;
+    }
+
+    if (await select.isVisible().catch(() => false)) {
+      await select.selectOption({ index: indice });
+    }
   }
 
   /**
@@ -1605,6 +1839,18 @@ export class PosPage {
         // da 0 y nunca detectaría una fila agregada.
         const clavesAntes = await this.page.locator(L.CARRITO_CLAVES).count();
         await productos.nth(i).click();
+
+        // Un producto sin código CABYS asignado en el catálogo puede mostrar
+        // primero un SweetAlert de aviso ("Artículo sin código CABYS") antes
+        // de cualquier modal real — confirmado en vivo (TALLER ALPHA
+        // PREMIUM) que su botón "Continuar sin CABYS" NO agrega el producto,
+        // solo avanza al siguiente paso real (p. ej. el modal de variantes
+        // que el chequeo de abajo ya reconoce), así que se descarta aquí
+        // antes de decidir si el producto requiere interacción adicional.
+        const avisoCabys = this.page.locator('.sweet-alert.visible', { hasText: 'Artículo sin código CABYS' });
+        if (await avisoCabys.waitFor({ state: 'visible', timeout: 2_000 }).then(() => true).catch(() => false)) {
+          await avisoCabys.locator('button.cancel').click();
+        }
 
         const requiereInteraccionAdicional = await modalAbierto
           .waitFor({ state: 'visible', timeout: 2_000 })
@@ -1775,9 +2021,23 @@ export class PosPage {
   /**
    * Muestra la ventana de impresión de la factura (señal de que se generó
    * correctamente) 4 segundos y la cierra para volver al POS.
+   *
+   * Intenta confirmar que la ventana realmente tenga contenido: espera (sin
+   * timeout fijo bloqueante, acotado y no obligatorio) a que su URL deje de
+   * ser about:blank. Confirmado en vivo (HONDURAS) que el popup puede abrir
+   * en about:blank y navegar al contenido real un instante después de
+   * `domcontentloaded` — por eso esta comprobación es best-effort (con
+   * `.catch(() => {})`, solo deja evidencia en el log) y nunca hace fallar
+   * el test: la señal real y ya validada de éxito es que el popup se abrió
+   * en absoluto (evento "popup" capturado por la carrera en
+   * `_armarCarreraFacturacion`), no el contenido final de su URL.
    */
   async mostrarYCerrarVentanaImpresion(printPage: Page) {
     await printPage.waitForLoadState('domcontentloaded');
+    await expect
+      .poll(() => printPage.url(), { timeout: 5_000 })
+      .not.toBe('about:blank')
+      .catch(() => console.log('[mostrarYCerrarVentanaImpresion] La ventana de impresión permaneció en about:blank — se continúa igual (no bloqueante).'));
     await this.page.waitForTimeout(PAUSES.VER_FACTURA);
     await printPage.close();
     await this.page.waitForTimeout(PAUSES.POST_CIERRE);
@@ -1811,12 +2071,90 @@ export class PosPage {
    * Centralizado aquí: existía duplicado (idéntico salvo un puñado de líneas de
    * comentario) como función local en pos-crear.spec.ts, pos-facturar.spec.ts,
    * pos-navegacion.spec.ts y pos.spec.ts.
+   *
+   * No toca el tipo de documento electrónico de entrada — la opción que el
+   * ambiente ya trae seleccionada se deja tal cual (Escenario 1: continuar
+   * normalmente; Escenario 4: si ya es "Tiquete Electrónico", no hacer nada;
+   * Escenario 5: si la compañía no tiene facturación electrónica, no hay
+   * ningún select que tocar). Solo si, ya confirmando el pago, aparece el
+   * panel "Información del Cliente" (Escenario 3) se cambia el documento a
+   * "Tiquete Electrónico" — ver `_confirmarPagoConReintentosDeCaja()`.
    */
   async confirmarPagoAbriendoCajaSiEsNecesario() {
-    const MAX_INTENTOS = 3;
+    await this._confirmarPagoConReintentosDeCaja();
+  }
 
-    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
-      let resultado = await this._armarCarreraFacturacion(() => this.presionarConfirmarPago(), true);
+  /**
+   * Intenta completar la facturación con el método de pago ya elegido,
+   * reintentando ante dos situaciones que pueden alargar el flujo sin ser un
+   * error:
+   *
+   * - El modal "Abrir Caja" (hasta `MAX_INTENTOS_CAJA` veces).
+   * - El panel "Información del Cliente" (Escenario 3, como mucho una vez):
+   *   confirmado en vivo, leyendo el `pos.js` real de este ambiente, que solo
+   *   aparece cuando el documento electrónico activo es "Factura Electrónica"
+   *   (`payment_electronic_document_type === 1` es la única condición que
+   *   dispara `get_and_validate_client_pos()`) y que NINGUNA otra opción,
+   *   incluida "Tiquete Electrónico", entra a esa validación. Nunca se llena
+   *   el formulario (no es responsabilidad de esta suite); se cierra con el
+   *   botón real "Cancelar" del panel (`onclick="closeNavClient()"`,
+   *   confirmado en vivo — nunca "Guardar", que sí lo completaría) y se
+   *   cambia el documento a "Tiquete Electrónico" antes de reintentar
+   *   "Facturar". Si ese cambio no es posible (el ambiente no ofrece esa
+   *   opción, o el panel reaparece incluso con ella activa) se lanza un
+   *   error explícito: no hay una tercera alternativa definida por el
+   *   negocio para no perder la venta.
+   *
+   * Lanza un error si ninguna señal real (popup, confirmación opcional o
+   * carrito vacío) confirma que la venta se completó.
+   */
+  private async _confirmarPagoConReintentosDeCaja() {
+    const MAX_INTENTOS_CAJA = 3;
+    let intentosCaja = 0;
+    let yaSeIntentoTiqueteElectronico = false;
+
+    while (true) {
+      let resultado:
+        | { tipo: 'popup'; printPage: Page }
+        | { tipo: 'modalAbrirCaja' }
+        | { tipo: 'confirmacionPago' }
+        | { tipo: 'clienteInfoRequerido' }
+        | { tipo: 'ventaCompletadaSinPopup' };
+      try {
+        resultado = await this._armarCarreraFacturacion(() => this.presionarConfirmarPago(), true);
+      } catch (e) {
+        // Ninguna de las señales esperadas (popup, modal "Abrir Caja",
+        // confirmación opcional o panel de cliente) llegó dentro del
+        // timeout: antes de asumir un error, se comprueba la señal funcional
+        // real de que la venta sí se completó — el carrito quedó vacío
+        // (mismo selector que obtenerCantidadFilasCarrito(), cuenta TODAS
+        // las filas sin importar su origen). Cubre ambientes que confirman
+        // la venta sin abrir ninguna ventana de impresión ni ningún modal —
+        // comportamiento válido, no hay que asumir que el popup siempre
+        // aparece.
+        const filasRestantes = await this.page.locator(L.IMPORTAR_FACTURA_CARRITO_FILAS).count();
+        if (filasRestantes === 0) {
+          resultado = { tipo: 'ventaCompletadaSinPopup' };
+        } else if (!yaSeIntentoTiqueteElectronico && (await this._cambiarATiqueteElectronicoSiEsPosible())) {
+          // El carrito sigue con líneas y ninguna señal llegó: confirmado en
+          // vivo, leyendo el pos.js real, que esto también ocurre cuando el
+          // documento activo ("Factura Electrónica") exige un cliente
+          // asociado a la venta (payment_credit_client) que no existe —
+          // a diferencia del panel "Información del Cliente"
+          // (clienteInfoRequerido), esta rama de la misma validación no
+          // muestra ningún panel ni deja ninguna señal observable, solo un
+          // toast informativo que no bloquea la venta de forma permanente.
+          // Ambos bloqueos —el panel y este— viven dentro del mismo `if`
+          // que solo se ejecuta con payment_electronic_document_type === 1,
+          // así que cambiar a "Tiquete Electrónico" los evita por igual;
+          // se reintenta con el mismo mecanismo y el mismo límite de un
+          // solo cambio ya usado para clienteInfoRequerido.
+          yaSeIntentoTiqueteElectronico = true;
+          continue;
+        } else {
+          throw e;
+        }
+      }
       await this.cerrarAvisoConsecutivoSiAparece();
 
       // Si "confirmacionPago" ya estaba visible al armar la carrera anterior,
@@ -1827,10 +2165,36 @@ export class PosPage {
       // por intento de facturación — no hay evidencia de que el sistema la
       // muestre dos veces seguidas.
       if (resultado.tipo === 'confirmacionPago') {
-        resultado = await this._armarCarreraFacturacion(
-          () => this.confirmacionPago.locator('button.confirm').click(),
-          false
-        );
+        try {
+          resultado = await this._armarCarreraFacturacion(
+            () => this.confirmacionPago.locator('button.confirm').click(),
+            false
+          );
+        } catch (e) {
+          const filasRestantes = await this.page.locator(L.IMPORTAR_FACTURA_CARRITO_FILAS).count();
+          if (filasRestantes > 0) throw e;
+          resultado = { tipo: 'ventaCompletadaSinPopup' };
+        }
+      }
+
+      if (resultado.tipo === 'clienteInfoRequerido') {
+        const btnCancelar = this.panelInformacionCliente.locator('a[onclick="closeNavClient()"]');
+        await btnCancelar.click().catch(() => {});
+        await this.panelInformacionCliente.waitFor({ state: 'hidden', timeout: TIMEOUTS.PAYMENT_MODAL }).catch(() => {});
+
+        if (yaSeIntentoTiqueteElectronico) {
+          throw new Error(
+            'El panel "Información del Cliente" volvió a exigirse incluso con "Tiquete Electrónico" ya seleccionado — no hay otra alternativa automática para no perder la venta.'
+          );
+        }
+        const cambiado = await this._cambiarATiqueteElectronicoSiEsPosible();
+        if (!cambiado) {
+          throw new Error(
+            'El documento electrónico actual exige información del cliente (panel "Información del Cliente") y este ambiente no ofrece la opción "Tiquete Electrónico" para evitarlo.'
+          );
+        }
+        yaSeIntentoTiqueteElectronico = true;
+        continue; // reintentar "Facturar" ya con "Tiquete Electrónico" seleccionado
       }
 
       if (resultado.tipo === 'popup') {
@@ -1853,41 +2217,62 @@ export class PosPage {
         return;
       }
 
+      if (resultado.tipo === 'ventaCompletadaSinPopup') {
+        console.log('[confirmarPagoAbriendoCajaSiEsNecesario] Venta completada sin ventana de impresión (carrito vacío detectado) — comportamiento válido de este ambiente.');
+        return;
+      }
+
       // El modal "Abrir Caja" apareció: se valida, se completa la apertura y se
       // confirma que desapareció antes de volver al inicio del ciclo, donde se arma
       // una nueva espera de popup/modal antes del siguiente click en "Facturar".
+      intentosCaja++;
+      if (intentosCaja > MAX_INTENTOS_CAJA) {
+        throw new Error(
+          `La facturación no se completó tras ${MAX_INTENTOS_CAJA} intentos de abrir la caja: ` +
+          'el sistema siguió pidiendo abrir la caja o nunca mostró la ventana de impresión.'
+        );
+      }
       await expect(this.modalAbrirCaja).toBeVisible();
       await this.completarAperturaCaja();
       await expect(this.modalAbrirCaja).toBeHidden();
     }
-
-    throw new Error(
-      `La facturación no se completó tras ${MAX_INTENTOS} intentos de abrir la caja: ` +
-      'el sistema siguió pidiendo abrir la caja o nunca mostró la ventana de impresión.'
-    );
   }
 
   /**
    * Arma la carrera entre los resultados válidos tras confirmar un pago
-   * (popup de impresión, modal "Abrir Caja" y, opcionalmente, el SweetAlert
-   * "Información de pago") ANTES de ejecutar `accionClick`, para no perder un
-   * evento que puede dispararse de forma síncrona junto con la respuesta del
-   * click — usado tanto para el click inicial en "Facturar" como para el
-   * click en "Pagar" cuando la confirmación opcional aparece.
+   * (popup de impresión, modal "Abrir Caja", el panel "Información del
+   * Cliente" y, opcionalmente, el SweetAlert "Información de pago") ANTES de
+   * ejecutar `accionClick`, para no perder un evento que puede dispararse de
+   * forma síncrona junto con la respuesta del click — usado tanto para el
+   * click inicial en "Facturar" como para el click en "Pagar" cuando la
+   * confirmación opcional aparece.
    *
    * `incluirConfirmacionPago` se desactiva para el click en "Pagar": el modal
    * de confirmación sigue técnicamente visible en el instante en que se arma
    * esa segunda carrera (recién se está cerrando), así que incluirlo ahí
    * resolvería la carrera de inmediato contra el mismo modal en vez de
    * esperar una aparición nueva.
+   *
+   * Si NINGUNA de estas señales llega (ni popup, ni modal, ni confirmación
+   * opcional, ni el panel de cliente), esta función deja que el timeout se
+   * propague como rechazo — quien llama
+   * (confirmarPagoAbriendoCajaSiEsNecesario()) decide entonces, de forma
+   * secuencial y solo en ese momento, si el carrito ya quedó vacío (ambiente
+   * que confirma la venta sin ningún popup ni modal) antes de darlo por
+   * error real. No se agrega esa comprobación a esta misma carrera para no
+   * arriesgar que "carrito vacío" gane la carrera antes de tiempo en
+   * ambientes donde el popup sí llega, solo un poco más tarde.
    */
   private async _armarCarreraFacturacion(accionClick: () => Promise<void>, incluirConfirmacionPago: boolean) {
     const popupPromise = this.page.waitForEvent('popup', { timeout: TIMEOUTS.PRINT_POPUP })
       .then((printPage) => ({ tipo: 'popup' as const, printPage }));
     const modalPromise = this.modalAbrirCaja.waitFor({ state: 'visible', timeout: TIMEOUTS.PRINT_POPUP })
       .then(() => ({ tipo: 'modalAbrirCaja' as const }));
-    const promesas: Promise<{ tipo: 'popup'; printPage: Page } | { tipo: 'modalAbrirCaja' } | { tipo: 'confirmacionPago' }>[] =
-      [popupPromise, modalPromise];
+    const clienteInfoPromise = this.panelInformacionCliente.waitFor({ state: 'visible', timeout: TIMEOUTS.PRINT_POPUP })
+      .then(() => ({ tipo: 'clienteInfoRequerido' as const }));
+    const promesas: Promise<
+      { tipo: 'popup'; printPage: Page } | { tipo: 'modalAbrirCaja' } | { tipo: 'confirmacionPago' } | { tipo: 'clienteInfoRequerido' }
+    >[] = [popupPromise, modalPromise, clienteInfoPromise];
     if (incluirConfirmacionPago) {
       promesas.push(
         this.confirmacionPago.waitFor({ state: 'visible', timeout: TIMEOUTS.PRINT_POPUP })
@@ -2127,6 +2512,52 @@ export class PosPage {
     return this.localizarPrimerProducto(
       (m) => m.tipoItem === 1 && !m.esFraccionado,
       'producto normal (no fraccionado, no servicio)'
+    );
+  }
+
+  /**
+   * Primer producto normal que además tenga un código interno asignado
+   * (`input_hide_product_code_<id>` no vacío) — requisito real del buscador
+   * interno de Vista Expandida, que filtra por código y no por nombre.
+   * Confirmado en vivo (TALLER ALPHA PREMIUM) que no todos los productos
+   * normales del catálogo tienen código asignado: `obtenerPrimerProductoNormal()`
+   * puede devolver válidamente uno sin código (dato del catálogo, no un
+   * bug), lo que deja el buscador interno con un valor vacío y el resto del
+   * flujo nunca progresa. No se puede resolver con el `predicado` síncrono
+   * de `localizarPrimerProducto()` porque el código vive en un input fuera
+   * de los argumentos de `add_to_table(...)` que alimentan los metadatos, así
+   * que aquí se pagina y se comprueba cada candidato con el propio
+   * `obtenerCodigoProducto()`.
+   */
+  async obtenerPrimerProductoNormalConCodigo(): Promise<{ producto: MetadatoProducto; codigo: string }> {
+    const MAX_PAGINACIONES = 20;
+    let indiceInicio = 0;
+
+    for (let paginacion = 0; paginacion <= MAX_PAGINACIONES; paginacion++) {
+      const metadatos = await this.obtenerMetadatosProductosVisibles();
+
+      for (let i = indiceInicio; i < metadatos.length; i++) {
+        const producto = metadatos[i];
+        if (producto.tipoItem !== 1 || producto.esFraccionado) continue;
+
+        const codigo = await this.obtenerCodigoProducto(producto.nombre).catch(() => '');
+        if (codigo) return { producto, codigo };
+      }
+
+      indiceInicio = metadatos.length;
+      const hayMas = await this._cargarMasProductosScrolleando(metadatos.length);
+      if (!hayMas) {
+        throw new Error(
+          `No se encontró ningún producto normal con código interno asignado tras revisar las ` +
+          `${metadatos.length} tarjetas de todo el catálogo visible (no hay más páginas que cargar). ` +
+          'Se requiere al menos un producto normal con código no vacío en el ambiente de prueba.'
+        );
+      }
+    }
+
+    throw new Error(
+      `No se encontró ningún producto normal con código tras ${MAX_PAGINACIONES} cargas adicionales ` +
+      'del catálogo (posible bucle: revisar manualmente).'
     );
   }
 
@@ -2524,9 +2955,24 @@ export class PosPage {
 
   get categoriaTodos() { return this.page.locator(L.CAT_TODOS); }
   get categoriaCombos() { return this.page.locator(L.CAT_COMBOS); }
-  get categoriaTipo() { return this.page.locator(L.CAT_TIPO); }
-  get categoriaProductosFraccionados() { return this.page.locator(L.CAT_FRACCIONADOS); }
-  get categoriaProductosVariantes() { return this.page.locator(L.CAT_VARIANTES); }
+
+  /**
+   * Categoría de producto normal localizada por su nombre real
+   * (`data-category-name`, confirmado en vivo que coincide exactamente con
+   * el nombre visible) — nunca por id numérico, que es un dato propio de
+   * cada compañía. Puede no existir en absoluto en una compañía que no
+   * tenga creada una categoría con ese nombre (confirmado en vivo: TALLER
+   * ALPHA PREMIUM no tiene "Categoría", "Productos variantes" ni "Productos
+   * fraccionados" entre sus categorías reales) — el locator resuelve a
+   * count=0 en ese caso, quien llama decide si es válido saltarla.
+   */
+  categoriaOpcionalPorNombre(nombre: string): Locator {
+    return this.page.locator(`[data-category-name="${nombre}"]`);
+  }
+
+  get categoriaTipo() { return this.categoriaOpcionalPorNombre('Categoría'); }
+  get categoriaProductosFraccionados() { return this.categoriaOpcionalPorNombre('Productos fraccionados'); }
+  get categoriaProductosVariantes() { return this.categoriaOpcionalPorNombre('Productos variantes'); }
 
   /**
    * Indica si la categoría dada quedó marcada como activa (clase
@@ -3257,13 +3703,23 @@ export class PosPage {
    * `#show_price_with_iva` (arriba del carrito) para saber qué total leer —
    * ver `validarLineaCarrito()`.
    *
-   * Cuando `activarIva` es true: si el CABYS aparece, lo completa (el IVA se
-   * autocompleta a partir de él); si no aparece, lo selecciona manualmente.
-   * Cuando es false: no toca CABYS ni el checkbox de IVA en absoluto —queda
-   * en su estado por defecto, sin marcar—, que es la forma real de guardar
-   * un producto sin IVA en este ambiente (confirmado en vivo: el país
-   * configurado actualmente para esta compañía no exige CABYS para poder
-   * guardar).
+   * Cuando `activarIva` es true: si el CABYS aparece, lo completa con
+   * CABYS_BUSQUEDA (el IVA se autocompleta a partir de él); si no aparece,
+   * lo selecciona manualmente. Cuando es false: si CABYS no aparece, no lo
+   * toca —queda en su estado por defecto, sin marcar, la forma real de
+   * guardar un producto sin IVA en ambientes que no lo exigen (p. ej.
+   * HONDURAS)—; si SÍ aparece, se completa con CABYS_BUSQUEDA_SIN_IVA (tasa
+   * "0% Exento") ÚNICAMENTE para que el guardado no quede bloqueado
+   * (confirmado en vivo, TALLER ALPHA PREMIUM: sin ningún CABYS el botón
+   * "Agregar" no dispara ningún AJAX en absoluto). Esto NO logra un
+   * producto con `product_hide_apply_iva=0`: confirmado en vivo que un
+   * CABYS al 0% igual guarda ese flag en `1` (el producto queda clasificado
+   * fiscalmente, solo que a tasa cero) — en un ambiente donde CABYS es
+   * obligatorio, "sin IVA" en el sentido estricto de `activarIva=false`
+   * simplemente no es un estado alcanzable, así que un caller que valide
+   * `product_hide_apply_iva=0` seguirá fallando ahí, correctamente: es una
+   * diferencia real de reglas fiscales entre compañías, no un bug de este
+   * método ni algo que la automatización deba (o pueda) enmascarar.
    *
    * Centralizado aquí: existía duplicado de forma idéntica como función
    * local en pos-crear.spec.ts, pos-facturar.spec.ts y pos.spec.ts.
@@ -3286,6 +3742,11 @@ export class PosPage {
         await this.esperarIvaAutocompletado();
       } else {
         await this.seleccionarIvaManualmente();
+      }
+    } else {
+      const cabysAplicado = await this.manejarCabysSiAplica(CABYS_BUSQUEDA_SIN_IVA);
+      if (cabysAplicado) {
+        await this.esperarIvaAutocompletado();
       }
     }
 
@@ -4522,15 +4983,26 @@ export class PosPage {
   // componen métodos ya existentes de este mismo Page Object.
 
   /**
-   * Agrega un Producto Rápido mínimo al carrito (sin CABYS/IVA, irrelevante
-   * para los escenarios que solo necesitan "un producto rápido más" en el
-   * carrito) — mismo criterio ya confirmado en pos-crear.spec.ts/
-   * pos-orden-caja.spec.ts: no tocar el checkbox de IVA es la forma real de
-   * guardarlo sin IVA en este ambiente.
+   * Agrega un Producto Rápido mínimo al carrito (sin IVA, irrelevante para
+   * los escenarios que solo necesitan "un producto rápido más" en el
+   * carrito). No fuerza CABYS ni IVA: pero completa CABYS con
+   * `manejarCabysSiAplica()` —el mismo mecanismo que ya usa
+   * `agregarProductoRapidoParaValidacionIva()`, que no hace nada si el campo
+   * no existe— porque confirmado en vivo (TALLER ALPHA PREMIUM, Costa Rica
+   * con facturación electrónica real) que ahí CABYS es obligatorio incluso
+   * para un producto sin IVA: sin completarlo, el botón "Agregar" no dispara
+   * ningún AJAX (bloqueo silencioso del lado del cliente, sin toast) y
+   * `guardarProductoRapidoYObtenerRespuesta()` expira esperando una respuesta
+   * que nunca llega. En ambientes donde CABYS no existe (p. ej. HONDURAS,
+   * confirmado en vivo que no lo exige) este paso es un no-op y el
+   * comportamiento queda idéntico al de antes.
    */
   async agregarProductoRapidoSimple(nombre: string, precio: string) {
     await this.abrirProductoRapido();
     await this.llenarDatosBasicosProductoRapido(nombre, precio);
+    if (await this.manejarCabysSiAplica(CABYS_BUSQUEDA)) {
+      await this.esperarIvaAutocompletado();
+    }
     await this.guardarProductoRapidoYObtenerRespuesta();
     await expect(this.modalProductoRapido).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
   }
