@@ -47,7 +47,18 @@ const PAUSES = {
 
 const L = {
   // POS principal
-  PRODUCTO:          '.product_box_name',
+  // Vista Cuadrícula (`.product_box_name`, el `<p>` con el onclick real) y
+  // Vista Lista (`td[id^="product_table_click_event_"]`, la celda de imagen
+  // con ese mismo onclick real dentro de la fila `<tr>`) usan plantillas de
+  // producto completamente distintas — confirmado en vivo: en Vista Lista,
+  // `.product_box_name` no existe en absoluto (0 tarjetas), lo que hacía
+  // fallar cualquier búsqueda de producto ahí, aunque el catálogo sí tuviera
+  // productos cargados. El resto de la suite corre casi siempre en Vista
+  // Cuadrícula, donde solo existe el `.product_box_name` (el selector `td`
+  // no matchea nada ahí — su equivalente en Vista Cuadrícula es un `<div>`,
+  // no un `<td>`), así que este selector combinado no cambia ningún
+  // comportamiento ya existente.
+  PRODUCTO:          '.product_box_name, td[id^="product_table_click_event_"]',
   BTN_FACTURAR:      '#btn_pay_sale',
   CARRITO_CLAVES:    '#table_buy_list p[id^="drag_and_drop_"]',
   DESCUENTO_GENERAL: '#apply_general_discount',
@@ -499,6 +510,22 @@ const L = {
   MONTO_A_COMPRAR_INPUT_MONTO:   '#dsba_amount',
   MONTO_A_COMPRAR_BTN_CONFIRMAR: '#apply_sale_by_amount',
 
+  // Modal "Observaciones" por línea de producto (#product_item_comment_<clave>
+  // abre #dialog_product_item_comment) — biblioteca reutilizable de
+  // comentarios ya guardados (buscador, "Aplicar" a uno existente), con un
+  // botón "+" que abre su propio formulario de alta (textarea + Guardar).
+  // Confirmado en vivo: "Guardar" cierra el modal solo y deja el texto exacto
+  // en product_hide_item_observation_<clave> (hidden input, fuente real —
+  // no hay ningún texto visible de la observación en la fila). El botón
+  // "papelera" de una línea (remove_from_list/remove_from_order_list según
+  // el origen de la línea — ver eliminarProductoDelCarrito()) no tiene un id
+  // propio estable en ambos casos, así que su selector se arma inline con la
+  // clave, igual que el resto de selectores por-producto de este archivo.
+  DIALOG_COMENTARIO_PRODUCTO: '#dialog_product_item_comment',
+  COMENTARIO_PRODUCTO_BTN_NUEVO: '#dialog_product_item_comment button[onclick*="show_product_item_comment(0,1)"]',
+  COMENTARIO_PRODUCTO_TEXTAREA: '#ta_product_item_comment',
+  COMENTARIO_PRODUCTO_BTN_GUARDAR: '#dialog_product_item_comment button[onclick="updateDialogProductItemComment(0,1)"]',
+
   // "Agregar" → "Nombre del cliente": factura solo con un nombre, sin
   // seleccionar un cliente registrado. editQuickCustomerName() y
   // setTemporalCustomerName() son puro DOM (sin AJAX). Confirmado en vivo
@@ -852,6 +879,10 @@ const L = {
   // confirmación aparte (a diferencia de Importar Factura).
   ORDEN_CAJA_LISTA_BTN_CARGAR: '.rest_chev_right',
   AJAX_CARGAR_ORDEN_CAJA:      'getPosCashItemList',
+  // AJAX real disparado por #product_search (L.PRODUCTO_BUSCADOR_GRID) al
+  // presionar Enter mientras la pestaña "Órdenes de caja" está activa — ver
+  // buscarOrdenesCajaPorTexto().
+  AJAX_BUSCAR_ORDEN_CAJA:      'getPosCashSearch',
 
   // ─── Moneda (header principal del POS, fuera de cualquier modal) ───────────
   // Mismo tipo de botón MDL que el resto de menús del POS (#menu_cash,
@@ -2398,6 +2429,10 @@ export class PosPage {
    * muestra la vista por defecto de una categoría (confirmado en vivo: ver
    * el comentario de L.PRODUCTO_BUSCADOR_GRID). Sin esto, productoPorNombre()
    * podría no encontrar NUNCA un producto que sí existe.
+   *
+   * Mismo input reutilizado por buscarOrdenesCajaPorTexto(): persiste en el
+   * header del POS sin importar el tab activo, y dispara un backend distinto
+   * (getPosCashSearch) cuando "Órdenes de caja" está activa en vez del grid.
    */
   async buscarProductoEnGrid(termino: string) {
     const buscador = this.page.locator(L.PRODUCTO_BUSCADOR_GRID);
@@ -2473,6 +2508,27 @@ export class PosPage {
     );
   }
 
+  /**
+   * Devuelve las claves de TODAS las filas actualmente en el carrito
+   * (`#table_buy_list tr.main_row[id^="table_product_name_"]`) — a
+   * diferencia de obtenerClavesProductos() (que solo cuenta filas con id
+   * "drag_and_drop_", presente únicamente en líneas agregadas directo del
+   * catálogo), esta también cubre las líneas IMPORTADAS de una Orden de
+   * Caja/factura: confirmado en vivo que esas filas NO tienen ningún id
+   * "drag_and_drop_" (dejando obtenerClavesProductos() en 0 pese a tener
+   * líneas reales), pero SÍ comparten con las agregadas del catálogo el
+   * mismo patrón `id="table_product_name_<clave>"` en su `<tr>`. Fuente
+   * confiable para operar sobre cualquier carrito sin importar su origen —
+   * útil junto con eliminarProductoDelCarrito()/obtenerDatosLineaCarrito(),
+   * que sí funcionan igual para ambos tipos de fila.
+   */
+  async obtenerClavesFilasCarrito(): Promise<string[]> {
+    return this.page.evaluate(() =>
+      [...document.querySelectorAll('#table_buy_list tr.main_row[id^="table_product_name_"]')]
+        .map(el => el.id.replace('table_product_name_', ''))
+    );
+  }
+
   // ─── Localización de productos por característica funcional (sin nombres) ──
   //
   // Ninguno de los métodos de esta sección busca un producto por nombre,
@@ -2503,6 +2559,15 @@ export class PosPage {
    * VISIBLE, así que `MetadatoProducto.nombre` debe ser ese mismo texto —
    * de lo contrario, un producto localizado aquí podría no encontrarse
    * nunca al buscarlo luego por su propio nombre.
+   *
+   * Excepción confirmada en vivo (Vista Lista): el elemento que trae el
+   * onclick="add_to_table(...)" real ahí es la celda de la imagen del
+   * producto (td[id^="product_table_click_event_"]), que no tiene texto
+   * propio — el nombre visible vive en una celda hermana, fuera de este
+   * elemento. Cuando el textContent viene vacío se usa el argumento `name`
+   * ya capturado como único valor disponible; en Vista Cuadrícula el texto
+   * visible jamás llega vacío, así que esta rama no se activa ahí y no
+   * reintroduce el problema de backslashes ya documentado arriba.
    */
   private async _extraerArgumentosAddToTable(): Promise<{ args: (string | number)[] | null; textoVisible: string }[]> {
     return this.page.evaluate((selector) => {
@@ -2510,12 +2575,13 @@ export class PosPage {
       const original = (window as any).add_to_table;
       const out: any[] = [];
       cards.forEach((el) => {
-        const textoVisible = (el.textContent || '').trim();
+        let textoVisible = (el.textContent || '').trim();
         const onclick = el.getAttribute('onclick') || '';
         if (!onclick.trim().startsWith('add_to_table')) { out.push({ args: null, textoVisible }); return; }
         let capturados: any[] | null = null;
         (window as any).add_to_table = (...args: any[]) => { capturados = args; };
         try { new Function(onclick)(); } catch { /* tarjeta con un onclick inesperado: se descarta */ }
+        if (!textoVisible && capturados) textoVisible = String(capturados[1] ?? '').trim();
         out.push({ args: capturados, textoVisible });
       });
       (window as any).add_to_table = original;
@@ -2839,6 +2905,56 @@ export class PosPage {
     ).toBeGreaterThan(clavesAntes.length);
     const clavesDespues = await this.obtenerClavesProductos();
     return clavesDespues.find((c) => !clavesAntes.includes(c))!;
+  }
+
+  /**
+   * Elimina del carrito la línea identificada por `clave` (botón "papelera"
+   * de su fila) — sin SweetAlert de confirmación ni AJAX que esperar: el
+   * recálculo de totales es 100% client-side, confirmado en vivo
+   * interceptando la red (ninguna petición a "remove"/"delete" se disparó).
+   * Funciona igual para líneas agregadas directo del catálogo
+   * (`remove_from_list`) y para líneas importadas de una Orden de
+   * Caja/factura (`remove_from_order_list`) — ambas comparten la misma
+   * columna `.btns_product_<clave>` y el mismo texto de onclick
+   * "remove_from", así que un solo selector cubre ambos casos sin
+   * duplicar lógica. La condición real de éxito es que la fila
+   * (`#table_product_name_<clave>`) quede desprendida del DOM.
+   */
+  async eliminarProductoDelCarrito(clave: string) {
+    await this.page.locator(`.btns_product_${clave} button[onclick*="remove_from"]`).click();
+    await this.page.locator(`#table_product_name_${clave}`).waitFor({ state: 'detached', timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /**
+   * Agrega una observación a una línea específica del carrito: abre el
+   * modal "Observaciones" de esa línea (botón `#product_item_comment_<clave>`
+   * de su fila), usa su propio formulario de alta ("+" → textarea → Guardar)
+   * en vez de aplicar una ya existente de la biblioteca — confirmado en vivo
+   * que "Guardar" cierra el modal solo y deja el texto EXACTO (sin
+   * transformar) en `product_hide_item_observation_<clave>`.
+   */
+  async agregarObservacionAProducto(clave: string, texto: string) {
+    await this.page.locator(`#product_item_comment_${clave}`).click();
+    const dialog = this.page.locator(L.DIALOG_COMENTARIO_PRODUCTO);
+    await expect(dialog, 'El modal "Observaciones" no se abrió').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    await this.page.locator(L.COMENTARIO_PRODUCTO_BTN_NUEVO).click();
+    const textarea = this.page.locator(L.COMENTARIO_PRODUCTO_TEXTAREA);
+    await expect(textarea, 'El formulario para agregar una nueva observación no apareció').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await textarea.fill(texto);
+
+    await this.page.locator(L.COMENTARIO_PRODUCTO_BTN_GUARDAR).click();
+    await expect(dialog, 'El modal "Observaciones" no se cerró tras Guardar').toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /**
+   * Lee la observación actualmente guardada en una línea del carrito —
+   * directo del hidden input `product_hide_item_observation_<clave>`, la
+   * única fuente real (no hay ningún texto visible de la observación en la
+   * fila del carrito).
+   */
+  async obtenerObservacionDeProducto(clave: string): Promise<string> {
+    return this.page.locator(`#product_hide_item_observation_${clave}`).inputValue();
   }
 
   /** Indica si el checkbox de descuento general está activo. */
@@ -3694,6 +3810,18 @@ export class PosPage {
   /** Suma el IVA de las líneas dadas — reutilizado tanto para el cálculo como para el mensaje de error. */
   calcularTotalImpuestosEsperado(lineas: LineaCarrito[]): number {
     return lineas.reduce((acc, l) => acc + l.iva, 0);
+  }
+
+  /**
+   * Suma el neto (subtotal sin IVA) de las líneas dadas — no existe ningún
+   * campo "Subtotal" visible en el resumen de totales del POS (solo IVA y
+   * Total, confirmado en vivo revisando el panel de detalle avanzado), así
+   * que el subtotal del carrito se valida por consistencia interna: subtotal
+   * (esta suma) + impuestos (calcularTotalImpuestosEsperado) debe coincidir
+   * con obtenerTotalVentaNumerico().
+   */
+  calcularSubtotalEsperado(lineas: LineaCarrito[]): number {
+    return lineas.reduce((acc, l) => acc + l.neto, 0);
   }
 
   /**
@@ -5581,6 +5709,24 @@ export class PosPage {
     return simboloActivo;
   }
 
+  /**
+   * Lee el símbolo de moneda (p. ej. "$", "₡") con el que el total de venta
+   * (L.TOTAL_MODAL) se muestra actualmente — alternativa de solo lectura a
+   * obtenerInfoMoneda() para los momentos en los que #menu_type_currency no
+   * es una opción: confirmado en vivo que ese botón queda oculto
+   * (isVisible() === false, aunque isEnabled() siga en true) mientras hay una
+   * Orden de Caja cargada en el carrito, lo que hace fallar
+   * _seleccionarOpcionMoneda() (necesita abrir ese menú) incluso solo para
+   * leer, sin cambiar nada.
+   */
+  async obtenerSimboloMonedaEnTotal(): Promise<string> {
+    const texto = await this.page.evaluate(
+      (id) => document.getElementById(id)?.textContent ?? '',
+      L.TOTAL_MODAL
+    );
+    return texto.match(/[^\d.,\s]+/)?.[0] ?? '';
+  }
+
   // ─── "Crear Proforma" ───────────────────────────────────────────────────────
 
   /** Locator del modal "Agregar Proforma". */
@@ -5970,9 +6116,12 @@ export class PosPage {
 
   /**
    * Filtra, sobre las tarjetas de Apartado YA renderizadas, las que contienen
-   * `texto` en su contenido visible — mismo criterio y mismo motivo que
-   * filtrarOrdenesCajaPorTexto() (esta pestaña tampoco tiene ningún campo de
-   * búsqueda propio, ver el comentario de L.AJAX_CARGAR_APARTADO).
+   * `texto` en su contenido visible (ver el comentario de
+   * L.AJAX_CARGAR_APARTADO). Nota: la pestaña de Órdenes de Caja sí tiene un
+   * campo de búsqueda real (`#product_search`, ver buscarOrdenesCajaPorTexto())
+   * — no se ha confirmado en vivo si esta pestaña de Apartados también lo
+   * comparte, así que este filtro por contenido visible se mantiene tal cual
+   * hasta investigarlo.
    */
   async filtrarApartadosPorTexto(texto: string): Promise<{ total: number; coincidencias: number }> {
     const tarjetas = this.page.locator(L.IMPORTAR_FACTURA_FILA);
@@ -6381,15 +6530,12 @@ export class PosPage {
    * (ORDEN_CAJA_LISTA_BTN_CARGAR dentro de la tarjeta, AJAX_CARGAR_ORDEN_CAJA),
    * pero sobre una tarjeta elegida por criterio en vez de siempre `.first()`.
    *
-   * Necesario porque esta pestaña NO tiene ningún campo de búsqueda propio —
-   * confirmado en vivo volcando el DOM completo de #content_invoice_order_list
-   * (ningún input de texto/tipo search en todo el contenedor, a diferencia del
-   * buscador de Cliente o del buscador interno de Vista Expandida). Cada
-   * tarjeta sí expone en su propio HTML los datos reales con los que se creó
-   * la orden (tipo de pago, vendedor, cliente, observaciones) — confirmado en
-   * vivo — así que "buscar" una Orden de Caja con una característica
-   * concreta se resuelve filtrando esas tarjetas ya cargadas, no con un
-   * input+AJAX que este ambiente no tiene.
+   * Sirve para localizar una Orden de Caja por una característica propia de
+   * la tarjeta (tipo de pago, vendedor asignado) que el buscador real de esta
+   * pestaña (`#product_search` / L.PRODUCTO_BUSCADOR_GRID, ver
+   * buscarOrdenesCajaPorTexto()) no indexa — cada tarjeta expone esos datos
+   * en su propio HTML (confirmado en vivo), así que se filtra sobre las ya
+   * renderizadas en vez de depender de ese buscador para estos casos.
    */
   private async _cargarOrdenCajaQueCumpla(
     predicado: (tarjeta: Locator) => Promise<boolean>,
@@ -6448,19 +6594,57 @@ export class PosPage {
   }
 
   /**
-   * Filtra, sobre las tarjetas de Orden de Caja YA renderizadas, las que
-   * contienen `texto` en su contenido visible (cliente, número de orden,
-   * observación, etc.) — la aproximación más honesta a "buscar" disponible en
-   * esta pestaña, que no tiene ningún campo de búsqueda propio (ver el
-   * comentario de _cargarOrdenCajaQueCumpla()). Devuelve el total de tarjetas
-   * cargadas y cuántas de ellas coinciden, para que el test valide que el
-   * filtro realmente reduce el conjunto.
+   * Busca Órdenes de Caja usando el campo de búsqueda REAL de esta pestaña:
+   * `#product_search` (L.PRODUCTO_BUSCADOR_GRID), el mismo input que
+   * buscarProductoEnGrid() usa para el catálogo de productos — persiste en
+   * el header del POS sin importar el tab activo, y mientras "Órdenes de
+   * caja" está activa dispara su propio AJAX real (`getPosCashSearch`,
+   * L.AJAX_BUSCAR_ORDEN_CAJA) que reemplaza el listado de tarjetas por el
+   * resultado filtrado en el servidor.
+   *
+   * CORRECCIÓN: un comentario previo en este archivo (y el test que lo usaba)
+   * afirmaban que esta pestaña no tenía ningún campo de búsqueda propio —
+   * confirmado en vivo que sí lo tiene, solo que no estaba en
+   * `#content_invoice_order_list` (donde se buscó originalmente) sino en el
+   * header persistente del POS. También confirmado en vivo que este buscador
+   * indexa el nombre del cliente (real o de texto libre vía
+   * ingresarNombreCliente()) pero NO la observación oculta de la tarjeta
+   * (buscar por una observación única devolvió "No se encontraron órdenes
+   * que mostrar").
    */
-  async filtrarOrdenesCajaPorTexto(texto: string): Promise<{ total: number; coincidencias: number }> {
-    const tarjetas = this.page.locator(L.IMPORTAR_FACTURA_FILA);
-    const total = await tarjetas.count();
-    const coincidencias = await tarjetas.filter({ hasText: texto }).count();
-    return { total, coincidencias };
+  async buscarOrdenesCajaPorTexto(texto: string) {
+    const totalAntes = await this.contarOrdenesCajaVisibles();
+
+    // abrirOrdenesCaja() ya dispara su propia llamada a este mismo endpoint
+    // (con `search=` vacío, para la carga inicial de la pestaña) — confirmado
+    // en vivo que su RESPUESTA puede seguir en vuelo y resolver DESPUÉS de
+    // que este método ya empezó a esperar "la próxima respuesta de
+    // getPosCashSearch", haciendo que `waitForResponse` atrape por error esa
+    // respuesta vieja (sin filtrar) en vez de la de esta búsqueda. Se
+    // distingue por el contenido real de la petición (su `search=<texto>`),
+    // no solo por la URL.
+    const respuestaPromise = this.page.waitForResponse((res) => {
+      if (!res.url().includes(L.AJAX_BUSCAR_ORDEN_CAJA)) return false;
+      const post = decodeURIComponent((res.request().postData() ?? '').replace(/\+/g, ' '));
+      return post.includes(texto);
+    }, { timeout: TIMEOUTS.PAYMENT_MODAL });
+    await this.buscarProductoEnGrid(texto);
+    await respuestaPromise;
+
+    // La respuesta ya resuelta no garantiza que el DOM ya haya reemplazado
+    // las tarjetas con el resultado filtrado — ese re-render corre en un
+    // callback aparte, después de recibir la respuesta. Se espera la
+    // condición real: que el total de tarjetas cambie del valor previo a
+    // buscar.
+    await expect.poll(
+      () => this.contarOrdenesCajaVisibles(),
+      { timeout: TIMEOUTS.PAYMENT_MODAL, message: 'El resultado de la búsqueda no terminó de renderizarse' }
+    ).not.toBe(totalAntes);
+  }
+
+  /** Cuenta las tarjetas de Orden de Caja actualmente renderizadas en la pestaña — útil antes/después de buscarOrdenesCajaPorTexto() para validar que la búsqueda realmente redujo el conjunto. */
+  async contarOrdenesCajaVisibles(): Promise<number> {
+    return this.page.locator(L.IMPORTAR_FACTURA_FILA).count();
   }
 
   /** Cuenta las filas actualmente cargadas en el carrito (`#table_buy_list tr.main_row`):
@@ -6470,6 +6654,13 @@ export class PosPage {
    * normalmente desde el catálogo (con ese id) — confirmado en vivo. Útil para
    * validar que una factura importada realmente cargó líneas al carrito, algo
    * que `obtenerClavesProductos()` no puede detectar por sí solo.
+   *
+   * OJO: no es "1 fila por producto" — confirmado en vivo que cada producto
+   * genera 4 `tr.main_row` (`table_product_name_<clave>`, `_id_<clave>`,
+   * `_h_w_id_<clave>`, `_modifier_<clave>`; solo la primera es la fila
+   * "visible" real). Para saber cuántos PRODUCTOS/líneas distintas hay,
+   * usar `obtenerClavesFilasCarrito().length` (o `obtenerClavesProductos()`
+   * si se sabe que ninguna línea es importada) — no este método.
    */
   async obtenerCantidadFilasCarrito(): Promise<number> {
     return this.page.locator(L.IMPORTAR_FACTURA_CARRITO_FILAS).count();

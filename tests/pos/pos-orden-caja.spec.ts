@@ -1,5 +1,5 @@
 import { test as base, expect, Response, Page } from '@playwright/test';
-import { PosPage, TIMEOUTS, DESCUENTO_INDIVIDUAL_PCT, DESCUENTO_GENERAL_PCT, PRECIO_PRODUCTO_RAPIDO, PESTANAS_POS_A_RECORRER, VEHICULO_PINTURA_TIPO, espiarErroresJS } from './pos.page';
+import { PosPage, TIMEOUTS, DESCUENTO_INDIVIDUAL_PCT, DESCUENTO_GENERAL_PCT, PRECIO_PRODUCTO_RAPIDO, PESTANAS_POS_A_RECORRER, PESTANA_POS_FACTURACION, VEHICULO_PINTURA_TIPO, espiarErroresJS, type LineaCarrito } from './pos.page';
 
 const NOMBRE_TERCERO = 'Tercero De Prueba QA';
 
@@ -81,6 +81,39 @@ async function validarSinMensajesDeError(page: Page) {
 async function cargarPrimeraOrdenCaja(pos: PosPage) {
   await pos.abrirOrdenesCaja();
   await pos.cargarPrimeraOrdenCajaDisponible();
+}
+
+/**
+ * Valida cada línea del carrito contra su propio estado real de IVA (leído
+ * primero, nunca asumido) — necesaria para una Orden de Caja arbitraria
+ * ("primera disponible") cuyas líneas pueden traer IVA activo o no según el
+ * producto real, a diferencia de validarLineasCarrito() (PosPage), que exige
+ * un único `ivaEsperadoActivo` para todas las claves. Compone
+ * obtenerDatosLineaCarrito() + validarLineaCarrito(), ambos ya existentes,
+ * sin duplicar la fórmula de validación.
+ *
+ * Antes de leer, fuerza establecerMostrarPrecioConIva(true, claves) — mismo
+ * paso previo que ya usan todos los llamados existentes de validarLineaCarrito()/
+ * validarLineasCarrito() en pos-crear.spec.ts: la fórmula de validarLineaCarrito()
+ * asume que el total mostrado incluye IVA, lo cual solo es cierto cuando este
+ * toggle está activo (confirmado en vivo que su valor por defecto es
+ * `false`, dejando el total mostrado igual al neto sin IVA).
+ */
+async function validarLineasCarritoSegunEstadoReal(pos: PosPage, claves: string[]): Promise<LineaCarrito[]> {
+  await pos.establecerMostrarPrecioConIva(true, claves);
+  const lineas: LineaCarrito[] = [];
+  for (const clave of claves) {
+    const datos = await pos.obtenerDatosLineaCarrito(clave);
+    lineas.push(await pos.validarLineaCarrito(clave, datos.ivaAplicado));
+  }
+  return lineas;
+}
+
+/** Valida que subtotal + impuestos coincidan con el total mostrado — no existe un campo "Subtotal" visible en el POS (ver el comentario de calcularSubtotalEsperado() en pos.page.ts), así que el subtotal se valida por esta consistencia interna. */
+async function validarTotalCarrito(pos: PosPage, lineas: LineaCarrito[]) {
+  const totalEsperado = pos.calcularSubtotalEsperado(lineas) + pos.calcularTotalImpuestosEsperado(lineas);
+  const totalReal = await pos.obtenerTotalVentaNumerico();
+  expect(totalReal, `Total esperado (subtotal + impuestos = ${totalEsperado.toFixed(2)}) no coincide con el total mostrado (${totalReal.toFixed(2)})`).toBeCloseTo(totalEsperado, 1);
 }
 
 /**
@@ -1302,35 +1335,427 @@ test.describe('Orden de Caja — Seleccionar y Facturar', () => {
     test.setTimeout(TIMEOUTS.TEST);
     const erroresJS = espiarErroresJS(sharedPage);
 
-    // Esta pestaña NO tiene ningún campo de búsqueda propio en este ambiente
-    // — confirmado en vivo volcando el DOM completo de
-    // #content_invoice_order_list (cero inputs de texto/tipo search en todo
-    // el contenedor, a diferencia del buscador de Cliente o el buscador
-    // interno de Vista Expandida). Se documenta el hallazgo y se adapta el
-    // escenario a la forma real de "filtrar" que el sistema sí ofrece: cada
-    // tarjeta trae su propia observación en su HTML (oculta visualmente,
-    // pero presente en el DOM), así que crear una Orden de Caja con una
-    // observación única y localizarla luego por ese texto entre TODAS las ya
-    // renderizadas prueba el filtro de verdad, sin inventar un input que
-    // esta versión del sistema no tiene (ver filtrarOrdenesCajaPorTexto() en
-    // pos.page.ts).
-    const textoUnico = `Buscar QA ${Date.now()}`;
-    await test.step('Crear una Orden de Caja con una observación única para poder localizarla después', async () => {
+    // Buscador real de esta pestaña: `#product_search` (mismo input del
+    // header del POS que usa el catálogo de productos, ver
+    // buscarOrdenesCajaPorTexto() en pos.page.ts) — confirmado en vivo que sí
+    // existe (un intento previo que buscó únicamente dentro de
+    // #content_invoice_order_list concluyó erróneamente que no había ningún
+    // campo de búsqueda). También confirmado en vivo que este buscador
+    // indexa el nombre del cliente, no la observación oculta de la tarjeta —
+    // se usa un nombre de cliente de texto libre único (ingresarNombreCliente(),
+    // ya usado en el test 7) en vez de un cliente existente compartido, para
+    // que la búsqueda reduzca el conjunto a exactamente esta orden.
+    const nombreUnico = `Cliente Buscar QA ${Date.now()}`;
+    await test.step('Crear una Orden de Caja con un nombre de cliente único para poder localizarla después', async () => {
       await agregarProductoDePrecioFijo(pos);
-      await pos.seleccionarClienteExistente();
+      await pos.ingresarNombreCliente(nombreUnico);
       await abrirMenuOrdenCajaConExoneracion(pos, sharedPage);
       await pos.seleccionarTipoPagoOrdenCaja('contado');
-      await pos.llenarObservacionesOrdenCaja(textoUnico);
+      await pos.llenarObservacionesOrdenCaja('Orden de caja QA - buscador real');
       const respuesta = await pos.enviarOrdenCaja();
       await pos.validarOrdenCajaCreada(respuesta);
     });
 
-    await test.step('Ir a "Órdenes de caja" y filtrar por ese texto único', async () => {
+    await test.step('Ir a "Órdenes de caja" y buscar por ese nombre de cliente único', async () => {
       await pos.abrirOrdenesCaja();
-      const { total, coincidencias } = await pos.filtrarOrdenesCajaPorTexto(textoUnico);
-      expect(total, 'Se esperaban varias Órdenes de Caja ya cargadas para que el filtro tenga sentido').toBeGreaterThan(1);
-      expect(coincidencias, 'El filtro debía encontrar exactamente la Orden de Caja recién creada').toBe(1);
-      expect(coincidencias, 'El filtro debía reducir el conjunto frente al total de tarjetas cargadas').toBeLessThan(total);
+      const totalAntes = await pos.contarOrdenesCajaVisibles();
+      await pos.buscarOrdenesCajaPorTexto(nombreUnico);
+      const totalDespues = await pos.contarOrdenesCajaVisibles();
+      expect(totalAntes, 'Se esperaban varias Órdenes de Caja ya cargadas para que la búsqueda tenga sentido').toBeGreaterThan(1);
+      expect(totalDespues, 'La búsqueda debía encontrar exactamente la Orden de Caja recién creada').toBe(1);
+    });
+
+    await test.step('Abrir la Orden de Caja localizada desde los resultados de la búsqueda', async () => {
+      await pos.cargarPrimeraOrdenCajaDisponible();
+      expect(await pos.obtenerCantidadFilasCarrito(), 'La Orden de Caja localizada por la búsqueda no cargó ninguna línea al carrito').toBeGreaterThan(0);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Orden de Caja — Moneda contraria a la base
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Deliberadamente en su PROPIO describe, al final del archivo — mismo criterio
+// ya adoptado por "Apartados — Moneda contraria a la base"
+// (pos-apartado.spec.ts): confirmado en vivo que cargar una Orden de Caja
+// creada en una moneda distinta a la actualmente activa puede disparar el
+// mismo bug real del sistema ya documentado para Apartados (el total se
+// corrompe/infla varios órdenes de magnitud). Si este test facturó con éxito
+// no queda ninguna Orden de Caja pendiente en la moneda contraria que un test
+// posterior de "primera disponible" pudiera recoger por error; ejecutarlo al
+// final es una defensa adicional para el caso en que un fallo a medio camino
+// deje esa orden sin facturar.
+
+test.describe('Orden de Caja — Moneda contraria a la base', () => {
+  test('33. Crear una Orden de Caja con los 6 tipos de ítem, cliente existente y descuento general en la moneda contraria a la base, y facturarla', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    // Nunca se asume cuál es la moneda base (confirmado en vivo: en este
+    // ambiente HONDURAS la base real es USD, pese al nombre de la compañía) —
+    // se detecta con obtenerInfoMoneda() (ya existente) y se elige la
+    // contraria, mismo criterio ya adoptado por el test 16 de
+    // pos-apartado.spec.ts. cambiarMoneda() persiste por USUARIO en el
+    // servidor (no por sesión de navegador, ver su comentario en
+    // pos.page.ts) — afecta a toda la cuenta compartida, no solo a este
+    // test, así que se restaura al final.
+    let monedaOriginal = '';
+    let monedaContraria = '';
+    await test.step('Detectar la moneda base y determinar la contraria', async () => {
+      const { simboloActivo, simboloBase } = await pos.obtenerInfoMoneda();
+      monedaOriginal = simboloActivo;
+      monedaContraria = simboloBase === '$' ? '₡' : '$';
+    });
+
+    try {
+      let clavesAntes: string[] = [];
+      await test.step(`Cambiar a la moneda contraria a la base (${monedaContraria}) y agregar los 6 tipos de ítem`, async () => {
+        await pos.cambiarMoneda(monedaContraria);
+        clavesAntes = await pos.obtenerClavesProductos();
+        await agregarSeisTiposDeItem(pos, `OrdenCajaMonedaContraria ${Date.now()}`);
+        const clavesDespues = await pos.obtenerClavesProductos();
+        expect(clavesDespues.length - clavesAntes.length, 'No quedaron las 6 líneas esperadas en el carrito').toBeGreaterThanOrEqual(6);
+      });
+
+      let nombreCliente = '';
+      await test.step('Seleccionar cliente existente', async () => {
+        nombreCliente = await pos.seleccionarClienteExistente();
+      });
+
+      let totalCreado = 0;
+      await test.step(`Activar descuento general del ${DESCUENTO_GENERAL_PCT}% y validar que se aplicó`, async () => {
+        const totalAntes = await pos.obtenerTotalVentaNumerico();
+        await pos.activarDescuentoGeneral();
+        await pos.mostrarDetalleAvanzadoFactura();
+        await pos.establecerPorcentajeDescuentoGeneral(DESCUENTO_GENERAL_PCT);
+
+        totalCreado = await pos.obtenerTotalVentaNumerico();
+        expect(totalCreado, 'El total no bajó tras aplicar el descuento general').toBeLessThan(totalAntes);
+      });
+
+      await test.step('Validar que la Orden de Caja se va a crear en la moneda contraria esperada', async () => {
+        expect(await pos.obtenerSimboloMonedaEnTotal(), 'El total no se muestra en la moneda contraria esperada').toBe(monedaContraria);
+      });
+
+      const textoUnico = `Orden de caja QA - moneda contraria ${Date.now()}`;
+      await test.step('Enviar a caja: confirmar cliente propagado y crear la Orden de Caja', async () => {
+        await abrirMenuOrdenCajaConExoneracion(pos, sharedPage);
+        expect(
+          await pos.obtenerClienteEnOrdenCaja(),
+          'El cliente elegido arriba del carrito no se propagó al modal "Enviar a caja"'
+        ).toBe(nombreCliente);
+        await pos.seleccionarTipoPagoOrdenCaja('contado');
+        await pos.llenarObservacionesOrdenCaja(textoUnico);
+      });
+
+      const respuesta = await pos.enviarOrdenCaja();
+      await test.step('Validar que la Orden de Caja se creó correctamente', async () => {
+        await pos.validarOrdenCajaCreada(respuesta);
+        await validarSinMensajesDeError(sharedPage);
+      });
+
+      await test.step('Reabrir la Orden de Caja recién creada y validar que conserva la moneda y el total', async () => {
+        await cargarPrimeraOrdenCaja(pos);
+        expect(
+          await pos.obtenerSimboloMonedaEnTotal(),
+          'La moneda no se conservó al reabrir la Orden de Caja'
+        ).toBe(monedaContraria);
+        expect(
+          await pos.obtenerTotalVentaNumerico(),
+          'El total no coincide tras reabrir la Orden de Caja (posible corrupción de moneda, ver el hallazgo ya documentado para Apartados)'
+        ).toBeCloseTo(totalCreado, 0);
+      });
+
+      await test.step('Facturar con el total exacto en efectivo', async () => {
+        await pos.abrirModalDePago();
+        const total = await pos.obtenerTotalVentaNumerico();
+        expect(total).toBeGreaterThan(0);
+        await pos.seleccionarPagoEfectivo(String(total));
+        await pos.confirmarPagoAbriendoCajaSiEsNecesario();
+      });
+
+      await test.step('Validar que la factura se completó correctamente', async () => {
+        await pos.validarCarritoVacio();
+      });
+    } finally {
+      if (monedaOriginal && monedaOriginal !== monedaContraria) {
+        // El botón de moneda (#menu_type_currency) queda oculto mientras la
+        // pestaña activa es "Órdenes de caja" — confirmado en vivo que esto
+        // persiste incluso después de facturar (carrito ya vacío), y no es un
+        // overlay transitorio: _seleccionarOpcionMoneda() agota sus 8
+        // reintentos igual. Volver primero a la pestaña "POS Facturación"
+        // (PESTANA_POS_FACTURACION, el estado inicial del POS — nunca
+        // recargar la página completa, que además tardó minutos en
+        // reestabilizarse en pruebas en vivo) restaura ese botón antes de
+        // cambiar la moneda de vuelta.
+        await pos.visitarPestanaPos(PESTANA_POS_FACTURACION);
+        await pos.cambiarMoneda(monedaOriginal);
+      }
+    }
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Orden de Caja — Editar y validar cálculos del carrito
+// ═══════════════════════════════════════════════════════════════════════════
+
+test.describe('Orden de Caja — Editar y validar cálculos del carrito', () => {
+  test('34. Seleccionar una Orden de Caja, eliminar la mayoría de los productos, agregar un producto rápido y facturar, validando los cálculos del carrito', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    // "Seleccionar una Orden de Caja" que tenga varios productos no puede
+    // depender de cuál sea "la primera disponible" en este ambiente
+    // compartido: confirmado en vivo (2 corridas consecutivas) que la Orden
+    // de Caja más reciente casi siempre trae un único producto (la mayoría
+    // de los escenarios de "Crear" de esta misma suite usan
+    // agregarProductoDePrecioFijo(), un solo producto), lo que deja "eliminar
+    // la mayoría" sin sentido. Se crea aquí una Orden de Caja propia con
+    // varios productos (mismo helper ya usado por los tests 12-15) y se
+    // selecciona de inmediato como "primera disponible" — sigue siendo una
+    // Orden de Caja real y ya existente en el sistema al momento de
+    // seleccionarla, mismo criterio de "más reciente primero" ya confirmado
+    // para esta pestaña.
+    await test.step('Crear una Orden de Caja con varios productos para luego editarla', async () => {
+      await pos.agregarProductoNormalFraccionadoYRapido('Editar Carrito', `Setup ${Date.now()}`);
+      await pos.seleccionarClienteExistente();
+      await abrirMenuOrdenCajaConExoneracion(pos, sharedPage);
+      await pos.seleccionarTipoPagoOrdenCaja('contado');
+      await pos.llenarObservacionesOrdenCaja('Orden de caja QA - setup para editar carrito');
+      const respuestaSetup = await pos.enviarOrdenCaja();
+      await pos.validarOrdenCajaCreada(respuestaSetup);
+    });
+
+    await test.step('Seleccionar la Orden de Caja recién creada (primera disponible)', async () => {
+      await cargarPrimeraOrdenCaja(pos);
+      expect(await pos.obtenerCantidadFilasCarrito(), 'La Orden de Caja no cargó ninguna línea al carrito').toBeGreaterThan(0);
+    });
+
+    let clavesIniciales: string[] = [];
+    let lineasIniciales: LineaCarrito[] = [];
+    await test.step('Registrar líneas, subtotal, impuestos y total antes de eliminar', async () => {
+      clavesIniciales = await pos.obtenerClavesFilasCarrito();
+      expect(clavesIniciales.length, 'Se esperaba más de un producto para poder eliminar "la mayoría"').toBeGreaterThan(1);
+      lineasIniciales = await validarLineasCarritoSegunEstadoReal(pos, clavesIniciales);
+      await pos.validarResumenImpuestos(lineasIniciales);
+      await validarTotalCarrito(pos, lineasIniciales);
+    });
+
+    const totalInicial = await pos.obtenerTotalVentaNumerico();
+    const claveAConservar = clavesIniciales[0];
+    const clavesAEliminar = clavesIniciales.slice(1);
+
+    await test.step('Eliminar la mayoría de los productos, dejando solo uno', async () => {
+      for (const clave of clavesAEliminar) {
+        await pos.eliminarProductoDelCarrito(clave);
+      }
+    });
+
+    let lineasTrasEliminar: LineaCarrito[] = [];
+    await test.step('Validar líneas, subtotal, impuestos y total tras eliminar', async () => {
+      const clavesActuales = await pos.obtenerClavesFilasCarrito();
+      // La comparación exacta de abajo ya prueba por sí sola que la cantidad
+      // de líneas disminuyó (clavesIniciales.length > 1 por la precondición
+      // de arriba, y ahora queda solo 1) — obtenerCantidadFilasCarrito() NO
+      // sirve para este chequeo: cuenta 4 `tr.main_row` por producto (ver su
+      // comentario en pos.page.ts), no 1.
+      expect(clavesActuales, 'Debía quedar únicamente el producto conservado').toEqual([claveAConservar]);
+
+      lineasTrasEliminar = await validarLineasCarritoSegunEstadoReal(pos, clavesActuales);
+      await pos.validarResumenImpuestos(lineasTrasEliminar);
+      await validarTotalCarrito(pos, lineasTrasEliminar);
+
+      const totalTrasEliminar = await pos.obtenerTotalVentaNumerico();
+      expect(totalTrasEliminar, 'El total no bajó tras eliminar la mayoría de los productos').toBeLessThan(totalInicial);
+    });
+
+    await test.step('Seleccionar "AGREGAR ITEMS" y agregar un producto rápido', async () => {
+      await pos.abrirAgregarItem();
+      await pos.agregarProductoRapidoSimple(`Rápido Editar Carrito QA ${Date.now()}`, PRECIO_PRODUCTO_RAPIDO);
+    });
+
+    let lineasTrasAgregar: LineaCarrito[] = [];
+    let totalTrasAgregar = 0;
+    await test.step('Validar líneas, subtotal, impuestos y total tras agregar el producto rápido', async () => {
+      const clavesActuales = await pos.obtenerClavesFilasCarrito();
+      // clavesActuales.length > 1 ya prueba que la cantidad de líneas
+      // aumentó (quedaba 1 sola antes de este paso).
+      expect(clavesActuales.length, 'No se agregó la nueva línea del producto rápido').toBeGreaterThan(1);
+      expect(clavesActuales, 'El producto conservado ya no está en el carrito').toContain(claveAConservar);
+
+      lineasTrasAgregar = await validarLineasCarritoSegunEstadoReal(pos, clavesActuales);
+      await pos.validarResumenImpuestos(lineasTrasAgregar);
+      await validarTotalCarrito(pos, lineasTrasAgregar);
+
+      totalTrasAgregar = await pos.obtenerTotalVentaNumerico();
+      const totalTrasEliminar = lineasTrasEliminar.reduce((acc, l) => acc + l.total, 0);
+      expect(totalTrasAgregar, 'El total no aumentó tras agregar el producto rápido').toBeGreaterThan(totalTrasEliminar);
+    });
+
+    await test.step('Regresar a la Orden de Caja', async () => {
+      await pos.volverDesdeAgregarItem(PESTANA_ORDENES_CAJA);
+      expect(await pos.obtenerTotalVentaNumerico(), 'El total cambió al volver a la pestaña "Órdenes de caja"').toBeCloseTo(totalTrasAgregar, 1);
+    });
+
+    await test.step('Validar los totales del carrito una última vez antes de facturar', async () => {
+      const clavesFinales = await pos.obtenerClavesFilasCarrito();
+      const lineasFinales = await validarLineasCarritoSegunEstadoReal(pos, clavesFinales);
+      await pos.validarResumenImpuestos(lineasFinales);
+      await validarTotalCarrito(pos, lineasFinales);
+    });
+
+    await test.step('Facturar con el total exacto en efectivo', async () => {
+      await pos.abrirModalDePago();
+      const total = await pos.obtenerTotalVentaNumerico();
+      expect(total).toBeGreaterThan(0);
+      await pos.seleccionarPagoEfectivo(String(total));
+      await pos.confirmarPagoAbriendoCajaSiEsNecesario();
+    });
+
+    await test.step('Validar que la venta se completó correctamente', async () => {
+      await pos.validarCarritoVacio();
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Orden de Caja — Observaciones por producto
+// ═══════════════════════════════════════════════════════════════════════════
+
+test.describe('Orden de Caja — Observaciones por producto', () => {
+  test('35. Crear una Orden de Caja con productos normales agregando una observación a cada producto, y validar que persistan al reabrirla', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    const CANTIDAD_PRODUCTOS = 3;
+    // Nombre de cliente de texto libre único (ingresarNombreCliente(), ya
+    // usado en el test 7 y en el test 32 para reabrir de forma confiable) —
+    // el buscador real de "Órdenes de caja" (buscarOrdenesCajaPorTexto())
+    // indexa el nombre del cliente, no la observación de producto, así que
+    // este es el único mecanismo confiable ya existente para reabrir
+    // exactamente esta Orden más adelante.
+    const nombreClienteUnico = `Cliente Observaciones QA ${Date.now()}`;
+
+    type ProductoConObservacion = { clave: string; nombre: string; observacion: string };
+    const productos: ProductoConObservacion[] = [];
+
+    await test.step(`Agregar ${CANTIDAD_PRODUCTOS} productos normales, cada uno con una observación distinta`, async () => {
+      for (let i = 1; i <= CANTIDAD_PRODUCTOS; i++) {
+        const metadato = await pos.obtenerPrimerProductoNoPresenteEnCarrito();
+        const clave = await pos.agregarProductoDelGridAlCarrito(metadato);
+        const observacion = `Observación QA producto ${i} - ${Date.now()}`;
+        await pos.agregarObservacionAProducto(clave, observacion);
+        productos.push({ clave, nombre: metadato.nombre, observacion });
+      }
+    });
+
+    await test.step('Validar inmediatamente que cada observación quedó aplicada en su línea', async () => {
+      for (const p of productos) {
+        expect(
+          await pos.obtenerObservacionDeProducto(p.clave),
+          `La observación del producto "${p.nombre}" no coincide con la ingresada`
+        ).toBe(p.observacion);
+      }
+    });
+
+    let subtotalCreado = 0;
+    let totalCreado = 0;
+    await test.step('Registrar cantidad de productos, subtotal, impuestos y total antes de crear la Orden', async () => {
+      const claves = productos.map((p) => p.clave);
+      expect(claves.length, 'No quedaron los productos esperados en el carrito').toBe(CANTIDAD_PRODUCTOS);
+
+      const lineas = await validarLineasCarritoSegunEstadoReal(pos, claves);
+      await pos.validarResumenImpuestos(lineas);
+      await validarTotalCarrito(pos, lineas);
+
+      subtotalCreado = pos.calcularSubtotalEsperado(lineas);
+      totalCreado = await pos.obtenerTotalVentaNumerico();
+    });
+
+    await test.step('Ingresar el nombre de cliente único y crear la Orden de Caja', async () => {
+      await pos.ingresarNombreCliente(nombreClienteUnico);
+      await abrirMenuOrdenCajaConExoneracion(pos, sharedPage);
+      // Contado: "Crédito" exige cliente real (ver test 5), un nombre libre no alcanza.
+      await pos.seleccionarTipoPagoOrdenCaja('contado');
+      await pos.llenarObservacionesOrdenCaja('Orden de caja QA - observaciones por producto');
+    });
+
+    const respuesta = await pos.enviarOrdenCaja();
+    await test.step('Validar que la Orden de Caja se creó correctamente', async () => {
+      await pos.validarOrdenCajaCreada(respuesta);
+      await validarSinMensajesDeError(sharedPage);
+    });
+
+    await test.step('Ir a "Órdenes de caja", buscar y abrir la Orden recién creada', async () => {
+      await pos.abrirOrdenesCaja();
+      await pos.buscarOrdenesCajaPorTexto(nombreClienteUnico);
+      await pos.cargarPrimeraOrdenCajaDisponible();
+    });
+
+    await test.step('Validar que todos los productos siguen existiendo y cada observación coincide exactamente', async () => {
+      const clavesTrasReabrir = await pos.obtenerClavesFilasCarrito();
+      expect(clavesTrasReabrir.length, 'La cantidad de productos cambió al reabrir la Orden').toBe(productos.length);
+
+      // Emparejar por NOMBRE, no por posición: hallazgo real confirmado en
+      // vivo (2 corridas) — al reabrir una Orden de Caja, el orden de las
+      // líneas queda INVERTIDO respecto al orden en que se agregaron
+      // originalmente (confirmado leyendo directo #product_table_name_<clave>
+      // de cada fila, sin ninguna condición de carrera: el orden ya venía
+      // así de entrada y no cambió tras esperar 2s adicionales). Se
+      // documenta como hallazgo del sistema — no se fuerza una comparación
+      // posicional que sería falsa.
+      const datosTrasReabrir = await Promise.all(
+        clavesTrasReabrir.map((clave) => pos.obtenerDatosLineaCarrito(clave))
+      );
+      const ordenSeConserva = datosTrasReabrir.every((d, i) => d.nombre === productos[i].nombre);
+      if (!ordenSeConserva) {
+        console.log(
+          `[Hallazgo del sistema] El orden de las líneas cambió al reabrir la Orden de Caja. ` +
+          `Orden original: ${productos.map(p => p.nombre).join(' | ')}. ` +
+          `Orden tras reabrir: ${datosTrasReabrir.map(d => d.nombre).join(' | ')}.`
+        );
+      }
+
+      for (const p of productos) {
+        const lineaCoincidente = datosTrasReabrir.find((d) => d.nombre === p.nombre);
+        expect(lineaCoincidente, `El producto "${p.nombre}" ya no aparece en el carrito tras reabrir la Orden`).toBeDefined();
+
+        const observacionLeida = await pos.obtenerObservacionDeProducto(lineaCoincidente!.clave);
+        expect(
+          observacionLeida,
+          `La observación de "${p.nombre}" no coincide exactamente con la ingresada al crear la Orden`
+        ).toBe(p.observacion);
+      }
+    });
+
+    await test.step('Validar subtotal, impuestos y total tras reabrir la Orden', async () => {
+      const clavesTrasReabrir = await pos.obtenerClavesFilasCarrito();
+      const lineasTrasReabrir = await validarLineasCarritoSegunEstadoReal(pos, clavesTrasReabrir);
+      await pos.validarResumenImpuestos(lineasTrasReabrir);
+      await validarTotalCarrito(pos, lineasTrasReabrir);
+
+      const subtotalTrasReabrir = pos.calcularSubtotalEsperado(lineasTrasReabrir);
+      expect(subtotalTrasReabrir, 'El subtotal no se conservó tras reabrir la Orden').toBeCloseTo(subtotalCreado, 1);
+      expect(await pos.obtenerTotalVentaNumerico(), 'El total no se conservó tras reabrir la Orden').toBeCloseTo(totalCreado, 1);
+    });
+
+    await test.step('Facturar con el total exacto en efectivo', async () => {
+      await pos.abrirModalDePago();
+      const total = await pos.obtenerTotalVentaNumerico();
+      expect(total).toBeGreaterThan(0);
+      await pos.seleccionarPagoEfectivo(String(total));
+      await pos.confirmarPagoAbriendoCajaSiEsNecesario();
+    });
+
+    await test.step('Validar que la venta se completó correctamente', async () => {
+      await pos.validarCarritoVacio();
     });
 
     expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
