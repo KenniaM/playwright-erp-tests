@@ -435,6 +435,21 @@ const L = {
   CLIENTE_SELECT_OCULTO: '#customer_select',
   PANEL_PRODUCTOS: '.product_panel',
 
+  // Ícono "X" para quitar el cliente actualmente seleccionado del carrito —
+  // confirmado en vivo (volcando el DOM de la zona "content-customer-
+  // selected-info"): SOLO está visible cuando hay un cliente REAL
+  // seleccionado (id != "0"); con el placeholder "Cliente de contado" (ningún
+  // cliente real, p. ej. una factura recién importada sin cliente asociado)
+  // permanece oculto. Esta visibilidad es, confirmado en vivo, la señal más
+  // directa de "¿hay un cliente real seleccionado ahora mismo?" — más
+  // confiable que leer el texto de CLIENTE_NOMBRE_SELECCIONADO (que también
+  // podría, en teoría, coincidir con "Cliente de contado" como nombre real de
+  // un cliente registrado). onclick="validateRemoveProformClient(0, true)":
+  // confirmado en vivo que NO dispara ningún SweetAlert de confirmación (a
+  // diferencia de la mayoría de acciones destructivas de esta suite) — quita
+  // el cliente de inmediato.
+  CLIENTE_BTN_QUITAR: '#clear_customer_selected',
+
   // Buscador real de productos del grid del POS (icono de cubo, placeholder
   // "Buscar...."). Confirmado en vivo que la vista por defecto ("TODOS" u
   // otra categoría) está limitada a un cupo fijo de tarjetas ordenadas
@@ -548,6 +563,61 @@ const L = {
   // interceptando la red tras confirmar el SweetAlert de advertencia
   // ("¿Está seguro de enviar esta venta a caja?").
   AJAX_ENVIAR_ORDEN_CAJA: 'sendPosProductSale',
+
+  // Tarjeta de una Orden de Caja ya listada (mismo elemento que
+  // L.IMPORTAR_FACTURA_FILA/.pos_order_list_item_content, reutilizado): expone
+  // como hijo un <p> oculto con el tipo de pago real con el que se creó
+  // ("1"=Contado, "2"=Crédito, mismos valores que ORDEN_CAJA_TIPO_PAGO_HIDE) —
+  // confirmado en vivo volcando el DOM completo de #content_invoice_order_list.
+  // No existe ningún campo de búsqueda propio de esta pestaña (confirmado en
+  // vivo: sin inputs de texto/tipo search en todo el contenedor) — ver el
+  // comentario de _cargarOrdenCajaQueCumpla() en PosPage para el resto de la
+  // evidencia y cómo se localiza una Orden de Caja concreta sin él.
+  ORDEN_CAJA_TARJETA_TIPO_PAGO_HIDE: '[id^="pos_order_invoice_payment_type_id_hide_"]',
+
+  // Modal de pago (Facturar): "Tipo de pago" (Contado/Crédito) y "Asignar
+  // vendedor" — confirmado en vivo (volcando el DOM completo de
+  // #dialog_payment) que son controles PROPIOS del modal de pago, DISTINTOS
+  // de ORDEN_CAJA_CHECK_CONTADO/CREDITO y ORDEN_CAJA_VENDEDOR_CHOSEN (esos
+  // viven en el modal "Enviar a caja", #dialog_send_sale). Confirmado en vivo
+  // que cargar una Orden de Caja YA CREADA A CRÉDITO y abrir Facturar deja
+  // este checkbox de Crédito SIN marcar (el modal de pago siempre abre en
+  // Contado, #ck_is_payment_cash checked por defecto): el tipo de pago de
+  // "Enviar a caja" no se traslada al modal de Facturar — comportamiento real
+  // del sistema, no un defecto de la suite (ver el comentario de
+  // cargarPrimeraOrdenCajaACreditoDisponible() en PosPage). El vendedor
+  // (#payment_agent_assigned) sí llega con una opción real preseleccionada
+  // (nunca el placeholder "Seleccionar Vendedor") — confirmado en vivo en
+  // varias Órdenes de Caja distintas, cada una con un vendedor real distinto.
+  DIALOG_PAGO_CHECK_CONTADO:        '#ck_is_payment_cash',
+  DIALOG_PAGO_CHECK_CREDITO:        '#ck_is_payment_credit',
+  DIALOG_PAGO_FECHA_VENCIMIENTO:    '#sale_end_date_content',
+  DIALOG_PAGO_VENDEDOR_CHOSEN:      '#payment_agent_assigned_chosen',
+
+  // ─── "Enviar a caja" / carrito: Exoneración ────────────────────────────────
+  // Vive en la MISMA sección de detalle avanzado de totales que
+  // DESCUENTO_GENERAL (clase compartida "advanced_invoice_detail", revelada
+  // por mostrarDetalleAvanzadoFactura()) — confirmado en vivo volcando el DOM:
+  // "Exoneración (%)" es una fila más del carrito, junto a Subtotal/Descuento/
+  // Impuestos/Subsidio/Membresía, no un atributo automático de ningún cliente
+  // en particular. Se aplica con el botón "Agregar" (abre el modal
+  // #dialog_add_exoneration) y "Aplicar" — de los campos del modal, solo
+  // "Número de documento", "Orden de Exoneración" (el único con
+  // required="required" en el DOM real) y "Porcentaje de exoneración" están
+  // visibles por defecto (el resto — tipo de documento, institución exonerada,
+  // fecha de emisión — nace con display:none en este ambiente); confirmado en
+  // vivo que completar esos 3 y presionar "Aplicar" sí actualiza
+  // EXONERACION_PORCENTAJE_TOTAL/EXONERACION_MONTO_TOTAL y baja el total de la
+  // venta, sin necesidad de tocar los campos ocultos.
+  EXONERACION_BTN_AGREGAR:      '#set_apply_exoneration_modal',
+  EXONERACION_BTN_CANCELAR:     '#set_cancel_exoneration',
+  DIALOG_EXONERACION:           '#dialog_add_exoneration',
+  EXONERACION_NUMERO_DOCUMENTO: '#payment_exoneration_number',
+  EXONERACION_TEXTO_ORDEN:      '#apply_exoneration_text',
+  EXONERACION_PORCENTAJE_INPUT: '#payment_exoneration_percent',
+  EXONERACION_BTN_APLICAR:      '#apply_sale_exoneration',
+  EXONERACION_PORCENTAJE_TOTAL: '#total_exoneration_percent',
+  EXONERACION_MONTO_TOTAL:      '#total_exoneration_amount',
 
   // ─── "Orden de Ruteo" (mismo menú desplegable que Proforma/Apartado/Enviar a
   // caja, L.ORDEN_CAJA_MENU_BTN — confirmado en vivo, NO la pestaña superior
@@ -705,6 +775,34 @@ const L = {
   // realizar este Apartado?"). Responde texto plano: el id numérico creado
   // (éxito) o "0"/vacío (fallo) — mismo contrato que el resto de la suite.
   AJAX_GUARDAR_APARTADO: 'addPosLayaway',
+
+  // ─── Apartado YA EXISTENTE: listado, carga y "Abonar" ───────────────────────
+  // Confirmado en vivo volcando el DOM completo de la pestaña "Apartados": cada
+  // tarjeta reutiliza EXACTAMENTE las mismas clases que Órdenes de Caja/
+  // Importar Factura (.pos_order_list_item_content / .rest_chev_right — ver
+  // L.IMPORTAR_FACTURA_FILA/L.ORDEN_CAJA_LISTA_BTN_CARGAR, reutilizados tal
+  // cual, sin duplicar el selector), solo que el click dispara un AJAX propio
+  // (AJAX_CARGAR_APARTADO, no AJAX_CARGAR_ORDEN_CAJA). Igual que Órdenes de
+  // Caja, esta pestaña NO tiene ningún campo de búsqueda propio (confirmado en
+  // vivo: cero inputs de texto/tipo search en todo el contenedor y en el resto
+  // de la página estando esta pestaña activa).
+  AJAX_CARGAR_APARTADO: 'getPosLayawayOrderItemList',
+  APARTADO_TARJETA_NUMERO: '[id^="pos_layaway_invoice_client_number_hide_"]',
+
+  // "Abonar" (Realizar Abono sobre un Apartado YA CARGADO al carrito) — mismo
+  // menú desplegable junto a "Facturar" que "Generar Apartado"/"Enviar a
+  // caja" (L.ORDEN_CAJA_MENU_BTN), confirmado en vivo: su <li> no tiene id
+  // propio (a diferencia de "Enviar a caja"), se localiza por su clase
+  // "btn_layaway_payment" — mismo criterio que APARTADO_MENU_ITEM
+  // (localizado por clase, "btn_layaway_sale"). Reutiliza también el modal de
+  // pago normal (#dialog_payment), esta vez mostrando #make_layaway_payment.
+  // Confirmado en vivo que el carrito NO se vacía tras aplicar un abono (a
+  // diferencia de crear un Apartado o Facturar): el Apartado sigue pendiente,
+  // solo se registra el pago parcial — por eso no hay un validarAbonoAplicado()
+  // que revise el carrito vacío, a diferencia de validarApartadoCreado().
+  ABONO_MENU_ITEM:    'li.btn_layaway_payment',
+  ABONO_BTN_REALIZAR: '#make_layaway_payment',
+  AJAX_APLICAR_ABONO: 'addPosLayawayPayment',
 
   // ─── "Importar Factura" ─────────────────────────────────────────────────────
   // A diferencia de Proforma/Apartado/Enviar a caja (ítems del menú desplegable
@@ -5039,6 +5137,130 @@ export class PosPage {
     await this.agregarProductoRapidoSimple(`Rápido ${contexto} ${sufijo}`, PRECIO_PRODUCTO_RAPIDO);
   }
 
+  // ─── Carrito: Exoneración ───────────────────────────────────────────────────
+  // Misma sección de detalle avanzado que Descuento General — ver el
+  // comentario de L.EXONERACION_BTN_AGREGAR para la evidencia completa.
+  // mostrarDetalleAvanzadoFactura() (ya existente) debe llamarse antes: es la
+  // que revela ".advanced_invoice_detail", clase que también cubre esta fila.
+
+  /** Abre el modal "APLICAR EXONERACIÓN" (botón "Agregar" de la fila Exoneración). */
+  async abrirModalExoneracion() {
+    await this.page.locator(L.EXONERACION_BTN_AGREGAR).click();
+    await expect(
+      this.page.locator(L.DIALOG_EXONERACION),
+      'El modal "APLICAR EXONERACIÓN" no apareció'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /**
+   * Llena los 3 campos realmente visibles del modal de exoneración en este
+   * ambiente (ver el comentario de L.EXONERACION_BTN_AGREGAR: el resto nace
+   * oculto) y confirma con "Aplicar". Espera a que el modal se cierre y a que
+   * el monto de exoneración (EXONERACION_MONTO_TOTAL) refleje un valor real
+   * antes de continuar — mismo criterio que establecerPorcentajeDescuentoGeneral().
+   */
+  async aplicarExoneracion(porcentaje: string, numeroDocumento = 'EXO-QA', textoOrden = 'Orden de Exoneración QA') {
+    await this.page.locator(L.EXONERACION_NUMERO_DOCUMENTO).fill(numeroDocumento);
+    await this.page.locator(L.EXONERACION_TEXTO_ORDEN).fill(textoOrden);
+    await this.page.locator(L.EXONERACION_PORCENTAJE_INPUT).fill(porcentaje);
+    await this.page.locator(L.EXONERACION_BTN_APLICAR).click();
+
+    await expect(
+      this.page.locator(L.DIALOG_EXONERACION),
+      'El modal "APLICAR EXONERACIÓN" no se cerró tras presionar "Aplicar"'
+    ).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    await expect.poll(
+      () => this.obtenerMontoExoneracionNumerico(),
+      { timeout: TIMEOUTS.PAYMENT_MODAL, message: 'El monto de exoneración no reflejó el porcentaje ingresado' }
+    ).toBeGreaterThan(0);
+  }
+
+  /** Lee el monto de exoneración actual como número (mismo parseo que obtenerMontoDescuentoGeneralNumerico()). */
+  async obtenerMontoExoneracionNumerico(): Promise<number> {
+    const texto = await this.page.locator(L.EXONERACION_MONTO_TOTAL).textContent() ?? '$0.00';
+    return this._leerMontoDeTexto(texto);
+  }
+
+  /**
+   * Cancela la Exoneración si está aplicada, dejando el carrito/sesión sin
+   * ella para el siguiente test. Necesario porque, igual que Descuento
+   * General (ver el comentario del test 21 de pos-orden-caja.spec.ts) y la
+   * Moneda (ver asegurarMonedaBaseActiva()), la Exoneración aplicada
+   * persiste más allá de una sola venta — confirmado en vivo: una Orden de
+   * Caja creada SIN llamar nunca a aplicarExoneracion() apareció con
+   * "Exoneración (10%)" ya reflejada en sus totales, heredada de la última
+   * vez que sí se aplicó en esa misma sesión/página. El botón "Eliminar"
+   * dispara su propio SweetAlert de confirmación ("¿Está seguro de eliminar
+   * la exoneración?") — confirmado en vivo, mismo patrón que el resto de la
+   * suite, reutilizando _confirmarSweetAlertV1().
+   */
+  async cancelarExoneracionSiEstaAplicada() {
+    const boton = this.page.locator(L.EXONERACION_BTN_CANCELAR);
+    if (!(await boton.isVisible().catch(() => false))) return;
+
+    await boton.click();
+    await this._confirmarSweetAlertV1('No apareció la confirmación "¿Está seguro de eliminar la exoneración?"');
+
+    await expect.poll(
+      () => this.obtenerMontoExoneracionNumerico(),
+      { timeout: TIMEOUTS.PAYMENT_MODAL, message: 'La exoneración no quedó en $0.00 tras cancelarla' }
+    ).toBe(0);
+  }
+
+  // ─── Modal de Pago: "Tipo de pago" y "Asignar vendedor" ────────────────────
+  // Controles propios de #dialog_payment (Facturar) — ver el comentario de
+  // L.DIALOG_PAGO_CHECK_CONTADO para la evidencia de por qué son distintos de
+  // los homólogos de "Enviar a caja" (ORDEN_CAJA_CHECK_CONTADO/CREDITO,
+  // ORDEN_CAJA_VENDEDOR_CHOSEN). abrirModalDePago() (ya existente) debe
+  // llamarse antes.
+
+  /** Lee cuál "Tipo de pago" está actualmente marcado en el modal de pago, sin tocarlo. */
+  async obtenerTipoPagoEnModalPago(): Promise<TipoPagoOrdenCaja> {
+    const credito = await this.page.locator(L.DIALOG_PAGO_CHECK_CREDITO).isChecked();
+    return credito ? 'credito' : 'contado';
+  }
+
+  /**
+   * Cambia el "Tipo de pago" del modal de pago al indicado — mismo patrón de
+   * checkbox de slider CSS (_asegurarCheckboxEstado()) que el resto de la
+   * suite. Confirmado en vivo que elegir "Crédito" aquí también revela
+   * DIALOG_PAGO_FECHA_VENCIMIENTO, igual que en "Enviar a caja".
+   */
+  async cambiarTipoPagoEnModalPago(tipo: TipoPagoOrdenCaja) {
+    if (tipo === 'credito') {
+      await this._asegurarCheckboxEstado(this.page.locator(L.DIALOG_PAGO_CHECK_CREDITO), 'ck_is_payment_credit', true);
+      await expect(
+        this.page.locator(L.DIALOG_PAGO_FECHA_VENCIMIENTO),
+        '"Fecha de Vencimiento" no apareció tras seleccionar Crédito en el modal de pago'
+      ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    } else {
+      await this._asegurarCheckboxEstado(this.page.locator(L.DIALOG_PAGO_CHECK_CONTADO), 'ck_is_payment_cash', true);
+    }
+  }
+
+  /** Lee el vendedor actualmente seleccionado en el modal de pago (reutiliza el mismo lector de Chosen que "Enviar a caja"). */
+  async obtenerVendedorEnModalPago(): Promise<string> {
+    return this._obtenerTextoChosenSeleccionado(L.DIALOG_PAGO_VENDEDOR_CHOSEN);
+  }
+
+  /**
+   * Selecciona explícitamente el primer vendedor real disponible en el modal
+   * de pago — mismo criterio que seleccionarVendedorOrdenCaja() (catálogo
+   * configurable por la empresa, sin nombre estable, primera opción real).
+   * Complementa a obtenerVendedorEnModalPago() (que solo lee): necesario para
+   * escenarios que además de validar el vendedor, lo eligen de forma
+   * explícita (a diferencia del ya prellenado automáticamente al cargar una
+   * venta pendiente — ver el comentario de L.DIALOG_PAGO_VENDEDOR_CHOSEN).
+   */
+  async seleccionarVendedorEnModalPago(): Promise<string> {
+    await this._seleccionarPrimeraOpcionChosen(L.DIALOG_PAGO_VENDEDOR_CHOSEN);
+    const nombreVendedor = await this.obtenerVendedorEnModalPago();
+    expect(nombreVendedor, 'El vendedor seleccionado en el modal de pago no quedó visible').not.toBe('');
+    console.log(`[seleccionarVendedorEnModalPago] Vendedor seleccionado: "${nombreVendedor}"`);
+    return nombreVendedor;
+  }
+
   // ─── "Orden de Ruteo" ───────────────────────────────────────────────────────
 
   /** Locator del modal "Crear Orden de Ruteo". */
@@ -5717,6 +5939,219 @@ export class PosPage {
     await this.validarCarritoVacio();
   }
 
+  // ─── Apartado YA EXISTENTE: localizar, cargar y "Abonar" ───────────────────
+  // Mismo criterio "primera disponible, sin buscar" que cargarPrimeraOrdenCajaDisponible()
+  // — ver el comentario de L.AJAX_CARGAR_APARTADO para la evidencia de por qué
+  // se reutilizan L.IMPORTAR_FACTURA_FILA/L.ORDEN_CAJA_LISTA_BTN_CARGAR tal
+  // cual en vez de declarar un selector nuevo idéntico.
+
+  /**
+   * Carga el primer Apartado disponible en la pestaña ya abierta — mismo
+   * patrón exacto que cargarPrimeraOrdenCajaDisponible(), solo que espera
+   * AJAX_CARGAR_APARTADO en vez de AJAX_CARGAR_ORDEN_CAJA.
+   */
+  async cargarPrimerApartadoDisponible() {
+    const filas = this.page.locator(L.IMPORTAR_FACTURA_FILA);
+    const primeraFila = filas.first();
+    await expect(primeraFila, 'No hay ningún Apartado disponible').toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_CARGAR_APARTADO),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await primeraFila.locator(L.ORDEN_CAJA_LISTA_BTN_CARGAR).click();
+    await respuestaPromise;
+
+    await expect(
+      this.page.locator(L.IMPORTAR_FACTURA_CARRITO_FILAS).first(),
+      'No se cargó ninguna línea de producto tras seleccionar el Apartado'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /**
+   * Filtra, sobre las tarjetas de Apartado YA renderizadas, las que contienen
+   * `texto` en su contenido visible — mismo criterio y mismo motivo que
+   * filtrarOrdenesCajaPorTexto() (esta pestaña tampoco tiene ningún campo de
+   * búsqueda propio, ver el comentario de L.AJAX_CARGAR_APARTADO).
+   */
+  async filtrarApartadosPorTexto(texto: string): Promise<{ total: number; coincidencias: number }> {
+    const tarjetas = this.page.locator(L.IMPORTAR_FACTURA_FILA);
+    const total = await tarjetas.count();
+    const coincidencias = await tarjetas.filter({ hasText: texto }).count();
+    return { total, coincidencias };
+  }
+
+  /**
+   * Lee el "Apartado No: X" (número real y visible) de la primera tarjeta de
+   * la pestaña "Apartados" ya abierta. Necesario porque el id que devuelve
+   * AJAX_GUARDAR_APARTADO es un id interno de base de datos (confirmado en
+   * vivo: p. ej. "670") que NO coincide con el "Apartado No" que la propia
+   * tarjeta muestra (p. ej. "120", un consecutivo aparte) ni aparece en
+   * ningún texto — visible u oculto — de la tarjeta por el que
+   * filtrarApartadosPorTexto() pueda localizarlo. Confirmado en vivo que la
+   * pestaña ordena de más reciente a más antiguo: tras crear un Apartado y
+   * (re)visitar esta pestaña, el recién creado siempre queda de primero.
+   */
+  async obtenerNumeroApartadoTarjetaMasReciente(): Promise<string> {
+    const texto = await this.page.locator(L.IMPORTAR_FACTURA_FILA).first().innerText();
+    const coincidencia = texto.match(/Apartado No:\s*(\d+)/);
+    expect(coincidencia, `No se pudo leer "Apartado No" de la primera tarjeta: "${texto}"`).not.toBeNull();
+    return coincidencia![1];
+  }
+
+  /**
+   * Carga el primer Apartado disponible cuyo "Total" visible en la tarjeta
+   * sea razonable (< 100,000) — confirmado en vivo (2 hallazgos
+   * independientes, en dos monedas distintas: "₡6,656,677,711.25" y
+   * "$14,557,786.76") que este ambiente compartido de QA tiene Apartados ya
+   * existentes con un Total corrupto, inflado varios órdenes de magnitud
+   * por un bug real del sistema al leer un Apartado guardado en una moneda
+   * distinta a la que esté activa en ese momento (ver el comentario del
+   * describe "Apartados — Moneda contraria a la base" en
+   * pos-apartado.spec.ts). cargarPrimerApartadoDisponible() sigue siendo
+   * correcto para escenarios que no comparan totales numéricos (agregar
+   * ítems, abonar, facturar sin comparar antes/después); este método es
+   * para los que sí lo hacen, y evita heredar ese dato corrupto sin
+   * necesidad de "arreglar" el Apartado en sí (fuera del alcance de esta
+   * suite).
+   */
+  async cargarPrimerApartadoConTotalRazonable() {
+    const UMBRAL_TOTAL_SOSPECHOSO = 100_000;
+    const MAX_INTENTOS = 5;
+
+    // El Total corrupto NO es detectable leyendo la tarjeta antes de cargarla
+    // (su "Total:" visible ahí ya es incorrecto/inflado también, confirmado
+    // en vivo) — solo se confirma tras cargar el Apartado al carrito. Por
+    // eso se carga primero y se valida después, reintentando con el
+    // siguiente candidato (por posición: el Apartado corrupto sigue
+    // "pendiente" en el sistema tras vaciarCarrito(), así que seguiría
+    // apareciendo de primero si se repitiera tarjetas.first() — se avanza
+    // por índice para no reintentar siempre el mismo).
+    for (let intento = 0; intento < MAX_INTENTOS; intento++) {
+      const tarjetas = this.page.locator(L.IMPORTAR_FACTURA_FILA);
+      await expect(
+        tarjetas.nth(intento),
+        `No hay un Apartado en la posición ${intento} para reintentar`
+      ).toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+
+      const respuestaPromise = this.page.waitForResponse(
+        (res) => res.url().includes(L.AJAX_CARGAR_APARTADO),
+        { timeout: TIMEOUTS.PAYMENT_MODAL }
+      );
+      await tarjetas.nth(intento).locator(L.ORDEN_CAJA_LISTA_BTN_CARGAR).click();
+      await respuestaPromise;
+
+      await expect(
+        this.page.locator(L.IMPORTAR_FACTURA_CARRITO_FILAS).first(),
+        'No se cargó ninguna línea de producto tras seleccionar el Apartado'
+      ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+      // Confirmado en vivo: el Total corrupto no siempre está reflejado en
+      // el instante justo en que la primera línea aparece — una recalculación
+      // asíncrona posterior (disparada por el propio conflicto de moneda) lo
+      // termina de inflar unos instantes después. Se espera a que el carrito
+      // "asiente" (mismo criterio que el resto de la suite tras un cambio de
+      // carrito) antes de leer el total, para no dejar pasar un Apartado que
+      // en realidad sí está corrupto.
+      await this.page.waitForTimeout(PAUSES.VER_CARRITO);
+
+      const totalCargado = await this.obtenerTotalVentaNumerico();
+      if (totalCargado < UMBRAL_TOTAL_SOSPECHOSO) return;
+
+      console.log(`[cargarPrimerApartadoConTotalRazonable] Apartado en posición ${intento} cargó con un Total corrupto (${totalCargado}) — se descarta y se reintenta con el siguiente.`);
+      await this.vaciarCarrito();
+      const pestanaApartados = await this.localizarPestanaApartados();
+      if (pestanaApartados) await this.visitarPestanaPos(pestanaApartados);
+    }
+    throw new Error(`No se encontró ningún Apartado con un Total razonable (< ${UMBRAL_TOTAL_SOSPECHOSO}) entre los primeros ${MAX_INTENTOS} disponibles.`);
+  }
+
+  /**
+   * Abre el menú de acciones junto a "Facturar" y selecciona "Abonar" — mismo
+   * patrón de reintento que abrirCrearApartado()/abrirMenuOrdenCaja(),
+   * cambiando únicamente el ítem (L.ABONO_MENU_ITEM) y la señal de éxito
+   * esperada (L.ABONO_BTN_REALIZAR, "REALIZAR ABONO" — el modal de pago
+   * normal reutilizado una vez más, ver el comentario de L.ABONO_MENU_ITEM).
+   * Requiere un Apartado ya cargado al carrito (cargarPrimerApartadoDisponible());
+   * "Abonar" no aparece visible en el menú si el carrito está vacío o si el
+   * carrito no proviene de un Apartado ya existente (confirmado en vivo).
+   */
+  async abrirRealizarAbono() {
+    await this.cerrarModalNotificacionesSiAparece();
+    await this.cerrarAvisoConsecutivoSiAparece();
+
+    await this.page.locator('ul.mdl-menu[data-mdl-for="demo-menu-top-right"][data-upgraded*="MaterialMenu"]')
+      .waitFor({ state: 'attached', timeout: TIMEOUTS.PRODUCTS_LOAD })
+      .catch(() => {});
+
+    const item = this.page.locator(L.ABONO_MENU_ITEM);
+    const MAX_INTENTOS = 4;
+    let abierto = false;
+    for (let intento = 1; intento <= MAX_INTENTOS && !abierto; intento++) {
+      await this.cerrarModalNotificacionesSiAparece();
+      await this.cerrarAvisoConsecutivoSiAparece();
+
+      await this.page.evaluate(
+        (sel) => (document.querySelector(sel) as HTMLElement)?.click(),
+        L.ORDEN_CAJA_MENU_BTN
+      );
+      abierto = await item.waitFor({ state: 'visible', timeout: 2_000 }).then(() => true).catch(() => false);
+    }
+    expect(abierto, `La opción "Abonar" no apareció en el menú de acciones tras ${MAX_INTENTOS} intentos`).toBe(true);
+
+    await this.page.evaluate(
+      (sel) => (document.querySelector(sel) as HTMLElement)?.click(),
+      L.ABONO_MENU_ITEM
+    );
+
+    await expect(
+      this.page.locator(L.ABONO_BTN_REALIZAR),
+      'El botón "REALIZAR ABONO" no apareció tras seleccionar la opción del menú'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /**
+   * Presiona "REALIZAR ABONO", confirma el SweetAlert de advertencia
+   * ("¿Está seguro(a) de realizar este abono?" — mismo widget SweetAlert v1,
+   * reutiliza _confirmarSweetAlertV1() tal cual pese a que el botón real dice
+   * "Continuar" en vez de "Aceptar": confirmado en vivo que el selector
+   * `.sweet-alert.visible button.confirm` no depende del texto visible) y
+   * espera la respuesta real de red que efectivamente registra el abono
+   * (AJAX_APLICAR_ABONO).
+   */
+  async aplicarAbonoYObtenerRespuesta(): Promise<Response> {
+    await this.page.locator(L.ABONO_BTN_REALIZAR).click();
+
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_APLICAR_ABONO),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await this._confirmarSweetAlertV1('No apareció la confirmación "¿Está seguro(a) de realizar este abono?"');
+    return respuestaPromise;
+  }
+
+  /**
+   * Valida que "Abonar" terminó exitosamente: la respuesta real de
+   * AJAX_APLICAR_ABONO respondió OK, el modal de pago se cerró y apareció el
+   * toast de confirmación. A diferencia de validarApartadoCreado() /
+   * validarOrdenCajaCreada(), NO valida carrito vacío: confirmado en vivo que
+   * las líneas del Apartado permanecen en el carrito tras aplicar un abono
+   * (el Apartado sigue pendiente, solo se registró un pago parcial).
+   */
+  async validarAbonoAplicado(respuesta: Response) {
+    expect(respuesta.ok(), `${L.AJAX_APLICAR_ABONO} no respondió OK (status ${respuesta.status()})`).toBe(true);
+
+    await expect(
+      this.page.locator(L.ABONO_BTN_REALIZAR),
+      'El modal de pago no se cerró tras confirmar el abono'
+    ).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    await expect(
+      this.page.locator('.noty_bar', { hasText: /abono/i }),
+      'No apareció el toast de confirmación del abono'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
   // ─── "Importar Factura" ─────────────────────────────────────────────────────
 
   /**
@@ -5788,6 +6223,113 @@ export class PosPage {
     ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
   }
 
+  /**
+   * Indica si hay un cliente REAL seleccionado en el carrito ahora mismo
+   * (ver el comentario de L.CLIENTE_BTN_QUITAR) — "Cliente de contado" (el
+   * placeholder por defecto, p. ej. de una factura recién importada sin
+   * cliente propio) devuelve false.
+   */
+  async hayClienteRealSeleccionado(): Promise<boolean> {
+    return this.page.locator(L.CLIENTE_BTN_QUITAR).isVisible().catch(() => false);
+  }
+
+  /**
+   * Quita el cliente real actualmente seleccionado del carrito (ícono "X"
+   * junto a su nombre), dejándolo en "Cliente de contado". Sin SweetAlert de
+   * confirmación que esperar (confirmado en vivo, ver el comentario de
+   * L.CLIENTE_BTN_QUITAR) — solo se espera a que el propio ícono desaparezca,
+   * señal real de que el cliente ya no está seleccionado.
+   */
+  async quitarClienteSeleccionado() {
+    await this.page.locator(L.CLIENTE_BTN_QUITAR).click();
+    await expect(
+      this.page.locator(L.CLIENTE_BTN_QUITAR),
+      'El cliente no se quitó: el ícono "X" sigue visible'
+    ).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /**
+   * Importa la factura en la posición `indice` de la lista ya renderizada —
+   * mismo click+espera de AJAX que importarPrimeraFacturaDisponible() (no se
+   * reutiliza esa función tal cual porque siempre opera sobre `.first()`;
+   * ver el comentario de _cargarOrdenCajaQueCumpla() en esta misma clase para
+   * el mismo criterio ya aplicado a Órdenes de Caja: se prefiere una pequeña
+   * duplicación puntual a modificar un método público ya en uso por varios
+   * tests).
+   */
+  private async _importarFacturaEnPosicion(indice: number) {
+    const filas = this.page.locator(L.IMPORTAR_FACTURA_FILA);
+    await expect(
+      filas.nth(indice),
+      `No hay una factura en la posición ${indice} para reintentar`
+    ).toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+
+    const respuestaDetalle = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_DETALLE_IMPORTAR_FACTURA),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await filas.nth(indice).click();
+    await respuestaDetalle;
+
+    const botonImportar = this.page.locator(L.IMPORTAR_FACTURA_BTN_IMPORTAR);
+    await expect(botonImportar, 'El botón "IMPORTAR" no apareció en el modal de detalle de la factura').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    const respuestaImportar = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_IMPORTAR_FACTURA),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await botonImportar.click();
+    await respuestaImportar;
+
+    await expect(
+      this.page.locator(L.IMPORTAR_FACTURA_CARRITO_FILAS).first(),
+      'No se cargó ninguna línea de producto tras importar la factura'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /**
+   * Importa la primera factura disponible que cumpla `predicado` (evaluado
+   * DESPUÉS de importarla — no hay forma de saber si una factura trae
+   * cliente sin importarla primero, a diferencia de Órdenes de Caja/Apartado
+   * que sí exponen esos datos en la propia tarjeta). Si `predicado` no se
+   * cumple, vacía el carrito y reintenta con la siguiente factura de la
+   * lista — mismo patrón de reintento por posición ya usado en
+   * cargarPrimerApartadoConTotalRazonable().
+   */
+  private async _importarFacturaQueCumpla(predicado: () => Promise<boolean>, descripcion: string) {
+    const MAX_INTENTOS = 10;
+    for (let intento = 0; intento < MAX_INTENTOS; intento++) {
+      await this._importarFacturaEnPosicion(intento);
+
+      // Confirmado en vivo (2 corridas de la MISMA factura, una recién tras
+      // importar y otra momentos después): si el import trae un cliente real
+      // vinculado, ese vínculo puede tardar un instante más en reflejarse en
+      // el DOM que las líneas de producto (una llamada async independiente,
+      // posterior a getPosImportInvoiceItemList) — leer
+      // hayClienteRealSeleccionado() de inmediato puede dar un falso "no
+      // tiene cliente". Se espera a que el carrito "asiente" (mismo criterio
+      // ya usado en cargarPrimerApartadoConTotalRazonable()) antes de evaluar
+      // el predicado.
+      await this.page.waitForTimeout(PAUSES.VER_CARRITO);
+
+      if (await predicado()) return;
+
+      await this.vaciarCarrito();
+      await this.abrirImportarFactura();
+    }
+    throw new Error(`No se encontró ninguna factura que ${descripcion} entre las primeras ${MAX_INTENTOS} disponibles.`);
+  }
+
+  /** Importa la primera factura disponible que YA tenga un cliente real asociado. */
+  async importarPrimeraFacturaConCliente() {
+    await this._importarFacturaQueCumpla(() => this.hayClienteRealSeleccionado(), 'tenga un cliente real asociado');
+  }
+
+  /** Importa la primera factura disponible que NO tenga cliente asociado (queda en "Cliente de contado"). */
+  async importarPrimeraFacturaSinCliente() {
+    await this._importarFacturaQueCumpla(async () => !(await this.hayClienteRealSeleccionado()), 'NO tenga cliente asociado (Cliente de contado)');
+  }
+
   // ─── "Órdenes de Caja" (seleccionar una ya existente) ──────────────────────
 
   /**
@@ -5831,6 +6373,94 @@ export class PosPage {
       this.page.locator(L.IMPORTAR_FACTURA_CARRITO_FILAS).first(),
       'No se cargó ninguna línea de producto tras seleccionar la Orden de Caja'
     ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /**
+   * Carga la primera Orden de Caja, entre las ya renderizadas en la pestaña,
+   * que cumpla `predicado` — mismo click real que cargarPrimeraOrdenCajaDisponible()
+   * (ORDEN_CAJA_LISTA_BTN_CARGAR dentro de la tarjeta, AJAX_CARGAR_ORDEN_CAJA),
+   * pero sobre una tarjeta elegida por criterio en vez de siempre `.first()`.
+   *
+   * Necesario porque esta pestaña NO tiene ningún campo de búsqueda propio —
+   * confirmado en vivo volcando el DOM completo de #content_invoice_order_list
+   * (ningún input de texto/tipo search en todo el contenedor, a diferencia del
+   * buscador de Cliente o del buscador interno de Vista Expandida). Cada
+   * tarjeta sí expone en su propio HTML los datos reales con los que se creó
+   * la orden (tipo de pago, vendedor, cliente, observaciones) — confirmado en
+   * vivo — así que "buscar" una Orden de Caja con una característica
+   * concreta se resuelve filtrando esas tarjetas ya cargadas, no con un
+   * input+AJAX que este ambiente no tiene.
+   */
+  private async _cargarOrdenCajaQueCumpla(
+    predicado: (tarjeta: Locator) => Promise<boolean>,
+    descripcion: string
+  ) {
+    const tarjetas = this.page.locator(L.IMPORTAR_FACTURA_FILA);
+    // Mismo criterio que cargarPrimeraOrdenCajaDisponible(): esperar
+    // explícitamente (hasta PRODUCTS_LOAD) a que la primera tarjeta esté
+    // realmente renderizada antes de contar — un .count() inmediato tras
+    // abrirOrdenesCaja() puede correr antes de que el AJAX que llena la
+    // lista termine, devolviendo 0 en falso (confirmado en vivo: causaba
+    // "No hay ninguna Orden de Caja disponible" incluso habiendo decenas
+    // disponibles).
+    await expect(tarjetas.first(), 'No hay ninguna Orden de Caja disponible').toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+    const total = await tarjetas.count();
+
+    for (let i = 0; i < total; i++) {
+      const tarjeta = tarjetas.nth(i);
+      if (await predicado(tarjeta)) {
+        const respuestaPromise = this.page.waitForResponse(
+          (res) => res.url().includes(L.AJAX_CARGAR_ORDEN_CAJA),
+          { timeout: TIMEOUTS.PAYMENT_MODAL }
+        );
+        await tarjeta.locator(L.ORDEN_CAJA_LISTA_BTN_CARGAR).click();
+        await respuestaPromise;
+
+        await expect(
+          this.page.locator(L.IMPORTAR_FACTURA_CARRITO_FILAS).first(),
+          'No se cargó ninguna línea de producto tras seleccionar la Orden de Caja'
+        ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+        return;
+      }
+    }
+    throw new Error(`No se encontró ninguna Orden de Caja que ${descripcion} entre las ${total} tarjetas ya cargadas.`);
+  }
+
+  /** Carga la primera Orden de Caja ya renderizada que se haya creado a Crédito (ver el comentario de _cargarOrdenCajaQueCumpla()). */
+  async cargarPrimeraOrdenCajaACreditoDisponible() {
+    await this._cargarOrdenCajaQueCumpla(
+      async (tarjeta) => (await tarjeta.locator(L.ORDEN_CAJA_TARJETA_TIPO_PAGO_HIDE).textContent().catch(() => null))?.trim() === '2',
+      'se haya creado a Crédito'
+    );
+  }
+
+  /**
+   * Carga la primera Orden de Caja ya renderizada que tenga un vendedor real
+   * asignado — la propia tarjeta solo imprime la línea "Vendedor: <nombre>"
+   * cuando la orden tiene uno (confirmado en vivo), así que basta con
+   * filtrar por ese texto visible.
+   */
+  async cargarPrimeraOrdenCajaConVendedorDisponible() {
+    await this._cargarOrdenCajaQueCumpla(
+      async (tarjeta) => /Vendedor:\s*\S/.test(await tarjeta.innerText().catch(() => '')),
+      'tenga un vendedor asignado'
+    );
+  }
+
+  /**
+   * Filtra, sobre las tarjetas de Orden de Caja YA renderizadas, las que
+   * contienen `texto` en su contenido visible (cliente, número de orden,
+   * observación, etc.) — la aproximación más honesta a "buscar" disponible en
+   * esta pestaña, que no tiene ningún campo de búsqueda propio (ver el
+   * comentario de _cargarOrdenCajaQueCumpla()). Devuelve el total de tarjetas
+   * cargadas y cuántas de ellas coinciden, para que el test valide que el
+   * filtro realmente reduce el conjunto.
+   */
+  async filtrarOrdenesCajaPorTexto(texto: string): Promise<{ total: number; coincidencias: number }> {
+    const tarjetas = this.page.locator(L.IMPORTAR_FACTURA_FILA);
+    const total = await tarjetas.count();
+    const coincidencias = await tarjetas.filter({ hasText: texto }).count();
+    return { total, coincidencias };
   }
 
   /** Cuenta las filas actualmente cargadas en el carrito (`#table_buy_list tr.main_row`):
