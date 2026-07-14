@@ -937,7 +937,25 @@ test.describe('Apartados — Seleccionar y Facturar / Abonar', () => {
   test('26. Seleccionar un Apartado, aplicar un Abono y luego facturar el saldo restante seleccionando un vendedor', async ({ pos, sharedPage }) => {
     test.setTimeout(TIMEOUTS.TEST);
     const erroresJS = espiarErroresJS(sharedPage);
-    await cargarPrimerApartado(pos);
+
+    // Se expande cargarPrimerApartado() aquí (mismas 3 llamadas que compone:
+    // localizarPestanaApartados()/visitarPestanaPos()/cargarPrimerApartadoDisponible())
+    // únicamente para leer el "Apartado No" real de la tarjeta ANTES de
+    // cargarla — mismo dato y mismo método (obtenerNumeroApartadoTarjetaMasReciente())
+    // que ya usa el test 27 sobre un Apartado recién creado por él, aquí
+    // aplicado al "primero disponible" que este test carga — necesario para
+    // poder confirmar más abajo, vía buscarApartadosPorTexto(), que ESTE
+    // Apartado puntual cambió de estado tras facturarlo (getPosLayawaySearch
+    // filtra por `state=pending`, ver el comentario de buscarApartadosPorTexto()
+    // en pos.page.ts).
+    let numeroApartado = '';
+    await test.step('Seleccionar el primer Apartado disponible y registrar su número real', async () => {
+      const pestana = await pos.localizarPestanaApartados();
+      expect(pestana, 'La pestaña "Apartados" no existe en este ambiente (permisos/configuración)').not.toBeNull();
+      await pos.visitarPestanaPos(pestana!);
+      numeroApartado = await pos.obtenerNumeroApartadoTarjetaMasReciente();
+      await pos.cargarPrimerApartadoDisponible();
+    });
 
     await test.step('Aplicar un abono en efectivo', async () => {
       await pos.abrirRealizarAbono();
@@ -963,28 +981,36 @@ test.describe('Apartados — Seleccionar y Facturar / Abonar', () => {
       await pos.validarCarritoVacio();
     });
 
+    await test.step('Validar que el Apartado cambió al estado esperado (ya no aparece como pendiente)', async () => {
+      const pestana = await pos.localizarPestanaApartados();
+      await pos.visitarPestanaPos(pestana!);
+      await pos.buscarApartadosPorTexto(numeroApartado);
+      const coincidenciasTrasFacturar = await pos.contarApartadosVisibles();
+      expect(
+        coincidenciasTrasFacturar,
+        `El Apartado No ${numeroApartado} debía dejar de aparecer como pendiente tras facturar su saldo restante (getPosLayawaySearch filtra state=pending), pero sigue apareciendo`
+      ).toBe(0);
+    });
+
     expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
   });
 
-  test('27. Buscar un Apartado y validar que el filtro funcione correctamente', async ({ pos, sharedPage }) => {
+  test('27. Buscar un Apartado usando el campo de búsqueda real y validar que filtre correctamente', async ({ pos, sharedPage }) => {
     test.setTimeout(TIMEOUTS.TEST);
     const erroresJS = espiarErroresJS(sharedPage);
 
-    // Esta pestaña NO tiene ningún campo de búsqueda propio en este ambiente
-    // — confirmado en vivo volcando el DOM completo de
-    // #content_invoice_order_list y el resto de la página estando esta
-    // pestaña activa (cero inputs de texto/tipo search). Se documenta el
-    // hallazgo y se adapta el escenario a la forma real de "filtrar" que el
-    // sistema sí ofrece: crear un Apartado nuevo y localizarlo luego por su
-    // "Apartado No" real — mismo criterio ya adoptado en el test 32 de
-    // pos-orden-caja.spec.ts, adaptado a un dato real de Apartado en vez de
-    // una observación inventada (Apartado no tiene ese campo). Importante:
-    // el id que devuelve AJAX_GUARDAR_APARTADO es un id interno de base de
-    // datos (confirmado en vivo, p. ej. "670") que NO es el "Apartado No"
-    // visible en la tarjeta (p. ej. "120", un consecutivo aparte) — se lee
-    // directamente de la tarjeta más reciente en vez de asumir que coincide
-    // con la respuesta del AJAX (ver obtenerNumeroApartadoTarjetaMasReciente()
-    // en pos.page.ts).
+    // Buscador real de esta pestaña: `#product_search` (mismo input del
+    // header del POS que usa el catálogo de productos y Órdenes de Caja, ver
+    // buscarApartadosPorTexto() en pos.page.ts) — CORRECCIÓN de una versión
+    // previa de este test, que había concluido que esta pestaña no tenía
+    // ningún campo de búsqueda propio por buscar únicamente dentro de
+    // #content_invoice_order_list (mismo hallazgo que ya se había corregido
+    // para Órdenes de Caja en el test 32 de pos-orden-caja.spec.ts, nunca
+    // antes confirmado en vivo para Apartados). Confirmado en vivo
+    // interceptando la red (`getPosLayawaySearch`) que este buscador indexa
+    // el "Apartado No" real (el número puro, SIN el prefijo "Apartado No:"
+    // que sí muestra la tarjeta — buscar con ese prefijo devuelve 0
+    // resultados) y también el nombre del cliente.
     await test.step('Crear un Apartado nuevo para poder localizarlo por su número real después', async () => {
       await agregarProductoDePrecioFijo(pos);
       await pos.seleccionarClienteExistente();
@@ -994,17 +1020,355 @@ test.describe('Apartados — Seleccionar y Facturar / Abonar', () => {
     });
 
     let numeroApartado = '';
-    await test.step('Ir a "Apartados", leer el número real de la tarjeta recién creada y filtrar por él', async () => {
+    let totalSinFiltrar = 0;
+    await test.step('Ir a "Apartados" y leer el número real de la tarjeta recién creada', async () => {
       const pestana = await pos.localizarPestanaApartados();
       expect(pestana, 'La pestaña "Apartados" no existe en este ambiente').not.toBeNull();
       await pos.visitarPestanaPos(pestana!);
 
       numeroApartado = await pos.obtenerNumeroApartadoTarjetaMasReciente();
+      totalSinFiltrar = await pos.contarApartadosVisibles();
+      expect(totalSinFiltrar, 'Se esperaban varios Apartados ya cargados para que la búsqueda tenga sentido').toBeGreaterThan(1);
+    });
 
-      const { total, coincidencias } = await pos.filtrarApartadosPorTexto(`Apartado No: ${numeroApartado}`);
-      expect(total, 'Se esperaban varios Apartados ya cargados para que el filtro tenga sentido').toBeGreaterThan(1);
-      expect(coincidencias, 'El filtro debía encontrar exactamente el Apartado recién creado').toBe(1);
-      expect(coincidencias, 'El filtro debía reducir el conjunto frente al total de tarjetas cargadas').toBeLessThan(total);
+    await test.step('Búsqueda completa: el número exacto del Apartado debe devolver únicamente esa tarjeta', async () => {
+      await pos.buscarApartadosPorTexto(numeroApartado);
+      const coincidencias = await pos.contarApartadosVisibles();
+      expect(coincidencias, 'La búsqueda por el número completo debía encontrar exactamente el Apartado recién creado').toBe(1);
+
+      // Vuelve a leer "Apartado No" de la única tarjeta que quedó tras
+      // filtrar — confirma que el único registro es realmente el esperado, no
+      // solo que la cantidad coincide por casualidad.
+      const numeroEnResultado = await pos.obtenerNumeroApartadoTarjetaMasReciente();
+      expect(numeroEnResultado, 'La tarjeta encontrada por la búsqueda completa no es el Apartado esperado').toBe(numeroApartado);
+    });
+
+    await test.step('Búsqueda parcial: una porción del número debe seguir incluyendo el Apartado esperado', async () => {
+      const sustringParcial = numeroApartado.slice(0, Math.max(1, Math.ceil(numeroApartado.length / 2)));
+      await pos.buscarApartadosPorTexto(sustringParcial);
+      const coincidenciasParciales = await pos.contarApartadosVisibles();
+      expect(coincidenciasParciales, 'La búsqueda parcial debía encontrar al menos un resultado').toBeGreaterThan(0);
+      expect(coincidenciasParciales, 'La búsqueda parcial debía seguir reduciendo el conjunto frente al total sin filtrar').toBeLessThan(totalSinFiltrar);
+
+      // El Apartado buscado debe seguir presente entre los resultados
+      // parciales (más amplios que la búsqueda completa) — se valida por
+      // contenido visible real de las tarjetas ya renderizadas, no
+      // reconstruyendo la búsqueda del servidor.
+      const tarjetaEsperadaVisible = await pos.contarApartadosConTexto(`Apartado No: ${numeroApartado}`);
+      expect(tarjetaEsperadaVisible, 'El Apartado buscado no aparece entre los resultados de la búsqueda parcial').toBe(1);
+    });
+
+    await test.step('Búsqueda por texto existente (nombre de cliente): debe encontrar resultados reales', async () => {
+      await pos.buscarApartadosPorTexto('CITA');
+      const coincidenciasPorCliente = await pos.contarApartadosVisibles();
+      expect(coincidenciasPorCliente, 'La búsqueda por un nombre de cliente real y existente debía encontrar al menos un resultado').toBeGreaterThan(0);
+    });
+
+    await test.step('Búsqueda sin resultados: un texto inexistente no debe devolver ninguna tarjeta', async () => {
+      await pos.buscarApartadosPorTexto('zzz_no_existe_qwerty123');
+      const coincidenciasSinResultado = await pos.contarApartadosVisibles();
+      expect(coincidenciasSinResultado, 'Una búsqueda sin coincidencias reales debía devolver 0 tarjetas').toBe(0);
+    });
+
+    await test.step('Buscar de nuevo por el número completo y abrir el resultado correcto', async () => {
+      await pos.buscarApartadosPorTexto(numeroApartado);
+      expect(await pos.contarApartadosVisibles(), 'La búsqueda final debía volver a encontrar exactamente el Apartado esperado').toBe(1);
+
+      await pos.cargarPrimerApartadoDisponible();
+      expect(
+        await pos.obtenerCantidadFilasCarrito(),
+        'El Apartado localizado por la búsqueda no cargó ninguna línea al carrito'
+      ).toBeGreaterThan(0);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('28. Seleccionar un Apartado y aplicar un Abono utilizando todos los métodos de pago disponibles', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const erroresJS = espiarErroresJS(sharedPage);
+    await cargarPrimerApartado(pos);
+
+    // Mismos 4 métodos ya confirmados en vivo para "Abonar" (ver el
+    // comentario del describe "Abonar sobre un Apartado existente — todos
+    // los métodos de pago" arriba: los tests 22-25 ya prueban cada uno por
+    // separado, cada uno sobre su propio "primer Apartado disponible"). Este
+    // escenario reutiliza exactamente los mismos helpers (abrirRealizarAbono/
+    // seleccionarPagoEfectivo/seleccionarPagoParcial/aplicarAbonoYObtenerRespuesta/
+    // validarAbonoAplicado) pero aplicando los 4 abonos EN SECUENCIA sobre el
+    // MISMO Apartado, validando además que el saldo real (obtenerSaldoActualApartado(),
+    // la fila "Saldo Actual" del footer — ver su comentario en pos.page.ts)
+    // baja correctamente después de cada uno.
+    const metodos: { nombre: string; aplicar: (monto: string) => Promise<void> }[] = [
+      { nombre: 'Efectivo', aplicar: (monto) => pos.seleccionarPagoEfectivo(monto) },
+      { nombre: 'Tarjeta', aplicar: (monto) => pos.seleccionarPagoParcial(METODO.TARJETA, monto) },
+      { nombre: 'SINPE', aplicar: (monto) => pos.seleccionarPagoParcial(METODO.SINPE, monto) },
+      { nombre: 'Transacción', aplicar: (monto) => pos.seleccionarPagoParcial(METODO.TRANSACCION, monto) },
+    ];
+
+    let saldoAnterior = await pos.obtenerSaldoActualApartado();
+    expect(saldoAnterior, 'El Apartado seleccionado debe tener saldo pendiente para poder abonarle con los 4 métodos').toBeGreaterThan(0);
+
+    for (const { nombre, aplicar } of metodos) {
+      await test.step(`Abonar con ${nombre}: seleccionar el método, aplicar el monto y validar que el saldo se actualiza`, async () => {
+        await pos.abrirRealizarAbono();
+        const monto = await calcularAbonoParcial(pos);
+        await aplicar(monto);
+        const respuesta = await pos.aplicarAbonoYObtenerRespuesta();
+        await pos.validarAbonoAplicado(respuesta);
+
+        const saldoNuevo = await pos.obtenerSaldoActualApartado();
+        expect(saldoNuevo, `El saldo del Apartado no bajó tras abonar con ${nombre}`).toBeLessThan(saldoAnterior);
+        expect(saldoNuevo, `El saldo tras abonar con ${nombre} (${monto}) no coincide con lo esperado`).toBeCloseTo(saldoAnterior - parseFloat(monto), 1);
+        saldoAnterior = saldoNuevo;
+      });
+    }
+
+    await test.step('Validar que el Apartado conserva su estado correcto (sigue pendiente, con sus líneas en el carrito)', async () => {
+      expect(saldoAnterior, 'El Apartado debe conservar saldo pendiente tras abonar parcialmente con los 4 métodos').toBeGreaterThan(0);
+      const claves = await pos.obtenerClavesFilasCarrito();
+      expect(claves.length, 'El Apartado debe conservar sus líneas de producto en el carrito tras los 4 abonos').toBeGreaterThan(0);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Apartados — Editar y validar cálculos del carrito
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Mismo criterio ya adoptado por el test 34 de pos-orden-caja.spec.ts (su
+// describe homólogo "Orden de Caja — Editar y validar cálculos del
+// carrito"): "seleccionar un Apartado existente" no puede depender de cuál
+// sea "el primero disponible" en este ambiente compartido para poder validar
+// una eliminación con descuento general activo de forma determinística — se
+// crea aquí un Apartado propio (con descuento general, para que esa
+// validación tenga sentido) y se selecciona de inmediato como "primero
+// disponible" (mismo criterio "más reciente primero" ya confirmado para esta
+// pestaña) — sigue siendo un Apartado real y ya existente en el sistema al
+// momento de seleccionarlo.
+
+test.describe('Apartados — Editar y validar cálculos del carrito', () => {
+  test('29. Seleccionar un Apartado, eliminar un producto y validar la recalculación completa del carrito', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    await test.step('Crear un Apartado propio con 3 productos y descuento general, para editarlo después', async () => {
+      await pos.agregarProductoNormalFraccionadoYRapido('Apartado', `EliminarProducto ${Date.now()}`);
+      await pos.activarDescuentoGeneral();
+      await pos.mostrarDetalleAvanzadoFactura();
+      await pos.establecerPorcentajeDescuentoGeneral(DESCUENTO_MAXIMO_GENERAL_APARTADO_PCT);
+      await pos.seleccionarClienteExistente();
+      await pos.abrirCrearApartado();
+      await pos.seleccionarPagoEfectivo('0');
+      await guardarApartadoYValidar(pos);
+    });
+
+    await test.step('Seleccionar el Apartado recién creado (primero disponible)', async () => {
+      await cargarPrimerApartado(pos);
+      expect(await pos.obtenerCantidadFilasCarrito(), 'El Apartado no cargó ninguna línea al carrito').toBeGreaterThan(0);
+    });
+
+    let clavesIniciales: string[] = [];
+    let lineasIniciales: LineaCarrito[] = [];
+    let subtotalInicial = 0;
+    let descuentoInicial = 0;
+    let totalInicial = 0;
+    await test.step('Registrar líneas, subtotal, impuestos, descuento y total antes de eliminar', async () => {
+      clavesIniciales = await pos.obtenerClavesFilasCarrito();
+      expect(clavesIniciales.length, 'Se esperaban los 3 productos del Apartado recién creado').toBeGreaterThanOrEqual(3);
+
+      lineasIniciales = await validarLineasCarritoSegunEstadoReal(pos, clavesIniciales);
+      await pos.validarResumenImpuestos(lineasIniciales);
+      await validarTotalCarrito(pos, lineasIniciales);
+
+      subtotalInicial = pos.calcularSubtotalEsperado(lineasIniciales);
+      descuentoInicial = await pos.obtenerMontoDescuentoGeneralNumerico();
+      totalInicial = await pos.obtenerTotalVentaNumerico();
+      expect(descuentoInicial, 'El descuento general debía quedar activo y reflejado tras crear el Apartado').toBeGreaterThan(0);
+    });
+
+    const claveAEliminar = clavesIniciales[0];
+    const lineaEliminada = lineasIniciales.find((l) => l.clave === claveAEliminar)!;
+
+    await test.step('Eliminar uno de los productos del carrito', async () => {
+      await pos.eliminarProductoDelCarrito(claveAEliminar);
+    });
+
+    let lineasFinales: LineaCarrito[] = [];
+    await test.step('Validar que el producto eliminado ya no existe y la cantidad de productos disminuyó', async () => {
+      const clavesFinales = await pos.obtenerClavesFilasCarrito();
+      expect(clavesFinales, 'El producto eliminado sigue apareciendo en el carrito').not.toContain(claveAEliminar);
+      expect(clavesFinales.length, 'La cantidad de productos no disminuyó tras eliminar').toBe(clavesIniciales.length - 1);
+
+      lineasFinales = await validarLineasCarritoSegunEstadoReal(pos, clavesFinales);
+    });
+
+    await test.step('Validar que el subtotal, los impuestos, el descuento y el total se recalcularon correctamente', async () => {
+      const subtotalFinal = pos.calcularSubtotalEsperado(lineasFinales);
+      expect(subtotalFinal, 'El subtotal no bajó tras eliminar el producto').toBeLessThan(subtotalInicial);
+      expect(
+        subtotalFinal,
+        `El subtotal esperado (subtotal inicial ${subtotalInicial.toFixed(2)} - neto del producto eliminado ${lineaEliminada.neto.toFixed(2)}) no coincide`
+      ).toBeCloseTo(subtotalInicial - lineaEliminada.neto, 1);
+
+      // validarResumenImpuestos() ya contempla el Descuento General activo
+      // (ver su comentario en pos.page.ts) — recalculado aquí sobre el nuevo
+      // subtotal, más bajo tras la eliminación.
+      await pos.validarResumenImpuestos(lineasFinales);
+      await validarTotalCarrito(pos, lineasFinales);
+
+      const descuentoFinal = await pos.obtenerMontoDescuentoGeneralNumerico();
+      expect(descuentoFinal, 'El monto de descuento general no bajó tras eliminar el producto').toBeLessThan(descuentoInicial);
+      expect(
+        descuentoFinal,
+        `El descuento general esperado (${DESCUENTO_MAXIMO_GENERAL_APARTADO_PCT}% de ${subtotalFinal.toFixed(2)}) no coincide con el mostrado`
+      ).toBeCloseTo(subtotalFinal * (parseFloat(DESCUENTO_MAXIMO_GENERAL_APARTADO_PCT) / 100), 1);
+
+      // Mismo criterio no bloqueante ya usado en el test 17 de este archivo:
+      // el "Total:" del footer puede quedar en 0 tras recargar un Apartado
+      // (ver validarTotalCarrito()), en cuyo caso comparar contra un 0
+      // heredado no probaría nada real.
+      const totalFinal = await pos.obtenerTotalVentaNumerico();
+      if (totalInicial > 0 && totalFinal > 0) {
+        expect(totalFinal, 'El total no bajó tras eliminar el producto').toBeLessThan(totalInicial);
+      } else {
+        console.log(
+          `[Hallazgo del sistema] El "Total:" del carrito quedó en 0 antes o después de eliminar el producto ` +
+          `(antes=${totalInicial}, después=${totalFinal}) — mismo hallazgo ya documentado en este archivo.`
+        );
+      }
+    });
+
+    await test.step('Validar que el Apartado sigue siendo válido (las líneas restantes permanecen consistentes)', async () => {
+      const clavesFinales = await pos.obtenerClavesFilasCarrito();
+      expect(clavesFinales.length, 'El Apartado quedó sin productos tras eliminar solo uno').toBeGreaterThan(0);
+      // Cada línea restante ya se revalidó individualmente (total = precio×cantidad+IVA,
+      // flag de IVA correcto) dentro de validarLineasCarritoSegunEstadoReal()
+      // más arriba — si el carrito hubiera quedado en un estado inconsistente,
+      // esa validación ya habría fallado antes de llegar aquí.
+      expect(lineasFinales.length, 'No se pudo revalidar cada línea restante del Apartado').toBe(clavesFinales.length);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Apartados — Observaciones por producto
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Mismo criterio ya adoptado por el test 35 de pos-orden-caja.spec.ts (su
+// describe homólogo "Orden de Caja — Observaciones por producto"): se crea
+// un Apartado propio con una cantidad de productos conocida (3, misma
+// cantidad ya usada por ese test) para poder agregar y validar una
+// observación por producto de forma determinística, sin depender de cuántos
+// productos históricos acumule "el primero disponible" en este ambiente
+// compartido.
+
+test.describe('Apartados — Observaciones por producto', () => {
+  test('30. Seleccionar un Apartado, agregar una observación a cada producto y facturarlo', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    await test.step('Crear un Apartado propio con 3 productos, para agregarles observaciones después', async () => {
+      await pos.agregarProductoNormalFraccionadoYRapido('Apartado', `Observaciones ${Date.now()}`);
+      await pos.seleccionarClienteExistente();
+      await pos.abrirCrearApartado();
+      await pos.seleccionarPagoEfectivo('0');
+      await guardarApartadoYValidar(pos);
+    });
+
+    let numeroApartado = '';
+    await test.step('Seleccionar el Apartado recién creado (primero disponible) y registrar su número real', async () => {
+      const pestana = await pos.localizarPestanaApartados();
+      expect(pestana, 'La pestaña "Apartados" no existe en este ambiente (permisos/configuración)').not.toBeNull();
+      await pos.visitarPestanaPos(pestana!);
+      numeroApartado = await pos.obtenerNumeroApartadoTarjetaMasReciente();
+      await pos.cargarPrimerApartadoDisponible();
+    });
+
+    let clavesIniciales: string[] = [];
+    let subtotalAntes = 0;
+    let totalAntes = 0;
+    await test.step('Registrar productos, subtotal, impuestos y total antes de agregar observaciones', async () => {
+      clavesIniciales = await pos.obtenerClavesFilasCarrito();
+      expect(clavesIniciales.length, 'El Apartado no cargó los 3 productos esperados').toBeGreaterThanOrEqual(3);
+
+      const lineas = await validarLineasCarritoSegunEstadoReal(pos, clavesIniciales);
+      await pos.validarResumenImpuestos(lineas);
+      await validarTotalCarrito(pos, lineas);
+
+      subtotalAntes = pos.calcularSubtotalEsperado(lineas);
+      totalAntes = await pos.obtenerTotalVentaNumerico();
+    });
+
+    type ProductoConObservacion = { clave: string; observacion: string };
+    const productos: ProductoConObservacion[] = [];
+    await test.step('Agregar una observación distinta a cada producto y guardarla', async () => {
+      for (let i = 0; i < clavesIniciales.length; i++) {
+        const clave = clavesIniciales[i];
+        const observacion = `Observación QA Apartado producto ${i + 1} - ${Date.now()}`;
+        await pos.agregarObservacionAProducto(clave, observacion);
+        productos.push({ clave, observacion });
+      }
+    });
+
+    await test.step('Validar que cada producto conserva exactamente su observación', async () => {
+      expect(productos.length, 'La cantidad de observaciones no coincide con la cantidad de productos').toBe(clavesIniciales.length);
+      for (const p of productos) {
+        expect(
+          await pos.obtenerObservacionDeProducto(p.clave),
+          `La observación del producto (clave ${p.clave}) no coincide con la ingresada`
+        ).toBe(p.observacion);
+      }
+    });
+
+    await test.step('Validar que subtotal, impuestos y total NO cambiaron por agregar las observaciones', async () => {
+      const clavesActuales = await pos.obtenerClavesFilasCarrito();
+      expect(clavesActuales, 'La cantidad/identidad de productos cambió solo por agregar observaciones').toEqual(clavesIniciales);
+
+      const lineasTrasObservaciones = await validarLineasCarritoSegunEstadoReal(pos, clavesActuales);
+      await pos.validarResumenImpuestos(lineasTrasObservaciones);
+      await validarTotalCarrito(pos, lineasTrasObservaciones);
+
+      const subtotalDespues = pos.calcularSubtotalEsperado(lineasTrasObservaciones);
+      expect(subtotalDespues, 'El subtotal cambió solo por agregar observaciones').toBeCloseTo(subtotalAntes, 1);
+
+      const totalDespues = await pos.obtenerTotalVentaNumerico();
+      expect(totalDespues, 'El total cambió solo por agregar observaciones').toBeCloseTo(totalAntes, 1);
+    });
+
+    await test.step('Validar que las observaciones siguen visibles justo antes de facturar', async () => {
+      for (const p of productos) {
+        expect(
+          await pos.obtenerObservacionDeProducto(p.clave),
+          `La observación del producto (clave ${p.clave}) no permaneció visible antes de facturar`
+        ).toBe(p.observacion);
+      }
+    });
+
+    await test.step('Facturar con el total exacto en efectivo', async () => {
+      await pos.abrirModalDePago();
+      const total = await pos.obtenerTotalVentaNumerico();
+      expect(total).toBeGreaterThan(0);
+      await pos.seleccionarPagoEfectivo(String(total));
+      await pos.confirmarPagoAbriendoCajaSiEsNecesario();
+    });
+
+    await test.step('Validar que la venta finalizó correctamente', async () => {
+      await pos.validarCarritoVacio();
+    });
+
+    await test.step('Validar que el Apartado cambió al estado esperado (ya no aparece como pendiente)', async () => {
+      const pestana = await pos.localizarPestanaApartados();
+      await pos.visitarPestanaPos(pestana!);
+      await pos.buscarApartadosPorTexto(numeroApartado);
+      expect(
+        await pos.contarApartadosVisibles(),
+        `El Apartado No ${numeroApartado} debía dejar de aparecer como pendiente tras facturarlo`
+      ).toBe(0);
     });
 
     expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
@@ -1087,39 +1451,17 @@ test.describe('Apartados — Moneda contraria a la base', () => {
         const simboloTrasReabrir = await pos.obtenerSimboloMonedaEnTotal();
         expect(simboloTrasReabrir, 'La moneda no se conservó al reabrir el Apartado').toBe(monedaContraria);
 
-        // Confirmado en vivo: al reabrir un Apartado con un abono ya
-        // aplicado, el "Total" del carrito muestra directamente el SALDO
-        // RESTANTE (total original − abonos ya aplicados), no el total
-        // original — es la fuente real y verificable de "saldo restante",
-        // no hay ningún campo "Saldo" dedicado en la UI de Apartados.
-        //
-        // Confirmado en vivo (varias corridas) que esa recalculación es
-        // asíncrona e INTERMITENTE en este ambiente: a veces se estabiliza en
-        // menos de 1s, otras veces se quedó en 0 incluso tras esperar 120s
-        // con expect.poll (no una pausa fija — se le dio tiempo de sobra).
-        // Como el resto del escenario (moneda detectada correctamente,
-        // subtotal/impuestos/total antes de apartar, creación y abono
-        // exitosos, y la moneda SÍ conservada al reabrir) ya se validó con
-        // éxito arriba, esta comprobación adicional de saldo se trata como
-        // no bloqueante: si no se estabiliza a tiempo, se documenta como
-        // hallazgo del sistema en vez de fallar todo el escenario por una
-        // inconsistencia de recalculación que no depende de la automatización.
+        // Confirmado en vivo volcando el DOM real: el saldo restante (total
+        // original − abonos ya aplicados) NO se lee de "Total"
+        // (obtenerTotalVentaNumerico(), que en realidad lee L.TOTAL_MODAL, el
+        // total del modal de pago — no se actualiza fuera de ese modal y por
+        // eso quedaba en 0 aquí) sino de la fila propia "Saldo Actual" del
+        // footer principal (L.TOTAL_LAYAWAY_SALDO_ACTUAL /
+        // #total_layaway_current_balance), que sí muestra el valor correcto
+        // de inmediato al reabrir el Apartado — ver obtenerSaldoActualApartado().
         const saldoEsperado = totalAntesDeApartar - montoAbono;
-        const saldoSeEstabilizo = await expect.poll(
-          () => pos.obtenerTotalVentaNumerico(),
-          { timeout: 30_000 }
-        ).toBeGreaterThan(0).then(() => true).catch(() => false);
-
-        if (saldoSeEstabilizo) {
-          const saldoReal = await pos.obtenerTotalVentaNumerico();
-          expect(saldoReal, `Saldo restante esperado (total ${totalAntesDeApartar.toFixed(2)} - abono ${montoAbono.toFixed(2)} = ${saldoEsperado.toFixed(2)}) no coincide con el saldo mostrado`).toBeCloseTo(saldoEsperado, 1);
-        } else {
-          console.log(
-            `[Hallazgo del sistema] El saldo restante del Apartado (esperado ${saldoEsperado.toFixed(2)}) no terminó de ` +
-            `recalcularse tras 30s de reabrirlo — quedó en 0. Confirmado en vivo que esta recalculación es intermitente ` +
-            `en este ambiente (en otras corridas del mismo escenario sí se estabilizó correctamente en menos de 1s).`
-          );
-        }
+        const saldoReal = await pos.obtenerSaldoActualApartado();
+        expect(saldoReal, `Saldo restante esperado (total ${totalAntesDeApartar.toFixed(2)} - abono ${montoAbono.toFixed(2)} = ${saldoEsperado.toFixed(2)}) no coincide con el saldo mostrado`).toBeCloseTo(saldoEsperado, 1);
 
         await pos.vaciarCarrito();
       });

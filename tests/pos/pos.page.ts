@@ -859,6 +859,11 @@ const L = {
   AJAX_CARGAR_APARTADO: 'getPosLayawayOrderItemList',
   APARTADO_TARJETA_NUMERO: '[id^="pos_layaway_invoice_client_number_hide_"]',
 
+  // Búsqueda real de Apartados vía el input de header #product_search (mismo
+  // patrón que AJAX_BUSCAR_ORDEN_CAJA/getPosCashSearch) — confirmado en vivo
+  // interceptando la red, ver el comentario de buscarApartadosPorTexto().
+  AJAX_BUSCAR_APARTADO: 'getPosLayawaySearch',
+
   // "Abonar" (Realizar Abono sobre un Apartado YA CARGADO al carrito) — mismo
   // menú desplegable junto a "Facturar" que "Generar Apartado"/"Enviar a
   // caja" (L.ORDEN_CAJA_MENU_BTN), confirmado en vivo: su <li> no tiene id
@@ -873,6 +878,18 @@ const L = {
   ABONO_MENU_ITEM:    'li.btn_layaway_payment',
   ABONO_BTN_REALIZAR: '#make_layaway_payment',
   AJAX_APLICAR_ABONO: 'addPosLayawayPayment',
+
+  // "Saldo Actual": fila propia del footer principal del POS (misma fila
+  // .total_div que Subtotal/IVA/Total) que SOLO aparece cuando hay un
+  // Apartado con abono ya cargado en el carrito — confirmado en vivo volcando
+  // el DOM real tras reabrir un Apartado. Es un elemento DISTINTO de
+  // L.TOTAL_MODAL (`total_sale_txt`, el total del modal de pago, que no
+  // refleja el saldo restante fuera de ese modal) y de L.TOTAL_VISIBLE_POS
+  // (`#total`, el total bruto del carrito, no el saldo tras abonos). Se
+  // confirmó en vivo que muestra el valor correcto de inmediato al reabrir el
+  // Apartado (p. ej. "₡480,103.94"), sin la intermitencia que sí afecta a
+  // L.TOTAL_MODAL en este mismo escenario.
+  TOTAL_LAYAWAY_SALDO_ACTUAL: '#total_layaway_current_balance',
 
   // ─── "Importar Factura" ─────────────────────────────────────────────────────
   // A diferencia de Proforma/Apartado/Enviar a caja (ítems del menú desplegable
@@ -908,6 +925,25 @@ const L = {
   IMPORTAR_FACTURA_BTN_AGREGAR_ITEM: '#add_btn_items',
   IMPORTAR_FACTURA_BTN_VOLVER:       '#hide_btn_items',
   IMPORTAR_FACTURA_CARRITO_FILAS:   '#table_buy_list tr.main_row',
+
+  // Búsqueda real de "Importar Factura" vía el input de header #product_search
+  // (mismo patrón ya confirmado para Apartados/Órdenes de Caja) — confirmado
+  // en vivo interceptando la red: mientras esta pestaña está activa dispara
+  // `getPosSaleReceipList` con `search=<texto>` y `import_invoice_state`
+  // (mismo parámetro que usan los botones de filtro de estado, ver
+  // IMPORTAR_FACTURA_ESTADO_BOTON).
+  AJAX_BUSCAR_IMPORTAR_FACTURA: 'getPosSaleReceipList',
+
+  // Botones de filtro de estado del documento electrónico, confirmados en
+  // vivo (volcando el DOM real de la pestaña): 5 en total, cada uno dispara
+  // AJAX_BUSCAR_IMPORTAR_FACTURA con un `import_invoice_state` distinto.
+  IMPORTAR_FACTURA_ESTADO_BOTON: {
+    todos:      '#btn_import_invoice_state_all',
+    aceptado:   '#btn_import_invoice_state_accepted',
+    rechazado:  '#btn_import_invoice_state_rejected',
+    reenviar:   '#btn_import_invoice_state_resend',
+    noAplica:   '#btn_import_invoice_state_not_apply',
+  } as const,
 
   // ─── Pestaña "Órdenes de caja" (seleccionar una Orden de Caja ya existente,
   // creada previamente con "Enviar a caja") ──────────────────────────────────
@@ -3082,6 +3118,18 @@ export class PosPage {
     return this._leerMontoDeTexto(texto);
   }
 
+  /**
+   * Lee el "Saldo Actual" real de un Apartado ya reabierto (L.TOTAL_LAYAWAY_SALDO_ACTUAL),
+   * la fila del footer principal que sí refleja el total original menos los
+   * abonos ya aplicados — a diferencia de obtenerTotalVentaNumerico(), que lee
+   * el total del modal de pago (L.TOTAL_MODAL) y no se actualiza fuera de ese
+   * modal.
+   */
+  async obtenerSaldoActualApartado(): Promise<number> {
+    const texto = await this.page.locator(L.TOTAL_LAYAWAY_SALDO_ACTUAL).textContent();
+    return this._leerMontoDeTexto(texto ?? '$0.00');
+  }
+
   /** Pago mixto: activa tarjeta manteniendo efectivo, luego llena ambos montos. */
   async seleccionarPagoMixto(montoTarjeta: string, montoEfectivo: string) {
     await this.page.evaluate(
@@ -3868,17 +3916,62 @@ export class PosPage {
   }
 
   /**
-   * Valida que la suma del IVA de todas las líneas dadas coincida
-   * exactamente con el campo "IVA" del resumen de totales del POS
-   * (`obtenerTotalIvaGeneral()`, el mismo footer, no el modal de pago).
+   * Valida que la suma del IVA de todas las líneas dadas coincida con el
+   * campo "IVA" del resumen de totales del POS (`obtenerTotalIvaGeneral()`,
+   * el mismo footer, no el modal de pago).
+   *
+   * Ajustada por el Descuento General, cuando está REALMENTE activo —
+   * confirmado en vivo (carritos aislados, sin contaminación entre casos)
+   * que `#total_by_product_<clave>` / `#total_by_product_with_iva_<clave>`
+   * (la fuente de `lineas[].iva`, ver obtenerDatosLineaCarrito()) NUNCA
+   * reflejan el Descuento General: quedan idénticos con o sin él activo. El
+   * footer de IVA sí lo aplica, proporcionalmente sobre el subtotal bruto —
+   * confirmado que `ΣIVA_bruto × (1 − montoDescuento / Σneto_bruto)`
+   * reproduce el valor del footer con exactitud de centavos cuando el
+   * Descuento General (checkbox `apply_general_discount`,
+   * `estaDescuentoGeneralActivo()`) está activo.
+   *
+   * El ajuste se aplica SOLO si ese checkbox está activo — no basta con que
+   * `obtenerMontoDescuentoGeneralNumerico()` (`#total_discount`) sea mayor a
+   * 0: confirmado en vivo que ese mismo campo también acumula el monto de
+   * cualquier Descuento Individual ya aplicado a alguna línea, aunque el
+   * Descuento General nunca se haya activado. A diferencia del General, el
+   * Descuento Individual SÍ modifica directamente `#total_by_product_<clave>`
+   * de la línea afectada, así que `lineas[].iva` ya lo refleja de origen —
+   * aplicar el ajuste también en ese caso resta el descuento dos veces
+   * (confirmado en vivo: rompía exactamente esta combinación, con
+   * `#total_discount` > 0 pero el checkbox General apagado).
+   *
+   * La Exoneración no participa de este ajuste: confirmado en vivo que el
+   * footer de IVA queda igual con o sin ella activa (se resta en otro campo
+   * del resumen, no en `#total_tax`).
+   *
+   * Limitación conocida, sin evidencia en vivo que la resuelva aún: si el
+   * Descuento General Y un Descuento Individual están activos A LA VEZ,
+   * `#total_discount` mezcla ambos montos sin distinguirlos, así que el
+   * ratio calculado aquí sobreestimaría el ajuste (restaría también la
+   * porción ya reflejada en la línea vía el individual). Ningún escenario
+   * de la suite ejercita hoy esa combinación exacta contra este método.
    */
   async validarResumenImpuestos(lineas: LineaCarrito[]) {
-    const totalEsperado = this.calcularTotalImpuestosEsperado(lineas);
+    const totalBruto = this.calcularTotalImpuestosEsperado(lineas);
+    const descuentoGeneralActivo = await this.estaDescuentoGeneralActivo();
+
+    let totalEsperado = totalBruto;
+    let detalleAjuste = '';
+    if (descuentoGeneralActivo) {
+      const subtotalBruto = this.calcularSubtotalEsperado(lineas);
+      const descuentoGeneral = await this.obtenerMontoDescuentoGeneralNumerico();
+      const ratioDescuentoGeneral = subtotalBruto > 0 ? 1 - (descuentoGeneral / subtotalBruto) : 1;
+      totalEsperado = totalBruto * ratioDescuentoGeneral;
+      detalleAjuste = `, ajustado por Descuento General activo (${descuentoGeneral.toFixed(2)} sobre subtotal ${subtotalBruto.toFixed(2)}, ratio ${ratioDescuentoGeneral.toFixed(4)}) = ${totalEsperado.toFixed(2)}`;
+    }
+
     const totalMostrado = await this.obtenerTotalIvaGeneral();
 
     expect(
       totalMostrado,
-      `Suma de IVA por producto (${lineas.map(l => `"${l.nombre}"=${l.iva.toFixed(2)}`).join(' + ')} = ${totalEsperado.toFixed(2)}) ` +
+      `Suma de IVA por producto (${lineas.map(l => `"${l.nombre}"=${l.iva.toFixed(2)}`).join(' + ')} = ${totalBruto.toFixed(2)}${detalleAjuste}) ` +
       `no coincide con el IVA del resumen de totales (${totalMostrado.toFixed(2)})`
     ).toBeCloseTo(totalEsperado, 1);
   }
@@ -6260,8 +6353,20 @@ export class PosPage {
    * red que efectivamente lo crea (AJAX_GUARDAR_APARTADO) — mismo patrón ya
    * usado en enviarOrdenCaja()/guardarProformaYObtenerRespuesta(): la espera
    * del AJAX se arma ANTES de confirmar el SweetAlert, no después.
+   *
+   * El sistema abre además una ventana de impresión del Apartado tras crearlo
+   * (confirmado en vivo) que este método no cerraba — quedaba abierta de
+   * fondo mientras el resto del escenario seguía interactuando con la página
+   * original. Mismo patrón ya usado en confirmarCerrarCaja(): el listener de
+   * "popup" se arma ANTES del click (con `.catch(() => null)`, nunca
+   * bloqueante, porque no todos los ambientes la muestran) y se cierra con
+   * mostrarYCerrarVentanaImpresion() recién después de confirmar el éxito
+   * real vía AJAX_GUARDAR_APARTADO, para no competir con la propia creación
+   * del Apartado.
    */
   async guardarApartadoYObtenerRespuesta(): Promise<Response> {
+    const popupPromise = this.page.waitForEvent('popup', { timeout: TIMEOUTS.PRINT_POPUP }).catch(() => null);
+
     await this.botonGenerarApartado.click();
 
     const respuestaPromise = this.page.waitForResponse(
@@ -6269,7 +6374,14 @@ export class PosPage {
       { timeout: TIMEOUTS.PAYMENT_MODAL }
     );
     await this._confirmarSweetAlertV1('No apareció la confirmación "¿Está seguro de realizar este Apartado?"');
-    return respuestaPromise;
+    const respuesta = await respuestaPromise;
+
+    const printPage = await popupPromise;
+    if (printPage) {
+      await this.mostrarYCerrarVentanaImpresion(printPage);
+    }
+
+    return respuesta;
   }
 
   /**
@@ -6324,19 +6436,60 @@ export class PosPage {
   }
 
   /**
-   * Filtra, sobre las tarjetas de Apartado YA renderizadas, las que contienen
-   * `texto` en su contenido visible (ver el comentario de
-   * L.AJAX_CARGAR_APARTADO). Nota: la pestaña de Órdenes de Caja sí tiene un
-   * campo de búsqueda real (`#product_search`, ver buscarOrdenesCajaPorTexto())
-   * — no se ha confirmado en vivo si esta pestaña de Apartados también lo
-   * comparte, así que este filtro por contenido visible se mantiene tal cual
-   * hasta investigarlo.
+   * Busca Apartados usando el campo de búsqueda REAL de esta pestaña:
+   * `#product_search` (L.PRODUCTO_BUSCADOR_GRID), el mismo input reutilizado
+   * por buscarProductoEnGrid()/buscarOrdenesCajaPorTexto() — persiste en el
+   * header del POS sin importar el tab activo. CORRECCIÓN: un comentario
+   * previo en este archivo (igual que el que existía para Órdenes de Caja
+   * antes de buscarOrdenesCajaPorTexto()) afirmaba que esta pestaña no tenía
+   * campo de búsqueda propio; confirmado en vivo interceptando la red que sí
+   * lo tiene — mientras "Apartados" está activa dispara su propio AJAX real
+   * (`getPosLayawaySearch`, L.AJAX_BUSCAR_APARTADO, con `search=<texto>` y
+   * `state=pending`) que reemplaza el listado de tarjetas por el resultado
+   * filtrado en el servidor. Confirmado en vivo que este buscador indexa el
+   * "Apartado No" (el número real, sin el prefijo "Apartado No:" que sí
+   * muestra la tarjeta — buscar con ese prefijo devuelve 0 resultados) y el
+   * nombre del cliente.
    */
-  async filtrarApartadosPorTexto(texto: string): Promise<{ total: number; coincidencias: number }> {
-    const tarjetas = this.page.locator(L.IMPORTAR_FACTURA_FILA);
-    const total = await tarjetas.count();
-    const coincidencias = await tarjetas.filter({ hasText: texto }).count();
-    return { total, coincidencias };
+  async buscarApartadosPorTexto(texto: string) {
+    const totalAntes = await this.contarApartadosVisibles();
+
+    // Mismo cuidado que buscarOrdenesCajaPorTexto(): la carga inicial de la
+    // pestaña ya dispara su propia llamada a este mismo endpoint (con
+    // `search=` vacío), cuya respuesta puede seguir en vuelo y resolver
+    // después de que este método ya empezó a esperar la próxima — se
+    // distingue por el contenido real de la petición, no solo por la URL.
+    const respuestaPromise = this.page.waitForResponse((res) => {
+      if (!res.url().includes(L.AJAX_BUSCAR_APARTADO)) return false;
+      const post = decodeURIComponent((res.request().postData() ?? '').replace(/\+/g, ' '));
+      return post.includes(texto);
+    }, { timeout: TIMEOUTS.PAYMENT_MODAL });
+    await this.buscarProductoEnGrid(texto);
+    await respuestaPromise;
+
+    // La respuesta ya resuelta no garantiza que el DOM ya haya reemplazado
+    // las tarjetas con el resultado filtrado — se espera la condición real:
+    // que el total de tarjetas cambie del valor previo a buscar.
+    await expect.poll(
+      () => this.contarApartadosVisibles(),
+      { timeout: TIMEOUTS.PAYMENT_MODAL, message: 'El resultado de la búsqueda no terminó de renderizarse' }
+    ).not.toBe(totalAntes);
+  }
+
+  /** Cuenta las tarjetas de Apartado actualmente renderizadas en la pestaña — útil antes/después de buscarApartadosPorTexto() para validar que la búsqueda realmente redujo el conjunto. */
+  async contarApartadosVisibles(): Promise<number> {
+    return this.page.locator(L.IMPORTAR_FACTURA_FILA).count();
+  }
+
+  /**
+   * Cuenta, sobre las tarjetas de Apartado YA renderizadas (p. ej. tras un
+   * buscarApartadosPorTexto() con un resultado más amplio que 1), cuántas
+   * contienen `texto` en su contenido visible — util para confirmar que un
+   * Apartado puntual sigue presente dentro de un resultado de búsqueda
+   * parcial más amplio, sin volver a golpear el servidor.
+   */
+  async contarApartadosConTexto(texto: string): Promise<number> {
+    return this.page.locator(L.IMPORTAR_FACTURA_FILA).filter({ hasText: texto }).count();
   }
 
   /**
@@ -6478,6 +6631,16 @@ export class PosPage {
    * (AJAX_APLICAR_ABONO).
    */
   async aplicarAbonoYObtenerRespuesta(): Promise<Response> {
+    // El sistema abre una ventana de impresión del comprobante de abono tras
+    // aplicarlo (confirmado en vivo: es la causa real de que el modal
+    // "REALIZAR ABONO" pareciera no cerrarse — quedaba abierta de fondo,
+    // mismo hallazgo ya corregido en guardarApartadoYObtenerRespuesta()). El
+    // listener de "popup" se arma ANTES del click (con `.catch(() => null)`,
+    // nunca bloqueante, porque no todos los ambientes la muestran) y se
+    // cierra con mostrarYCerrarVentanaImpresion() recién después de
+    // confirmar el éxito real vía AJAX_APLICAR_ABONO.
+    const popupPromise = this.page.waitForEvent('popup', { timeout: TIMEOUTS.PRINT_POPUP }).catch(() => null);
+
     await this.page.locator(L.ABONO_BTN_REALIZAR).click();
 
     const respuestaPromise = this.page.waitForResponse(
@@ -6485,16 +6648,38 @@ export class PosPage {
       { timeout: TIMEOUTS.PAYMENT_MODAL }
     );
     await this._confirmarSweetAlertV1('No apareció la confirmación "¿Está seguro(a) de realizar este abono?"');
-    return respuestaPromise;
+    const respuesta = await respuestaPromise;
+
+    // El toast de confirmación es transitorio (se autodesvanece a los pocos
+    // segundos) — confirmado en vivo que revisarlo DESPUÉS de cerrar la
+    // ventana de impresión (mostrarYCerrarVentanaImpresion() por sí sola ya
+    // toma ~6s de esperas propias) puede perderlo por completo, aunque el
+    // abono se haya aplicado correctamente. Se verifica aquí, apenas llega
+    // la respuesta real, antes de gastar tiempo cerrando el popup — la
+    // misma validación que antes vivía en validarAbonoAplicado(), reubicada
+    // por la carrera de tiempo real que introdujo el manejo del popup.
+    await expect(
+      this.page.locator('.noty_bar', { hasText: /abono/i }),
+      'No apareció el toast de confirmación del abono'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    const printPage = await popupPromise;
+    if (printPage) {
+      await this.mostrarYCerrarVentanaImpresion(printPage);
+    }
+
+    return respuesta;
   }
 
   /**
    * Valida que "Abonar" terminó exitosamente: la respuesta real de
-   * AJAX_APLICAR_ABONO respondió OK, el modal de pago se cerró y apareció el
-   * toast de confirmación. A diferencia de validarApartadoCreado() /
-   * validarOrdenCajaCreada(), NO valida carrito vacío: confirmado en vivo que
-   * las líneas del Apartado permanecen en el carrito tras aplicar un abono
-   * (el Apartado sigue pendiente, solo se registró un pago parcial).
+   * AJAX_APLICAR_ABONO respondió OK y el modal de pago se cerró (el toast de
+   * confirmación ya se verificó en aplicarAbonoYObtenerRespuesta(), antes de
+   * cerrar la ventana de impresión — ver su comentario). A diferencia de
+   * validarApartadoCreado()/validarOrdenCajaCreada(), NO valida carrito
+   * vacío: confirmado en vivo que las líneas del Apartado permanecen en el
+   * carrito tras aplicar un abono (el Apartado sigue pendiente, solo se
+   * registró un pago parcial).
    */
   async validarAbonoAplicado(respuesta: Response) {
     expect(respuesta.ok(), `${L.AJAX_APLICAR_ABONO} no respondió OK (status ${respuesta.status()})`).toBe(true);
@@ -6503,11 +6688,6 @@ export class PosPage {
       this.page.locator(L.ABONO_BTN_REALIZAR),
       'El modal de pago no se cerró tras confirmar el abono'
     ).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
-
-    await expect(
-      this.page.locator('.noty_bar', { hasText: /abono/i }),
-      'No apareció el toast de confirmación del abono'
-    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
   }
 
   // ─── "Importar Factura" ─────────────────────────────────────────────────────
@@ -6686,6 +6866,104 @@ export class PosPage {
   /** Importa la primera factura disponible que NO tenga cliente asociado (queda en "Cliente de contado"). */
   async importarPrimeraFacturaSinCliente() {
     await this._importarFacturaQueCumpla(async () => !(await this.hayClienteRealSeleccionado()), 'NO tenga cliente asociado (Cliente de contado)');
+  }
+
+  /** Cuenta las tarjetas de factura actualmente renderizadas en la pestaña "Importar factura". */
+  async contarFacturasVisibles(): Promise<number> {
+    return this.page.locator(L.IMPORTAR_FACTURA_FILA).count();
+  }
+
+  /**
+   * Lee el "No." (número real y visible) de la primera tarjeta de la pestaña
+   * "Importar factura" ya abierta — mismo criterio que
+   * obtenerNumeroApartadoTarjetaMasReciente(). Confirmado en vivo (volcando
+   * el texto real de la tarjeta, formato "No. 811 - Factura Electrónica -
+   * Crédito - 14/07/2026") que es el único campo que el buscador real
+   * (buscarFacturasPorTexto()) indexa de forma discriminante — a diferencia
+   * del nombre de cliente, compartido por la mayoría de las facturas de este
+   * ambiente QA y por lo tanto inútil para localizar una factura puntual.
+   */
+  async obtenerNumeroFacturaTarjetaMasReciente(): Promise<string> {
+    const texto = await this.page.locator(L.IMPORTAR_FACTURA_FILA).first().innerText();
+    const coincidencia = texto.match(/No\.\s*(\d+)/);
+    expect(coincidencia, `No se pudo leer "No." de la primera tarjeta: "${texto}"`).not.toBeNull();
+    return coincidencia![1];
+  }
+
+  /**
+   * Busca facturas usando el campo de búsqueda REAL de esta pestaña:
+   * `#product_search` (L.PRODUCTO_BUSCADOR_GRID), el mismo input reutilizado
+   * por buscarProductoEnGrid()/buscarOrdenesCajaPorTexto()/buscarApartadosPorTexto()
+   * — persiste en el header del POS sin importar el tab activo. Confirmado en
+   * vivo interceptando la red que, con "Importar factura" activa, dispara su
+   * propio AJAX real (`getPosSaleReceipList`, L.AJAX_BUSCAR_IMPORTAR_FACTURA,
+   * con `search=<texto>` e `import_invoice_state` — el mismo parámetro que
+   * usan los botones de filtro de estado) que reemplaza el listado de
+   * tarjetas por el resultado filtrado en el servidor.
+   */
+  async buscarFacturasPorTexto(texto: string) {
+    const totalAntes = await this.contarFacturasVisibles();
+
+    const respuestaPromise = this.page.waitForResponse((res) => {
+      if (!res.url().includes(L.AJAX_BUSCAR_IMPORTAR_FACTURA)) return false;
+      const post = decodeURIComponent((res.request().postData() ?? '').replace(/\+/g, ' '));
+      return post.includes(texto);
+    }, { timeout: TIMEOUTS.PAYMENT_MODAL });
+    await this.buscarProductoEnGrid(texto);
+    await respuestaPromise;
+
+    await expect.poll(
+      () => this.contarFacturasVisibles(),
+      { timeout: TIMEOUTS.PAYMENT_MODAL, message: 'El resultado de la búsqueda no terminó de renderizarse' }
+    ).not.toBe(totalAntes);
+  }
+
+  /**
+   * Cuenta, sobre las tarjetas de factura YA renderizadas (p. ej. tras un
+   * buscarFacturasPorTexto() con un resultado más amplio que 1), cuántas
+   * contienen `texto` en su contenido visible — mismo criterio ya usado en
+   * contarApartadosConTexto(), útil para confirmar que una factura puntual
+   * sigue presente dentro de un resultado de búsqueda parcial más amplio.
+   */
+  async contarFacturasConTexto(texto: string): Promise<number> {
+    return this.page.locator(L.IMPORTAR_FACTURA_FILA).filter({ hasText: texto }).count();
+  }
+
+  /**
+   * Presiona uno de los botones de filtro de estado del documento electrónico
+   * (L.IMPORTAR_FACTURA_ESTADO_BOTON: "Todos"/"Aceptado"/"Rechazadas"/
+   * "Reenviar"/"No aplica") y espera la respuesta real de
+   * AJAX_BUSCAR_IMPORTAR_FACTURA que efectivamente re-renderiza el listado —
+   * confirmado en vivo que cada botón dispara ese mismo endpoint con un
+   * `import_invoice_state` distinto (all/accepted/rejected/resend/not_apply).
+   * Devuelve la cantidad de tarjetas que quedaron visibles tras filtrar — en
+   * este ambiente compartido, "Aceptado"/"Rechazadas" pueden legítimamente
+   * devolver 0 (ningún documento en ese estado real todavía), así que quien
+   * llama no debe asumir un conteo fijo.
+   */
+  async filtrarFacturasPorEstado(estado: keyof typeof L.IMPORTAR_FACTURA_ESTADO_BOTON): Promise<number> {
+    const totalAntes = await this.contarFacturasVisibles();
+
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_BUSCAR_IMPORTAR_FACTURA),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await this.page.locator(L.IMPORTAR_FACTURA_ESTADO_BOTON[estado]).click();
+    await respuestaPromise;
+
+    // La respuesta ya resuelta no garantiza que el DOM ya haya reemplazado
+    // las tarjetas con el resultado filtrado — mismo cuidado que
+    // buscarFacturasPorTexto()/buscarApartadosPorTexto(): se espera la
+    // condición real (el conteo cambia respecto al filtro anterior), nunca
+    // una pausa fija. Si el filtro elegido resulta en el mismo conteo que el
+    // anterior (p. ej. dos estados con igual cantidad real de documentos),
+    // el propio conteo ya estable se devuelve sin bloquear: la respuesta de
+    // red ya confirmó que el filtro correcto se aplicó.
+    await expect.poll(
+      () => this.contarFacturasVisibles(),
+      { timeout: 5_000 }
+    ).not.toBe(totalAntes).catch(() => {});
+    return this.contarFacturasVisibles();
   }
 
   // ─── "Órdenes de Caja" (seleccionar una ya existente) ──────────────────────
