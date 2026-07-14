@@ -719,6 +719,49 @@ const L = {
   // impresión que esperar ni cerrar aquí.
   AJAX_GUARDAR_RUTEO: 'sendPosRoutingOrder',
 
+  // ─── Listado de Órdenes de Ruteo YA CREADAS (pestaña superior "Ruteo",
+  // #btn_routing_option de PESTANAS_POS_A_RECORRER — NO confundir con
+  // RUTEO_MENU_ITEM/DIALOG_RUTEO de arriba, que crean una nueva) ─────────────
+  // Confirmado en vivo volcando el DOM real de esta pestaña con órdenes reales
+  // ya creadas: cada orden es una tarjeta '.routing_order_card' con id
+  // `brand_<id>` (el MISMO <id> numérico que devuelve
+  // guardarOrdenRuteoYObtenerRespuesta()/validarOrdenRuteoCreada()), con un
+  // menú de acciones (ícono "more_vert", dropdown Bootstrap) cuyas opciones
+  // reales son "Ver órden" (show_routing_order_detail(id)), "Editar órden"
+  // (show_create_routing_order_modal(id) — reutiliza EL MISMO modal/ids que
+  // crear una orden nueva: RUTEO_RUTA_CHOSEN/RUTEO_REPARTIDOR_CHOSEN/
+  // RUTEO_DIRECCION_CHOSEN/RUTEO_OBSERVACION/RUTEO_BTN_ENVIAR, confirmado en
+  // vivo con la MISMA petición AJAX_GUARDAR_RUTEO al guardar — pero SIN
+  // bloque de cliente/vendedor/productos: esos no son editables desde esta
+  // pantalla en este ambiente) y "Marcar como <ESTADO>"
+  // (change_routing_order_status(id, código)). Códigos de estado confirmados
+  // en vivo alternando el estado real de una orden: 1=Pendiente, 2=En camino,
+  // 3=Entregado — el menú SOLO ofrece los códigos DISTINTOS al estado actual
+  // (una orden recién creada, ya Pendiente, nunca se ofrece "Marcar como
+  // PENDIENTE" a sí misma; ese ítem solo aparece una vez que ya está en otro
+  // estado). Sin SweetAlert de confirmación para este cambio de estado
+  // (confirmado en vivo: la petición se dispara directo al click).
+  RUTEO_LISTA_TARJETA_PREFIJO: 'brand_',
+  RUTEO_LISTA_BTN_MENU:        'button[data-toggle="dropdown"]',
+  AJAX_CAMBIO_ESTADO_RUTEO:    'changeRoutingOrderDeliveredStatus',
+
+  // Modal "Ver Orden" (#dialog_view_routing_order_detail) — confirmado en
+  // vivo, de solo lectura y distinto del de creación/edición. No incluye un
+  // campo de "Vendedor" separado (solo "Repartidor") ni etiqueta explícita de
+  // moneda/estado/fecha: esos solo se reflejan en la propia tarjeta del
+  // listado (fecha) o se infieren del símbolo en los montos (moneda).
+  DIALOG_VER_ORDEN_RUTEO:      '#dialog_view_routing_order_detail',
+  VER_RUTEO_NUMERO:            '#dvrod_lbl_order_number',
+  VER_RUTEO_REPARTIDOR:        '#dvrod_lbl_delivery_person_name',
+  VER_RUTEO_CLIENTE_NOMBRE:    '#dvrod_lbl_client_name',
+  VER_RUTEO_CLIENTE_DIRECCION: '#dvrod_lbl_client_address',
+  VER_RUTEO_OBSERVACION:       '#dvrod_lbl_order_observation',
+  VER_RUTEO_FILAS_PRODUCTO:    '#dvrod_product_table tr',
+  VER_RUTEO_SUBTOTAL:          '#dvrod_lbl_subtotal',
+  VER_RUTEO_DESCUENTO:         '#dvrod_lbl_total_discount',
+  VER_RUTEO_IMPUESTO:          '#dvrod_lbl_total_tax',
+  VER_RUTEO_TOTAL:             '#dvrod_lbl_total',
+
   // Panel de detalle avanzado de totales (subtotal / descuento general /
   // impuestos) — oculto por defecto (showBillDetail()); se expande con un
   // click en el propio bloque "Total:". El campo de porcentaje de descuento
@@ -4723,7 +4766,23 @@ export class PosPage {
     // viewport y el auto-scroll de Playwright nunca llega a alcanzarlo.
     await trigger.scrollIntoViewIfNeeded();
     await trigger.click();
-    const opcion = this.page.locator(`${contenedorChosenSelector} .chosen-results li:not(.result-selected)`).first();
+    // Excluir SIEMPRE `data-option-array-index="0"` (el placeholder real,
+    // primera <option> de cada uno de estos <select> por convención de esta
+    // app — mismo criterio que `option:not([value="0"])` ya usado en otros
+    // catálogos de esta clase), no solo `:not(.result-selected)`. Causa raíz
+    // investigada en vivo (Ruta de "Crear Orden de Ruteo", catálogo ya con
+    // 20+ rutas reales acumuladas de corridas previas de esta misma suite):
+    // `.result-selected` lo asigna Chosen a la opción que quedó
+    // "resaltada"/última usada en su propio estado interno, NO siempre al
+    // placeholder — con un catálogo pequeño/recién creado ambas cosas
+    // coinciden (por eso este bug no se manifestaba antes), pero con un
+    // catálogo grande Chosen puede resaltar cualquier otra opción real,
+    // dejando el placeholder (primer <li>, sin la clase `.result-selected`)
+    // como el único que pasaba el filtro anterior — seleccionándolo por
+    // error en vez de una opción real.
+    const opcion = this.page
+      .locator(`${contenedorChosenSelector} .chosen-results li:not(.result-selected):not([data-option-array-index="0"])`)
+      .first();
     await expect(opcion, `El Chosen "${contenedorChosenSelector}" no tiene ninguna opción real disponible`).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
     await opcion.click();
   }
@@ -5585,6 +5644,19 @@ export class PosPage {
    * L.AJAX_GUARDAR_RUTEO): a diferencia de Facturar/Cerrar Caja, este
    * ambiente no tiene la impresión automática de comanda activada.
    */
+  /**
+   * Cierra el modal de Ruteo (creación/edición) a la fuerza si quedó
+   * abierto — necesario tras un intento de guardar en moneda no base que el
+   * ambiente bloquea en silencio (confirmado en vivo: el modal permanece
+   * abierto, sin ningún AJAX_GUARDAR_RUTEO ni SweetAlert que lo cierre).
+   */
+  async cerrarModalRuteoForzado() {
+    const modal = this.modalRuteo;
+    if (!(await modal.isVisible().catch(() => false))) return;
+    await modal.locator('[data-dismiss="modal"]').first().click({ force: true }).catch(() => {});
+    await expect(modal, 'El modal de Ruteo no se cerró al forzar su cierre').toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
   async validarOrdenRuteoCreada(respuesta: Response) {
     expect(respuesta.ok(), `${L.AJAX_GUARDAR_RUTEO} no respondió OK (status ${respuesta.status()})`).toBe(true);
 
@@ -5597,6 +5669,143 @@ export class PosPage {
     ).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
 
     await this.validarCarritoVacio();
+  }
+
+  // ─── Listado de Órdenes de Ruteo YA CREADAS: "Ver Orden"/"Editar Orden"/estado ──
+  // Ver el comentario de L.RUTEO_LISTA_TARJETA_PREFIJO para la evidencia
+  // completa (estructura real de la tarjeta, opciones del menú, códigos de
+  // estado). Cada Orden se localiza SIEMPRE por su id real (el mismo que
+  // devuelve guardarOrdenRuteoYObtenerRespuesta()), nunca por posición en el
+  // listado: bajo `fullyParallel`, otro worker puede estar creando/editando
+  // sus propias órdenes en la misma pestaña "Ruteo" al mismo tiempo, así que
+  // depender de "la primera tarjeta" sería una condición de carrera real.
+
+  /** Locator de una tarjeta de Orden de Ruteo ya creada, por su id real. */
+  tarjetaRuteo(ordenId: string): Locator {
+    return this.page.locator(`#${L.RUTEO_LISTA_TARJETA_PREFIJO}${ordenId}`);
+  }
+
+  /**
+   * Abre la pestaña superior "Ruteo" (listado de órdenes YA creadas —
+   * distinta del menú "Crear Orden de Ruteo"/RUTEO_MENU_ITEM), reutilizando
+   * visitarPestanaPos() con la entrada ya registrada en
+   * PESTANAS_POS_A_RECORRER, sin duplicar esa lógica.
+   */
+  async abrirListadoOrdenesRuteo() {
+    const pestana = PESTANAS_POS_A_RECORRER.find((p) => p.etiqueta === 'Ruteo')!;
+    await this.visitarPestanaPos(pestana);
+  }
+
+  /**
+   * Abre el menú de acciones (ícono "more_vert") de una Orden de Ruteo ya
+   * creada, localizada por su id real — falla con un mensaje claro si la
+   * tarjeta no aparece en el listado ya cargado.
+   */
+  async abrirMenuAccionesOrdenRuteo(ordenId: string) {
+    const tarjeta = this.tarjetaRuteo(ordenId);
+    await expect(tarjeta, `La orden de Ruteo #${ordenId} no aparece en el listado "Ruteo"`).toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+    await tarjeta.locator(L.RUTEO_LISTA_BTN_MENU).click();
+    await expect(
+      tarjeta.locator('ul.dropdown-menu'),
+      `El menú de acciones de la orden #${ordenId} no se abrió`
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /**
+   * Con el menú de acciones ya abierto (abrirMenuAccionesOrdenRuteo()),
+   * selecciona "Ver órden" y lee los datos reales mostrados en el modal de
+   * detalle (#dialog_view_routing_order_detail), cerrándolo al terminar.
+   * Confirmado en vivo que este detalle no incluye "Vendedor" (solo
+   * "Repartidor") ni etiqueta explícita de moneda/estado/fecha — esos solo
+   * se reflejan en la propia tarjeta del listado (fecha) o se infieren del
+   * símbolo en los montos (moneda); el estado se lee aparte con
+   * obtenerEstadoTarjetaRuteo().
+   */
+  async verOrdenRuteo(ordenId: string) {
+    await this.page.locator(`li[onclick="show_routing_order_detail(${ordenId});"]`).click();
+
+    const modal = this.page.locator(L.DIALOG_VER_ORDEN_RUTEO);
+    await expect(modal, 'El modal "Ver Orden" no apareció').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    const leerMonto = async (selector: string) =>
+      parseFloat(((await this.page.locator(selector).textContent()) ?? '0').replace(/[^0-9.]/g, '')) || 0;
+
+    const datos = {
+      numero: ((await this.page.locator(L.VER_RUTEO_NUMERO).textContent()) ?? '').trim(),
+      repartidor: ((await this.page.locator(L.VER_RUTEO_REPARTIDOR).textContent()) ?? '').trim(),
+      clienteNombre: ((await this.page.locator(L.VER_RUTEO_CLIENTE_NOMBRE).textContent()) ?? '').trim(),
+      direccion: ((await this.page.locator(L.VER_RUTEO_CLIENTE_DIRECCION).textContent()) ?? '').trim(),
+      observacion: ((await this.page.locator(L.VER_RUTEO_OBSERVACION).textContent()) ?? '').trim(),
+      cantidadProductos: await this.page.locator(L.VER_RUTEO_FILAS_PRODUCTO).count(),
+      subtotal: await leerMonto(L.VER_RUTEO_SUBTOTAL),
+      descuento: await leerMonto(L.VER_RUTEO_DESCUENTO),
+      impuesto: await leerMonto(L.VER_RUTEO_IMPUESTO),
+      total: await leerMonto(L.VER_RUTEO_TOTAL),
+    };
+
+    await modal.locator('.btn_dvrod_close, [data-dismiss="modal"]').first().click();
+    await expect(modal, 'El modal "Ver Orden" no se cerró').toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    return datos;
+  }
+
+  /**
+   * Con el menú de acciones ya abierto, selecciona "Editar órden" (reutiliza
+   * el mismo modal #dialog_add_routing_order y los mismos ids/botón que
+   * crear una Orden de Ruteo — ver el comentario de
+   * L.RUTEO_LISTA_TARJETA_PREFIJO) y modifica Ruta, Repartidor y
+   * Observaciones: los ÚNICOS campos realmente editables en este ambiente,
+   * confirmado en vivo — el bloque de cliente permanece oculto
+   * (display:none) y no existe ningún campo de productos/cantidades/
+   * vendedor en este modal. Guarda reutilizando
+   * guardarOrdenRuteoYObtenerRespuesta() tal cual (mismo botón, misma
+   * petición AJAX_GUARDAR_RUTEO que la creación, confirmado en vivo).
+   */
+  async editarOrdenRuteo(ordenId: string, nuevaObservacion: string) {
+    await this.page.locator(`li[onclick="show_create_routing_order_modal(${ordenId});"]`).click();
+
+    const modal = this.modalRuteo;
+    await expect(modal, 'El modal "Editar Orden de Ruteo" no apareció').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    const ruta = await this.seleccionarRutaRuteo();
+    const repartidor = await this.seleccionarRepartidorRuteo();
+    const observacionRegistrada = await this.llenarObservacionesRuteo(nuevaObservacion);
+
+    const respuesta = await this.guardarOrdenRuteoYObtenerRespuesta();
+    expect(respuesta.ok(), `El guardado de la edición no respondió OK (status ${respuesta.status()})`).toBe(true);
+    await expect(modal, 'El modal "Editar Orden de Ruteo" no se cerró tras guardar').toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    return { ruta, repartidor, observacionRegistrada };
+  }
+
+  /**
+   * Con el menú de acciones ya abierto, selecciona "Marcar como <estado>"
+   * (change_routing_order_status(id, código)) y espera la respuesta real de
+   * AJAX_CAMBIO_ESTADO_RUTEO. Códigos confirmados en vivo: 1=Pendiente,
+   * 2=En camino, 3=Entregado. Sin SweetAlert de por medio (confirmado en
+   * vivo, a diferencia del resto de acciones de Ruteo).
+   */
+  async cambiarEstadoOrdenRuteo(ordenId: string, estado: 1 | 2 | 3) {
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_CAMBIO_ESTADO_RUTEO),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await this.page.locator(`li[onclick="change_routing_order_status(${ordenId},${estado});"]`).click();
+    const respuesta = await respuestaPromise;
+    expect(respuesta.ok(), `El cambio de estado de la orden #${ordenId} a ${estado} no respondió OK`).toBe(true);
+  }
+
+  /**
+   * Lee el estado real de una tarjeta de Ruteo ya visible en el listado
+   * desde su propia clase (delivery-status-1/2/3) — nunca asumido a partir
+   * de la última acción ejecutada, mismo criterio de "leer el DOM real" que
+   * el resto de la suite.
+   */
+  async obtenerEstadoTarjetaRuteo(ordenId: string): Promise<1 | 2 | 3> {
+    const clase = (await this.tarjetaRuteo(ordenId).getAttribute('class')) ?? '';
+    const match = clase.match(/delivery-status-(\d)/);
+    expect(match, `No se pudo leer el estado de la orden #${ordenId} desde su clase: "${clase}"`).not.toBeNull();
+    return Number(match![1]) as 1 | 2 | 3;
   }
 
   // ─── Moneda del POS ─────────────────────────────────────────────────────────
