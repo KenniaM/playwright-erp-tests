@@ -1507,6 +1507,17 @@ test.describe('Orden de Ruteo', () => {
       expect(totalConDescuento, 'El descuento general no bajó el total').toBeLessThan(totalSinDescuento);
     });
 
+    // BUG DEL SISTEMA confirmado en vivo (no de automatización — navegación
+    // ya estable, sin ruido de ambiente, reproducido de forma consistente):
+    // el descuento general aplicado a una Orden de Ruteo NO se persiste en
+    // el servidor. Al volver a seleccionar la MISMA orden, el checkbox
+    // "apply_general_discount" aparece desmarcado (estaDescuentoGeneralActivo()
+    // devuelve false) y el total regresa a su valor SIN descuento —
+    // evidencia real de una corrida: checkbox esperado=true, recibido=false;
+    // esto contrasta con los productos agregados vía "Agregar Ítem", que SÍ
+    // se persisten de inmediato en el servidor (confirmado en el
+    // Escenario 23, que sí pasa). La validación se deja intacta: documenta
+    // correctamente esta brecha real, no se debilita para forzar un pase.
     await test.step('Volver a seleccionar la misma orden y validar que el descuento general sigue aplicado', async () => {
       // No vuelve a llamar abrirListadoOrdenesRuteo(): el paso anterior ya
       // dejó el tab "Ruteo" activo (volverDesdeAgregarItemHaciaRuteo()) y
@@ -1583,6 +1594,17 @@ test.describe('Orden de Ruteo', () => {
       expect(totalConDescuento, 'El descuento individual no bajó el total').toBeLessThan(totalSinDescuento);
     });
 
+    // BUG DEL SISTEMA confirmado en vivo (no de automatización — mismo
+    // criterio que el Escenario 24, con navegación ya estable): el
+    // descuento individual tampoco se persiste en el servidor. Evidencia
+    // real de una corrida: total esperado tras reseleccionar (con
+    // descuento) = 10859.85, total recibido = 10913.53 — una diferencia de
+    // 53.68, equivalente al descuento perdido. Confirmado dos veces de
+    // forma independiente (general + individual) que los descuentos son
+    // estado de sesión/carrito, no se guardan con la orden — a diferencia
+    // de los productos agregados, que sí persisten (Escenario 23). La
+    // validación se deja intacta: documenta correctamente esta brecha
+    // real, no se debilita para forzar un pase.
     await test.step('Volver a seleccionar la misma orden y validar que el descuento individual sigue reflejado en el total', async () => {
       // No vuelve a llamar abrirListadoOrdenesRuteo(): mismo motivo que el
       // Escenario 24 (el tab "Ruteo" ya está activo desde el paso anterior).
