@@ -745,6 +745,28 @@ const L = {
   RUTEO_LISTA_BTN_MENU:        'button[data-toggle="dropdown"]',
   AJAX_CAMBIO_ESTADO_RUTEO:    'changeRoutingOrderDeliveredStatus',
 
+  // Botón "Seleccionar órden" (href="javascript:add_pos_routing_order_to_table(<id>);"),
+  // confirmado en vivo (HONDURAS): es el ÚNICO mecanismo real para facturar
+  // una Orden de Ruteo — el menú de acciones (RUTEO_LISTA_BTN_MENU) NUNCA
+  // ofrece "Facturar" ni "Agregar Ítem" propios, solo Ver/Editar/Marcar
+  // estado/Eliminar. Este botón vive en la propia tarjeta, fuera del
+  // dropdown, dispara AJAX_CARGAR_RUTEO y carga la orden (productos +
+  // cliente ya asociado) al carrito normal del POS — desde ahí aplica el
+  // mismo flujo genérico ya usado por Órdenes de Caja/Importar Factura
+  // (AGREGAR ITEMS, Facturar, etc.), sin necesitar nada propio de Ruteo.
+  // Confirmado en vivo también que este botón DESAPARECE de la tarjeta una
+  // vez la orden ya fue facturada (no permite seleccionarla de nuevo).
+  RUTEO_LISTA_BTN_SELECCIONAR: '.routing_order_card_btn_select_order',
+  AJAX_CARGAR_RUTEO:           'getPosRoutingOrderItemList',
+
+  // Etiqueta "Factura: Pendiente/Facturado" de la propia tarjeta —
+  // independiente del estado de envío (delivery-status-N/RUTEO_LISTA_TARJETA_PREFIJO):
+  // una orden puede estar Entregada y seguir con la factura Pendiente, o
+  // viceversa. Confirmado en vivo que cambia a "Facturado" apenas la venta
+  // se completa, en el mismo momento en que RUTEO_LISTA_BTN_SELECCIONAR
+  // desaparece de la tarjeta.
+  RUTEO_LISTA_LBL_FACTURA: '.routing_order_card_lbl_delivery_billing span.pull-right',
+
   // Modal "Ver Orden" (#dialog_view_routing_order_detail) — confirmado en
   // vivo, de solo lectura y distinto del de creación/edición. No incluye un
   // campo de "Vendedor" separado (solo "Repartidor") ni etiqueta explícita de
@@ -4795,6 +4817,75 @@ export class PosPage {
   }
 
   /**
+   * Mismo mecanismo que seleccionarClienteExistente() (buscar y elegir un
+   * cliente real ya registrado), pero descarta las filas cuyo nombre visible
+   * coincida con `nombreActual` — necesario para escenarios que ya tienen un
+   * cliente seleccionado (p. ej. el propio de una Orden de Ruteo ya cargada
+   * al carrito) y necesitan cambiarlo por uno genuinamente DISTINTO: una
+   * búsqueda vacía siempre devuelve el mismo primer cliente del catálogo
+   * completo (confirmado en vivo, mismo criterio ya aplicado a productos por
+   * obtenerSegundoProductoNormalDistinto()), así que reintentar
+   * seleccionarClienteExistente() sin más aterrizaría en el mismo cliente.
+   * Quien llama debe quitar el cliente actual primero (quitarClienteSeleccionado())
+   * si ya hay uno seleccionado — confirmado en vivo que el buscador de
+   * cliente solo vuelve a estar disponible después de eso.
+   */
+  async seleccionarClienteExistenteDistintoDe(nombreActual: string, terminoBusqueda = ''): Promise<string> {
+    await this.page.locator(L.CLIENTE_INPUT_BUSQUEDA).fill(terminoBusqueda);
+
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.CLIENTE_AJAX_BUSQUEDA),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await this.page.locator(L.CLIENTE_BTN_BUSCAR).click();
+    await respuestaPromise;
+
+    const sinResultados = await this.page.locator(L.CLIENTE_SIN_RESULTADOS).isVisible().catch(() => false);
+    if (sinResultados) {
+      throw new Error(`No se encontraron clientes con el término de búsqueda "${terminoBusqueda}"`);
+    }
+
+    const filas = this.page.locator(L.CLIENTE_FILAS_RESULTADO);
+    await expect(filas.first(), `No apareció ningún resultado de cliente para "${terminoBusqueda}"`).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    const total = await filas.count();
+
+    let filaElegida: Locator | null = null;
+    for (let i = 0; i < total; i++) {
+      const texto = (await filas.nth(i).innerText()).trim();
+      if (!texto.includes(nombreActual)) {
+        filaElegida = filas.nth(i);
+        break;
+      }
+    }
+    expect(filaElegida, `No se encontró ningún cliente distinto de "${nombreActual}" entre los ${total} resultados de "${terminoBusqueda}"`).not.toBeNull();
+
+    // Misma condición de carrera ya documentada en seleccionarClienteExistente().
+    await expect(
+      this.page.locator(L.PANEL_PRODUCTOS),
+      'La animación de ocultar el catálogo de productos (disparada por la búsqueda) no terminó — no se puede seleccionar el cliente todavía sin arriesgar la condición de carrera ya documentada'
+    ).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    await filaElegida!.locator(L.CLIENTE_BTN_SELECCIONAR_FILA).click();
+
+    await expect(
+      this.page.locator(L.CLIENTE_PANEL_RESULTADOS),
+      'El panel de selección de clientes no se cerró tras elegir uno'
+    ).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    const nombreCliente = (await this.page.locator(L.CLIENTE_NOMBRE_SELECCIONADO).textContent())?.trim() ?? '';
+    expect(nombreCliente, 'El nombre del cliente seleccionado no quedó visible en el POS').not.toBe('');
+    expect(nombreCliente, 'El cliente seleccionado sigue siendo el mismo que antes').not.toBe(nombreActual);
+
+    await expect(
+      this.page.locator(L.PANEL_PRODUCTOS),
+      'El POS no volvió al catálogo de productos tras seleccionar el cliente'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    console.log(`[seleccionarClienteExistenteDistintoDe] Cliente seleccionado: "${nombreCliente}" (distinto de "${nombreActual}")`);
+    return nombreCliente;
+  }
+
+  /**
    * Factura solo con el nombre del cliente, sin seleccionar uno registrado:
    * abre "Agregar" → "Nombre del cliente" (dropdown Bootstrap dentro del
    * panel de búsqueda), escribe el nombre y confirma con blur — el campo
@@ -5901,6 +5992,80 @@ export class PosPage {
     return Number(match![1]) as 1 | 2 | 3;
   }
 
+  // ─── Facturar una Orden de Ruteo ya creada ─────────────────────────────────
+  // Ver el comentario de L.RUTEO_LISTA_BTN_SELECCIONAR para la evidencia
+  // completa: el botón "Seleccionar órden" (fuera del menú de acciones) es el
+  // único mecanismo real para llevar una Orden de Ruteo a facturación.
+
+  /**
+   * Selecciona ("Seleccionar órden") una Orden de Ruteo YA CREADA, localizada
+   * por su id real (mismo criterio "siempre por id real, nunca por posición"
+   * que el resto de los métodos de listado de Ruteo — ver el comentario de
+   * abrirMenuAccionesOrdenRuteo()), y la carga al carrito del POS. Deja el
+   * carrito, el cliente ya asociado a la orden y el resto de controles del
+   * POS (Facturar, "AGREGAR ITEMS") exactamente en el mismo estado que
+   * cargarPrimeraOrdenCajaDisponible()/importarPrimeraFacturaDisponible()
+   * (confirmado en vivo) — mismo flujo genérico de "venta pendiente cargada
+   * al carrito", solo con un origen distinto: desde aquí aplica el resto de
+   * la infraestructura ya existente (abrirAgregarItem(), presionarFacturar(),
+   * cambiarTipoPagoEnModalPago(), quitarClienteSeleccionado(), etc.) sin
+   * necesitar nada propio de Ruteo.
+   */
+  async seleccionarOrdenRuteoParaFacturar(ordenId: string) {
+    const tarjeta = this.tarjetaRuteo(ordenId);
+    await expect(tarjeta, `La orden de Ruteo #${ordenId} no aparece en el listado "Ruteo"`).toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_CARGAR_RUTEO),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await tarjeta.locator(L.RUTEO_LISTA_BTN_SELECCIONAR).click();
+    await respuestaPromise;
+
+    await expect(
+      this.page.locator(L.IMPORTAR_FACTURA_CARRITO_FILAS).first(),
+      'No se cargó ninguna línea de producto tras seleccionar la Orden de Ruteo'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    // El cliente ya asociado a la orden se propaga con una llamada AJAX
+    // propia (getCustomerByPosOption) que corre DESPUÉS de la respuesta de
+    // AJAX_CARGAR_RUTEO ya esperada arriba — confirmado en vivo (2 corridas)
+    // que leer el cliente inmediatamente tras esa primera respuesta puede
+    // atrapar el estado transitorio "Cliente de contado" (el placeholder por
+    // defecto) en vez del cliente real de la orden, ya en vuelo pero sin
+    // resolver todavía. Toda Orden de Ruteo exige un cliente real para
+    // crearse (create_routing_order()/confirm_send_routing_order() en
+    // pos_routing.js lo validan), así que se espera aquí, de forma explícita,
+    // a que ese cliente real quede reflejado antes de devolver el control.
+    await expect.poll(
+      () => this.hayClienteRealSeleccionado(),
+      { timeout: TIMEOUTS.PAYMENT_MODAL, message: 'El cliente real de la orden no se propagó al carrito tras seleccionarla' }
+    ).toBe(true);
+  }
+
+  /**
+   * Lee el estado de facturación mostrado en la propia tarjeta ("Pendiente"/
+   * "Facturado", L.RUTEO_LISTA_LBL_FACTURA) — independiente del estado de
+   * envío (obtenerEstadoTarjetaRuteo()): una orden puede estar Entregada y
+   * seguir con la factura Pendiente, o viceversa (ver el comentario de
+   * L.RUTEO_LISTA_LBL_FACTURA).
+   */
+  async obtenerEstadoFacturacionOrdenRuteo(ordenId: string): Promise<string> {
+    const texto = await this.tarjetaRuteo(ordenId).locator(L.RUTEO_LISTA_LBL_FACTURA).textContent();
+    return (texto ?? '').trim();
+  }
+
+  /**
+   * Indica si una Orden de Ruteo todavía puede seleccionarse para facturar
+   * (el botón "Seleccionar órden" sigue visible en su tarjeta) — confirmado
+   * en vivo que este botón desaparece de la tarjeta apenas la orden ya fue
+   * facturada, en el mismo momento en que obtenerEstadoFacturacionOrdenRuteo()
+   * pasa a "Facturado".
+   */
+  async ordenRuteoSeleccionable(ordenId: string): Promise<boolean> {
+    return this.tarjetaRuteo(ordenId).locator(L.RUTEO_LISTA_BTN_SELECCIONAR).isVisible().catch(() => false);
+  }
+
   // ─── Moneda del POS ─────────────────────────────────────────────────────────
   //
   // Ningún método existente de esta clase toca moneda — sección enteramente
@@ -6772,6 +6937,19 @@ export class PosPage {
   }
 
   /**
+   * Lee el nombre del cliente actualmente mostrado arriba del carrito
+   * (L.CLIENTE_NOMBRE_SELECCIONADO) — mismo campo que seleccionarClienteExistente()/
+   * seleccionarClienteExistenteDistintoDe() ya leen justo después de elegir
+   * uno, expuesto aquí como lectura independiente para validar qué cliente
+   * quedó asociado a una venta ya cargada al carrito (p. ej. una Orden de
+   * Ruteo seleccionada con seleccionarOrdenRuteoParaFacturar()) sin tener que
+   * volver a elegir ninguno.
+   */
+  async obtenerClienteSeleccionado(): Promise<string> {
+    return ((await this.page.locator(L.CLIENTE_NOMBRE_SELECCIONADO).textContent()) ?? '').trim();
+  }
+
+  /**
    * Quita el cliente real actualmente seleccionado del carrito (ícono "X"
    * junto a su nombre), dejándolo en "Cliente de contado". Sin SweetAlert de
    * confirmación que esperar (confirmado en vivo, ver el comentario de
@@ -7209,6 +7387,28 @@ export class PosPage {
     return this.localizarPrimerProducto(
       (m) => m.esFraccionado && !textoCarrito.includes(m.nombre),
       'producto Fraccionado que todavía no esté en el carrito'
+    );
+  }
+
+  /**
+   * Variante "con IVA" de obtenerPrimerProductoNoPresenteEnCarrito(): mismo
+   * motivo exacto (ver el comentario de obtenerTextoCarrito()) — necesaria
+   * para escenarios que agregan un producto con IVA DESPUÉS de cargar al
+   * carrito una venta ya existente (p. ej. una Orden de Ruteo ya
+   * seleccionada, que siempre trae al menos un producto propio). Confirmado
+   * en vivo que el primer producto normal del catálogo (obtenerPrimerProductoNormal(),
+   * determinístico) es, en la práctica, el mismo que la propia suite ya usa
+   * para crear la Orden de Ruteo base (agregarUnProducto() en
+   * pos-ruteo.spec.ts) — buscarlo y "agregarlo" de nuevo sin este filtro
+   * termina sumando cantidad a la línea ya existente (updateItemFromRoutingOrder)
+   * en vez de crear una línea nueva, dejando obtenerClavesProductos() sin
+   * ninguna clave nueva que detectar.
+   */
+  async obtenerPrimerProductoConIvaNoPresenteEnCarrito(): Promise<MetadatoProducto> {
+    const textoCarrito = await this.obtenerTextoCarrito();
+    return this.localizarPrimerProducto(
+      (m) => m.tipoItem === 1 && m.aplicaIva && !textoCarrito.includes(m.nombre),
+      'producto con IVA que todavía no esté en el carrito'
     );
   }
 
