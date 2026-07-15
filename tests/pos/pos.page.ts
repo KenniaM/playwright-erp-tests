@@ -14,6 +14,29 @@ export const DASHBOARD_URL =
 
 export const TIMEOUTS = {
   TEST:          300_000,
+  // Presupuesto estándar de todos los escenarios de pos-ruteo.spec.ts (no
+  // solo los que facturan): tanto el beforeEach compartido de ese archivo
+  // como recargarPosConReintento() (usado como fallback desde el beforeEach
+  // y también tras facturar en escenarios con Agregar Ítem + Vista
+  // Expandida) pueden necesitar hasta 3 intentos completos de
+  // cargarPosDesdeDashboard() para recuperar un estado navegable bajo carga
+  // sostenida del ambiente — confirmado en vivo que un solo intento puede
+  // agotar PRODUCTS_LOAD (120s) completo antes de fallar, así que TEST
+  // (300s) no alcanza ni para 2 intentos completos: el test entero expiraba
+  // a mitad de un reintento y Playwright abortaba la navegación en curso
+  // (page.goto de un contexto ya cerrado a la fuerza), lo que además podía
+  // dejar la `sharedPage` del worker en un estado que contaminaba el
+  // siguiente test de la misma fixture. Nota importante sobre por qué se
+  // aplica a TODOS los escenarios del archivo, no solo a los "pesados":
+  // test.setTimeout() no es acumulativo — la ÚLTIMA llamada dentro del
+  // mismo test gana, así que si el beforeEach usara un timeout mayor pero
+  // el cuerpo del test siguiera llamando test.setTimeout(TIMEOUTS.TEST), esa
+  // segunda llamada recortaría el presupuesto total de vuelta a 300s y
+  // anularía la extensión. No baja ningún timeout individual
+  // (PRODUCTS_LOAD/NAVIGATE siguen intactos): solo le da al mecanismo de
+  // reintento YA DISEÑADO el tiempo total que su propio diseño necesita
+  // para completarse.
+  TEST_CON_RECUPERACION: 600_000,
   NAVIGATE:       90_000,
   PRODUCTS_LOAD: 120_000,
   PAYMENT_MODAL:  15_000,
@@ -107,6 +130,11 @@ const L = {
   // vacío en el HTML inicial, se llena dinámicamente).
   DASHBOARD_MODAL_SELECCIONAR_COMPANIA: '#dialog_select_company_pos',
   DASHBOARD_LISTA_COMPANIAS: '#company_list li',
+  // Nombre real de la compañía DENTRO de cada <li> de DASHBOARD_LISTA_COMPANIAS
+  // — el <li> completo puede incluir más contenido (dirección, ícono), así que
+  // el match por nombre EXACTO (ver _irAlPosResolviendoCompania()) se hace
+  // contra este elemento, nunca contra el texto agregado del <li>.
+  DASHBOARD_COMPANIA_NOMBRE: '.company-name',
 
   // Modal de pago
   DIALOG_PAGO:       '#dialog_payment',
@@ -744,6 +772,21 @@ const L = {
   RUTEO_LISTA_TARJETA_PREFIJO: 'brand_',
   RUTEO_LISTA_BTN_MENU:        'button[data-toggle="dropdown"]',
   AJAX_CAMBIO_ESTADO_RUTEO:    'changeRoutingOrderDeliveredStatus',
+
+  // Filtros REALES del listado "Ruteo" — confirmado en vivo (investigado a
+  // fondo, corrigiendo una conclusión previa incorrecta de esta misma
+  // suite que los daba por una simple leyenda decorativa): los 5 son
+  // botones reales con id técnico estable y onclick propio. Relevante en
+  // particular: una Orden de Ruteo que llega al estado Entregado +
+  // Facturado se MUEVE de "Todos" a "H. de Órdenes" (confirmado en vivo
+  // comparando el mismo id de orden en ambas vistas) — cualquier método que
+  // localice una tarjeta por id debe considerar esto, ver
+  // asegurarOrdenRuteoVisibleEnListado().
+  FILTRO_RUTEO_TODOS:     '#filter_routing_order_btn_all',
+  FILTRO_RUTEO_PENDIENTE: '#filter_routing_order_btn_pending',
+  FILTRO_RUTEO_EN_CAMINO: '#filter_routing_order_btn_in_route',
+  FILTRO_RUTEO_ENTREGADO: '#filter_routing_order_btn_delivered',
+  FILTRO_RUTEO_HISTORIAL: '#filter_routing_order_btn_history_orders',
 
   // Botón "Seleccionar órden" (href="javascript:add_pos_routing_order_to_table(<id>);"),
   // confirmado en vivo (HONDURAS): es el ÚNICO mecanismo real para facturar
@@ -1595,9 +1638,14 @@ export class PosPage {
    *    SÍNCRONO (`async:false`) contra la URL de `#url_to_company_pos_select`.
    *    Si la respuesta trae `result==1` (la cuenta ya tiene una compañía
    *    resuelta — un solo acceso, o ya seleccionada antes), el propio
-   *    sistema navega de inmediato via `window.location` — nunca aparece
-   *    ningún modal. Si no, inyecta el listado de compañías en
-   *    `#select_company_pos_content` y abre `#dialog_select_company_pos`.
+   *    sistema navega de inmediato via `window.location`, dentro del mismo
+   *    manejador síncrono del click — nunca aparece ningún modal (Flujo B:
+   *    usuario con una sola compañía). Si no, inyecta el listado de
+   *    compañías en `#select_company_pos_content` y abre
+   *    `#dialog_select_company_pos` (Flujo A: usuario con varias
+   *    compañías). CUÁL de los dos ocurre depende únicamente de la cuenta/
+   *    ambiente, nunca de este código — ambos son comportamientos válidos
+   *    del sistema, no un error.
    * 3. La URL real del POS **no se construye en este archivo**: viene del
    *    elemento oculto `#url_to_pos` del Dashboard (la misma base en ambos
    *    caminos), y — solo en el camino con modal — la función
@@ -1609,15 +1657,49 @@ export class PosPage {
    *    navegación.
    * 4. Cada compañía es una `<li id="product_box_<id>">` dentro de
    *    `#company_list` (lista, no `<select>` ni tarjetas independientes),
-   *    identificada por su nombre visible (`.company-name` contiene
-   *    "HONDURAS", "TALLER ALPHA PREMIUM", etc.) — nunca por su id numérico,
-   *    que es específico del ambiente.
+   *    con el nombre real en su `.company-name` (DASHBOARD_COMPANIA_NOMBRE)
+   *    — el resto del `<li>` puede traer más contenido (dirección, ícono),
+   *    así que la compañía se localiza por el nombre EXACTO de ese
+   *    elemento (nunca substring del `<li>` completo, y nunca por id
+   *    numérico, específico del ambiente): evita seleccionar por error una
+   *    compañía distinta cuyo nombre solo CONTENGA el buscado (p. ej.
+   *    "HONDURAS SUCURSAL 2" al buscar "HONDURAS").
    *
-   * Condición funcional de "cambio de compañía terminado" (sin
-   * waitForTimeout ni networkidle): `page.waitForURL(/pointOfSale/)` — la
-   * navegación real hacia el POS, disparada por la propia aplicación en
-   * cualquiera de los dos caminos. Es la misma señal, sin importar si hubo
-   * modal o no.
+   * Flujo A vs. Flujo B se distingue con una CARRERA funcional real entre
+   * "el modal se hizo visible" y "la app ya navegó al POS" — nunca de forma
+   * secuencial (esperar el timeout completo del modal y solo después
+   * asumir navegación directa, lo que desperdiciaría ese tiempo completo en
+   * cada corrida del Flujo B) y nunca con una excepción usada para decidir
+   * cuál de los dos ocurrió: se usa `Promise.any()` (no `Promise.race()`)
+   * sobre las dos promesas SIN capturar sus rechazos de antemano — gana la
+   * PRIMERA en CUMPLIRSE, y solo si AMBAS rechazan (ninguna ocurrió) es que
+   * `Promise.any()` rechaza. Esto importa: con `Promise.race()` y cada
+   * promesa "aplanada" a `.catch(() => null)` antes de la carrera (diseño
+   * descartado tras confirmarlo en vivo: falló exactamente así — ver
+   * historial), un timeout temprano del lado del modal "gana" la carrera
+   * con `null` aunque la navegación directa (Flujo B) siga en curso y
+   * fuera a resolver poco después — un falso "ni modal ni navegación"
+   * mientras el POS SÍ estaba cargando. `Promise.any()` no tiene ese
+   * problema: ignora los rechazos individuales y sigue esperando a la otra
+   * promesa hasta que una de las dos cumple, o hasta que ambas rechazan.
+   * Se arman ANTES del click (no después): al ser el POST síncrono, la
+   * navegación del Flujo B puede ocurrir dentro del propio manejador del
+   * click, antes de que `linkIrAPos.click()` termine de resolver — armar
+   * la carrera después arriesgaría perderse esa navegación (mismo criterio
+   * que guardarOrdenRuteoYObtenerRespuesta()/_armarCarreraFacturacion(): la
+   * espera del evento se arma antes del click, incluidos los reintentos).
+   * La espera de navegación usa TIMEOUTS.NAVIGATE (no PAYMENT_MODAL): una
+   * carga real de POS bajo este ambiente puede tardar bastante más que un
+   * simple modal (confirmado en vivo, ver TIMEOUTS.NAVIGATE en el resto del
+   * archivo) — un timeout corto aquí haría fallar el Flujo B en cargas
+   * lentas aunque la navegación SÍ fuera a completarse.
+   *
+   * Si NINGUNO de los dos ocurre dentro de esos tiempos, `Promise.any()`
+   * rechaza (AggregateError) — se traduce a un error explícito con
+   * contexto vía un único `.catch()` final (no un try/catch usado para
+   * *distinguir* entre los flujos válidos, que es justamente lo que este
+   * diseño evita: aquí solo se usa para dar forma al mensaje de la falla
+   * real, ya decidida por `Promise.any()`).
    */
   private async _irAlPosResolviendoCompania() {
     // Orden confirmado en vivo (cuentas cuya compañía por defecto tiene
@@ -1634,6 +1716,16 @@ export class PosPage {
     await this._cerrarModalMonedaSiAparece();
     await this._cerrarModalSetupInicialSiAparece();
 
+    // Paso 1: Dashboard funcional. cargarPosDesdeDashboard() ya espera esto
+    // antes de llamar a este método (idéntica condición), pero se repite
+    // aquí porque este método también puede invocarse en otros contextos: el
+    // badge de notificaciones sigue "cargando" (workshop-web-bell-loading)
+    // hasta que el Dashboard terminó de resolver su estado inicial.
+    await this.page.locator(L.DASHBOARD_BELL_LOADING)
+      .waitFor({ state: 'hidden', timeout: TIMEOUTS.PAYMENT_MODAL })
+      .catch(() => {});
+
+    // Paso 2: localizar "Crear factura".
     const linkIrAPos = this.page.locator(L.DASHBOARD_LINK_IR_A_POS).first();
     if (!(await linkIrAPos.isVisible().catch(() => false))) {
       // El link vive colapsado dentro de su submenú padre (treeview) — se
@@ -1649,61 +1741,105 @@ export class PosPage {
       await expect(linkIrAPos, 'El link real hacia POS no quedó visible tras expandir su submenú').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
     }
 
-    // El modal de tipo de cambio (y, en cuentas cuya compañía por defecto
-    // tenga pendiente su configuración inicial, el modal "Setup Inicial del
-    // Sistema") pueden aparecer de forma asíncrona en cualquier momento
-    // hasta este click — confirmado en vivo: la comprobación de arriba
-    // (antes de expandir el submenú) puede pasar limpia y el modal igual
-    // terminar bloqueando este click segundos después (Playwright reportó
-    // ambos casos por separado, cada uno "... intercepts pointer events",
-    // en corridas reales pese a haberlos comprobado ya). Se reintenta
-    // cerrándolos antes de cada intento, acotado, en vez de asumir que la
-    // comprobación única de arriba basta.
+    // Carrera armada ANTES del click — ver el comentario del método para el
+    // porqué. Ninguna se captura aquí para Promise.any() (más abajo), que es
+    // quien decide ignorando rechazos individuales hasta que ambas rechacen.
+    //
+    // Pero SÍ se le adjunta un .catch() silencioso a cada una por separado
+    // (sin afectar lo que Promise.any() recibe: un handler adicional en la
+    // MISMA promesa no cambia su valor para otros handlers ya adjuntos) —
+    // confirmado en vivo que sin esto, la promesa que PIERDE la carrera
+    // (p. ej. esperaModal, cuando esperaNavegacionDirecta ya resolvió
+    // 'directo') sigue corriendo de fondo y, al rechazar más tarde sin que
+    // nada la esté escuchando ya, Node la reporta como unhandled promise
+    // rejection — que Playwright superficia como una falla del test aunque
+    // el flujo real ya hubiera tenido éxito (el error crudo de
+    // `modalCompania.waitFor(...)` apareciendo como causa de un test que en
+    // realidad SÍ había navegado al POS).
+    const modalCompania = this.page.locator(L.DASHBOARD_MODAL_SELECCIONAR_COMPANIA);
+    const esperaModal = modalCompania
+      .waitFor({ state: 'visible', timeout: TIMEOUTS.PAYMENT_MODAL })
+      .then(() => 'modal' as const);
+    const esperaNavegacionDirecta = this.page
+      .waitForURL(/pointOfSale/, { timeout: TIMEOUTS.NAVIGATE })
+      .then(() => 'directo' as const);
+    esperaModal.catch(() => {});
+    esperaNavegacionDirecta.catch(() => {});
+
+    // Paso 3: click sobre "Crear factura". El modal de tipo de cambio (y,
+    // en cuentas cuya compañía por defecto tenga pendiente su
+    // configuración inicial, "Setup Inicial del Sistema") pueden reaparecer
+    // de forma asíncrona justo antes de este click. Se cierran antes de
+    // cada intento, acotado, sin try/catch: cada intento resuelve a
+    // true/false vía .then()/.catch(), mismo criterio que
+    // _cerrarOverlayDashboardSiAparece().
+    //
+    // Click NATIVO (el.click() vía evaluate, no linkIrAPos.click() de
+    // Playwright) — causa raíz real confirmada en vivo con un diagnóstico
+    // elementFromPoint() en el punto exacto del fallo: el link "Crear
+    // factura" pasaba TODOS los chequeos de actionability de Playwright
+    // (visible/enabled/stable/sin overlay ni backdrop detectado), pero
+    // document.elementFromPoint() en su propio centro devolvía un link
+    // "Ventas" COMPLETAMENTE DISTINTO (esElMismo=false) — dos submenús del
+    // sidebar (FACTURAR y Ventas) pueden quedar renderizados superpuestos
+    // en las mismas coordenadas de pantalla. El click simulado por mouse de
+    // Playwright aterriza en las coordenadas (y por tanto en "Ventas", que
+    // no navega a ningún lado), no en el elemento — un click nativo
+    // dispara el evento directo sobre el elemento del DOM ya localizado,
+    // sin depender de qué haya visualmente en esas coordenadas. Mismo
+    // mecanismo que ya usa el bloque de arriba para expandir el submenú
+    // (evaluate(el => parentA?.click())).
     const MAX_INTENTOS_CLICK = 3;
-    for (let intento = 1; intento <= MAX_INTENTOS_CLICK; intento++) {
+    let clickRealizado = false;
+    for (let intento = 1; intento <= MAX_INTENTOS_CLICK && !clickRealizado; intento++) {
+      await this.cerrarModalNotificacionesSiAparece();
       await this._cerrarModalMonedaSiAparece();
       await this._cerrarModalSetupInicialSiAparece();
-      try {
-        await linkIrAPos.click({ timeout: TIMEOUTS.PAYMENT_MODAL });
-        break;
-      } catch (e) {
-        if (intento === MAX_INTENTOS_CLICK) throw e;
-      }
+      clickRealizado = await linkIrAPos.evaluate((el: HTMLElement) => el.click()).then(() => true).catch(() => false);
     }
+    expect(clickRealizado, `El link real hacia POS no se pudo clickear tras ${MAX_INTENTOS_CLICK} intentos`).toBe(true);
 
-    const modalCompania = this.page.locator(L.DASHBOARD_MODAL_SELECCIONAR_COMPANIA);
-    const aparecioModalCompania = await modalCompania
-      .waitFor({ state: 'visible', timeout: TIMEOUTS.PAYMENT_MODAL })
-      .then(() => true)
-      .catch(() => false);
+    // Flujo A (aparece el modal) vs. Flujo B (la app ya navegó directo,
+    // sin modal) — ambos válidos, mismo estado final. Ver el comentario del
+    // método para el diseño de esta carrera (Promise.any(), no
+    // Promise.race(): gana la primera en CUMPLIRSE, nunca la primera en
+    // fallar).
+    const resultado = await Promise.any([esperaModal, esperaNavegacionDirecta]).catch(() => null);
 
-    if (aparecioModalCompania) {
-      // Estructura real confirmada en vivo (no una suposición): cada
-      // compañía es un <li id="product_box_<id>"> dentro de #company_list
-      // (lista, no <select> ni tarjetas independientes ni autocomplete),
-      // identificada únicamente por el texto visible de `.company-name`
-      // (L.DASHBOARD_LISTA_COMPANIAS) — nunca por su id numérico, que es
-      // específico del ambiente/cuenta.
-      const opcionCompania = modalCompania.locator(L.DASHBOARD_LISTA_COMPANIAS, { hasText: COMPANIA_POS }).first();
+    if (resultado === 'modal') {
+      const nombreEscapado = COMPANIA_POS.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const opcionCompania = modalCompania
+        .locator(L.DASHBOARD_LISTA_COMPANIAS)
+        .filter({ has: this.page.locator(L.DASHBOARD_COMPANIA_NOMBRE, { hasText: new RegExp(`^\\s*${nombreEscapado}\\s*$`) }) })
+        .first();
       const existe = await opcionCompania.isVisible({ timeout: TIMEOUTS.PAYMENT_MODAL }).catch(() => false);
 
       if (!existe) {
         // Detener con un error claro (compañía solicitada + compañías
         // realmente disponibles en este ambiente) en vez de seleccionar
         // cualquier otra por error.
-        const disponibles = (await modalCompania.locator(L.DASHBOARD_LISTA_COMPANIAS).allTextContents())
+        const disponibles = (await modalCompania.locator(L.DASHBOARD_COMPANIA_NOMBRE).allTextContents())
           .map((t) => t.trim())
           .filter(Boolean);
         throw new Error(
-          `La compañía "${COMPANIA_POS}" (configurada vía POS_COMPANIA) no existe en el modal de selección de este ambiente.\n` +
+          `La compañía "${COMPANIA_POS}" (configurada vía POS_COMPANIA) no existe, con ese nombre EXACTO, en el modal de selección de este ambiente.\n` +
           `Compañías disponibles: ${disponibles.length > 0 ? disponibles.join(', ') : '(ninguna encontrada en el modal)'}`
         );
       }
 
       await opcionCompania.click();
+      await this.page.waitForURL(/pointOfSale/, { timeout: TIMEOUTS.NAVIGATE });
+    } else if (resultado === null) {
+      // Ni el modal apareció ni la navegación ocurrió: falla real del
+      // ambiente/automatización, no una rama válida de ningún flujo.
+      throw new Error(
+        `Tras hacer click en "Crear factura", ni apareció el modal de selección de compañía (${L.DASHBOARD_MODAL_SELECCIONAR_COMPANIA}) ` +
+        `ni la aplicación navegó al POS dentro de ${TIMEOUTS.PAYMENT_MODAL}ms (ni Flujo A ni Flujo B ocurrieron). URL actual: ${this.page.url()}`
+      );
     }
+    // resultado === 'directo': Flujo B, la app ya navegó al POS — nada más
+    // que hacer, mismo estado final que el Flujo A.
 
-    await this.page.waitForURL(/pointOfSale/, { timeout: TIMEOUTS.NAVIGATE });
     // Recordar la URL REAL que la aplicación generó (nunca construida a
     // mano) para que irAlPos() pueda reutilizarla en visitas posteriores de
     // este mismo worker sin repetir el paso por Dashboard.
@@ -3039,9 +3175,19 @@ export class PosPage {
     const dialog = this.page.locator(L.DIALOG_COMENTARIO_PRODUCTO);
     await expect(dialog, 'El modal "Observaciones" no se abrió').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
 
-    await this.page.locator(L.COMENTARIO_PRODUCTO_BTN_NUEVO).click();
+    // Reintento acotado en el click de "+": confirmado en vivo que puede no
+    // revelar el formulario al primer intento (mismo criterio de
+    // resiliencia ya usado en alternarVistaExpandida() para UI
+    // intermitente) — sin esto, el textarea podía quedar esperando su
+    // timeout completo sin aparecer nunca.
     const textarea = this.page.locator(L.COMENTARIO_PRODUCTO_TEXTAREA);
-    await expect(textarea, 'El formulario para agregar una nueva observación no apareció').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    const MAX_INTENTOS = 3;
+    let formularioVisible = false;
+    for (let intento = 1; intento <= MAX_INTENTOS && !formularioVisible; intento++) {
+      await this.page.locator(L.COMENTARIO_PRODUCTO_BTN_NUEVO).click();
+      formularioVisible = await textarea.waitFor({ state: 'visible', timeout: 5_000 }).then(() => true).catch(() => false);
+    }
+    expect(formularioVisible, 'El formulario para agregar una nueva observación no apareció').toBe(true);
     await textarea.fill(texto);
 
     await this.page.locator(L.COMENTARIO_PRODUCTO_BTN_GUARDAR).click();
@@ -3874,6 +4020,26 @@ export class PosPage {
       total,
       ivaAplicado: applyIvaTexto === '1',
     };
+  }
+
+  /**
+   * Localiza la clave ACTUAL de una línea del carrito por su nombre exacto
+   * — necesario cuando una clave capturada varios pasos atrás puede haber
+   * quedado obsoleta: confirmado en vivo que el carrito de una Orden de
+   * Ruteo ya cargada se resincroniza contra el servidor en cada línea
+   * agregada, lo que puede reasignar claves ya existentes (ver el
+   * comentario de obtenerTextoCarrito() y el del Escenario 15 de
+   * pos-ruteo.spec.ts). Falla con un mensaje claro si ninguna línea
+   * coincide.
+   */
+  async obtenerClaveDeLineaPorNombre(nombre: string): Promise<string> {
+    const claves = await this.obtenerClavesFilasCarrito();
+    for (const clave of claves) {
+      const linea = await this.obtenerDatosLineaCarrito(clave);
+      if (linea.nombre === nombre) return clave;
+    }
+    expect(false, `No se encontró ninguna línea del carrito con el nombre "${nombre}"`).toBe(true);
+    return '';
   }
 
   /**
@@ -4716,6 +4882,19 @@ export class PosPage {
     ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
 
     console.log(`[visitarPestanaPos] Pestaña visitada: "${pestana.etiqueta}" (${pestana.selector})`);
+  }
+
+  /**
+   * Indica si la pestaña superior dada (POS Facturación/Ruteo/etc., ver
+   * PESTANAS_POS_A_RECORRER/PESTANA_POS_FACTURACION) está actualmente
+   * activa — mismo criterio (clase L.PESTANA_POS_CLASE_ACTIVA) que
+   * visitarPestanaPos() ya valida tras cada cambio de pestaña. Útil para
+   * escenarios que deben confirmar que NUNCA salieron de una pestaña
+   * (p. ej. facturar una Orden de Ruteo sin abandonar el tab "Ruteo").
+   */
+  async pestanaPosActiva(pestana: PestanaPos): Promise<boolean> {
+    const clase = await this.page.locator(pestana.selector).getAttribute('class');
+    return clase?.includes(L.PESTANA_POS_CLASE_ACTIVA) ?? false;
   }
 
   /**
@@ -5881,13 +6060,103 @@ export class PosPage {
   }
 
   /**
+   * Indica si el tab superior "Ruteo" sigue activo — mismo criterio que
+   * pestanaPosActiva(), con la pestaña ya resuelta. Confirmado en vivo que
+   * seleccionarOrdenRuteoParaFacturar() y alternarVistaExpandida() NO sacan
+   * al usuario de este tab (a diferencia de abrirAgregarItem(), que activa
+   * el tab "Productos" — ver su comentario): útil para escenarios que deben
+   * facturar una Orden de Ruteo sin abandonar esta pestaña.
+   */
+  async pestanaRuteoActiva(): Promise<boolean> {
+    const pestana = PESTANAS_POS_A_RECORRER.find((p) => p.etiqueta === 'Ruteo')!;
+    return this.pestanaPosActiva(pestana);
+  }
+
+  /**
+   * Presiona "Volver" desde el catálogo (abierto con abrirAgregarItem())
+   * hacia el tab "Ruteo", reutilizando volverDesdeAgregarItem() con la
+   * pestaña ya resuelta — mismo patrón que abrirListadoOrdenesRuteo()/
+   * pestanaRuteoActiva(), sin necesitar que el archivo de test importe
+   * PESTANAS_POS_A_RECORRER solo para esto.
+   */
+  async volverDesdeAgregarItemHaciaRuteo() {
+    const pestana = PESTANAS_POS_A_RECORRER.find((p) => p.etiqueta === 'Ruteo')!;
+    await this.volverDesdeAgregarItem(pestana);
+  }
+
+  /**
+   * Indica si la tarjeta de una Orden de Ruteo (por id) aparece visible
+   * dentro del filtro real "Entregado" (FILTRO_RUTEO_ENTREGADO) — cambia a
+   * ese filtro primero. Útil para confirmar explícitamente que una orden
+   * SALIÓ de "Entregado" tras un cambio de estado o facturación (a
+   * diferencia de asegurarOrdenRuteoVisibleEnListado(), que solo garantiza
+   * que la tarjeta aparezca EN ALGÚN LADO, sin importar cuál).
+   */
+  async ordenVisibleEnFiltroEntregado(ordenId: string): Promise<boolean> {
+    await this.page.locator(L.FILTRO_RUTEO_ENTREGADO).click();
+    return this.tarjetaRuteo(ordenId).isVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD }).catch(() => false);
+  }
+
+  /**
+   * Indica si la tarjeta de una Orden de Ruteo (por id) aparece visible
+   * dentro del filtro real "H. de Órdenes" (FILTRO_RUTEO_HISTORIAL) —
+   * cambia a ese filtro primero. Ver el comentario de
+   * ordenVisibleEnFiltroEntregado() para el criterio general.
+   */
+  async ordenVisibleEnHistorial(ordenId: string): Promise<boolean> {
+    await this.page.locator(L.FILTRO_RUTEO_HISTORIAL).click();
+    return this.tarjetaRuteo(ordenId).isVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD }).catch(() => false);
+  }
+
+  /**
+   * Asegura que la tarjeta de una Orden de Ruteo (por su id real) quede
+   * visible en el listado, sin importar qué filtro esté activo en este
+   * momento — confirmado en vivo (investigado a fondo, no asumido) que una
+   * orden que llega al estado Entregado + Facturado se MUEVE de "Todos" a
+   * "H. de Órdenes" (FILTRO_RUTEO_HISTORIAL): comparando el mismo id de
+   * orden en ambas vistas, la tarjeta deja de existir/verse en "Todos" y
+   * aparece en "H. de Órdenes". Los métodos que localizan una tarjeta por
+   * id (tarjetaRuteo()) asumían implícitamente que "Todos" siempre era el
+   * lugar correcto — bajo `fullyParallel`/corridas largas donde varios
+   * escenarios comparten el mismo pool de órdenes (p. ej. un escenario que
+   * marca una orden como Entregada y otro que ya la había facturado antes),
+   * eso deja de ser cierto y la tarjeta puede esperar su timeout completo
+   * sin nunca aparecer.
+   *
+   * Estrategia (sin excepciones para distinguir casos, solo waitFor con
+   * timeouts cortos vía `.catch(() => false)`, mismo criterio que el resto
+   * de esta clase): probar primero la vista ya activa (corto, la mayoría de
+   * los casos no necesitan cambiar nada), luego "H. de Órdenes", y si
+   * tampoco aparece ahí, volver a "Todos" — el mismo estado por defecto que
+   * el resto de la suite espera — y dejar que el propio caller reporte el
+   * error real con su propio mensaje (esta orden simplemente no existe o el
+   * ambiente tiene un problema genuino, no un filtro mal ubicado).
+   */
+  async asegurarOrdenRuteoVisibleEnListado(ordenId: string): Promise<void> {
+    const tarjeta = this.tarjetaRuteo(ordenId);
+    const yaVisible = await tarjeta.isVisible({ timeout: 5_000 }).catch(() => false);
+    if (yaVisible) return;
+
+    const visibleEnHistorial = await this.page.locator(L.FILTRO_RUTEO_HISTORIAL).click()
+      .then(() => tarjeta.isVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD }))
+      .catch(() => false);
+    if (visibleEnHistorial) return;
+
+    await this.page.locator(L.FILTRO_RUTEO_TODOS).click().catch(() => {});
+  }
+
+  /**
    * Abre el menú de acciones (ícono "more_vert") de una Orden de Ruteo ya
    * creada, localizada por su id real — falla con un mensaje claro si la
-   * tarjeta no aparece en el listado ya cargado.
+   * tarjeta no aparece en el listado ya cargado. Antes de buscarla,
+   * asegura que esté visible en la vista correcta (ver el comentario de
+   * asegurarOrdenRuteoVisibleEnListado(): puede haberse movido a "H. de
+   * Órdenes" si ya está Entregada + Facturada).
    */
   async abrirMenuAccionesOrdenRuteo(ordenId: string) {
+    await this.asegurarOrdenRuteoVisibleEnListado(ordenId);
     const tarjeta = this.tarjetaRuteo(ordenId);
-    await expect(tarjeta, `La orden de Ruteo #${ordenId} no aparece en el listado "Ruteo"`).toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+    await expect(tarjeta, `La orden de Ruteo #${ordenId} no aparece en el listado "Ruteo" (ni en "Todos" ni en "H. de Órdenes")`).toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
     await tarjeta.locator(L.RUTEO_LISTA_BTN_MENU).click();
     await expect(
       tarjeta.locator('ul.dropdown-menu'),
@@ -5983,9 +6252,11 @@ export class PosPage {
    * Lee el estado real de una tarjeta de Ruteo ya visible en el listado
    * desde su propia clase (delivery-status-1/2/3) — nunca asumido a partir
    * de la última acción ejecutada, mismo criterio de "leer el DOM real" que
-   * el resto de la suite.
+   * el resto de la suite. Antes de leerla, asegura que esté visible en la
+   * vista correcta (ver el comentario de asegurarOrdenRuteoVisibleEnListado()).
    */
   async obtenerEstadoTarjetaRuteo(ordenId: string): Promise<1 | 2 | 3> {
+    await this.asegurarOrdenRuteoVisibleEnListado(ordenId);
     const clase = (await this.tarjetaRuteo(ordenId).getAttribute('class')) ?? '';
     const match = clase.match(/delivery-status-(\d)/);
     expect(match, `No se pudo leer el estado de la orden #${ordenId} desde su clase: "${clase}"`).not.toBeNull();
@@ -5996,6 +6267,118 @@ export class PosPage {
   // Ver el comentario de L.RUTEO_LISTA_BTN_SELECCIONAR para la evidencia
   // completa: el botón "Seleccionar órden" (fuera del menú de acciones) es el
   // único mecanismo real para llevar una Orden de Ruteo a facturación.
+
+  /**
+   * Localiza el id real de la primera Orden de Ruteo del listado que
+   * TODAVÍA puede seleccionarse para facturar (botón "Seleccionar órden"
+   * visible en su tarjeta — ver L.RUTEO_LISTA_BTN_SELECCIONAR) — para
+   * escenarios que no necesitan crear su propia orden porque cualquier
+   * orden Pendiente de facturar ya sirve (este ambiente ya trae un listado
+   * grande de órdenes previas). Requiere que el listado "Ruteo" ya esté
+   * abierto (abrirListadoOrdenesRuteo()). Localiza SIEMPRE leyendo el id
+   * real del propio DOM (RUTEO_LISTA_TARJETA_PREFIJO + id numérico), nunca
+   * por posición fija — mismo criterio "por id real" que el resto de los
+   * métodos de listado de Ruteo (ver el comentario de
+   * abrirMenuAccionesOrdenRuteo()).
+   *
+   * Nota: bajo `fullyParallel`, todos los workers comparten la misma cuenta/
+   * sesión (ver el comentario de la fixture "pos" en pos-ruteo.spec.ts), así
+   * que dos workers podrían intentar seleccionar la MISMA orden "primera
+   * disponible" al mismo tiempo — un escenario que prefiere crear su propia
+   * orden evita ese riesgo por completo; este método es para cuando esa
+   * garantía no es necesaria.
+   */
+  async obtenerPrimeraOrdenRuteoSeleccionable(idAExcluir?: string): Promise<string> {
+    const selectorBase = idAExcluir
+      ? `[id^="${L.RUTEO_LISTA_TARJETA_PREFIJO}"]:not(#${L.RUTEO_LISTA_TARJETA_PREFIJO}${idAExcluir})`
+      : `[id^="${L.RUTEO_LISTA_TARJETA_PREFIJO}"]`;
+    const tarjetaConBoton = this.page
+      .locator(selectorBase)
+      .filter({ has: this.page.locator(L.RUTEO_LISTA_BTN_SELECCIONAR) })
+      .first();
+
+    await expect(
+      tarjetaConBoton,
+      `No se encontró ninguna Orden de Ruteo seleccionable (Pendiente de facturar)${idAExcluir ? ` distinta de #${idAExcluir}` : ''} en el listado`
+    ).toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+
+    const idCompleto = await tarjetaConBoton.getAttribute('id');
+    const ordenId = (idCompleto ?? '').replace(L.RUTEO_LISTA_TARJETA_PREFIJO, '');
+    expect(ordenId.length, `No se pudo extraer un id numérico del atributo id="${idCompleto}"`).toBeGreaterThan(0);
+    return ordenId;
+  }
+
+  /**
+   * Localiza el id real de la primera Orden de Ruteo del listado que
+   * actualmente tiene el estado de envío pedido (1=Pendiente, 2=En camino,
+   * 3=Entregado — mismo código que obtenerEstadoTarjetaRuteo() ya usa) —
+   * para escenarios que necesitan una orden YA EXISTENTE en un estado
+   * específico (p. ej. "En camino" para poder marcarla como "Entregado", o
+   * "Pendiente" para marcarla como "En camino") en vez de crear su propia
+   * orden y llevarla paso a paso hasta ese estado. No filtra por
+   * facturación: puede devolver una orden ya Facturada (ver
+   * obtenerPrimeraOrdenRuteoConEstadoYSeleccionable() para cuando también
+   * debe poder facturarse).
+   *
+   * Nota: filtra directamente sobre las tarjetas ya cargadas por su propia
+   * clase (mismo criterio que obtenerEstadoTarjetaRuteo()), sin pasar por
+   * los filtros reales FILTRO_RUTEO_* — evita el side-effect de dejar el
+   * listado en un filtro distinto de "Todos" para escenarios (12/13/14) que
+   * después necesitan localizar la MISMA orden por id sin importar el
+   * filtro activo (ya cubierto por asegurarOrdenRuteoVisibleEnListado()).
+   */
+  async obtenerPrimeraOrdenRuteoConEstado(estado: 1 | 2 | 3): Promise<string> {
+    const tarjetaConEstado = this.page
+      .locator(`[id^="${L.RUTEO_LISTA_TARJETA_PREFIJO}"].delivery-status-${estado}`)
+      .first();
+
+    await expect(
+      tarjetaConEstado,
+      `No se encontró ninguna Orden de Ruteo con estado de envío ${estado} en el listado`
+    ).toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+
+    const idCompleto = await tarjetaConEstado.getAttribute('id');
+    const ordenId = (idCompleto ?? '').replace(L.RUTEO_LISTA_TARJETA_PREFIJO, '');
+    expect(ordenId.length, `No se pudo extraer un id numérico del atributo id="${idCompleto}"`).toBeGreaterThan(0);
+    return ordenId;
+  }
+
+  /**
+   * Localiza el id real de la primera Orden de Ruteo que, dentro del filtro
+   * REAL "Pendientes"/"En Camino"/"Entregado" (FILTRO_RUTEO_*, botones con
+   * id técnico estable — corrige una conclusión anterior de este mismo
+   * archivo que los daba por una simple leyenda decorativa, confirmado en
+   * vivo que sí filtran), todavía puede seleccionarse para facturar (botón
+   * "Seleccionar órden" visible) — a diferencia de
+   * obtenerPrimeraOrdenRuteoConEstado() (no filtra por facturación) y de
+   * obtenerPrimeraOrdenRuteoSeleccionable() (no filtra por estado de
+   * envío), este combina ambos criterios: necesario para escenarios que
+   * piden explícitamente una orden de un estado de envío dado que además se
+   * pueda facturar de verdad (p. ej. una orden Entregada aún sin facturar).
+   * Restaura el filtro "Todos" antes de devolver el id, dejando el listado
+   * en el estado que el resto de la suite espera.
+   */
+  async obtenerPrimeraOrdenRuteoConEstadoYSeleccionable(estado: 1 | 2 | 3): Promise<string> {
+    const filtro = estado === 1 ? L.FILTRO_RUTEO_PENDIENTE : estado === 2 ? L.FILTRO_RUTEO_EN_CAMINO : L.FILTRO_RUTEO_ENTREGADO;
+    await this.page.locator(filtro).click();
+
+    const tarjetaConBoton = this.page
+      .locator(`[id^="${L.RUTEO_LISTA_TARJETA_PREFIJO}"]`)
+      .filter({ has: this.page.locator(L.RUTEO_LISTA_BTN_SELECCIONAR) })
+      .first();
+
+    await expect(
+      tarjetaConBoton,
+      `No se encontró ninguna Orden de Ruteo con estado de envío ${estado} que todavía pueda seleccionarse para facturar`
+    ).toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+
+    const idCompleto = await tarjetaConBoton.getAttribute('id');
+    const ordenId = (idCompleto ?? '').replace(L.RUTEO_LISTA_TARJETA_PREFIJO, '');
+    expect(ordenId.length, `No se pudo extraer un id numérico del atributo id="${idCompleto}"`).toBeGreaterThan(0);
+
+    await this.page.locator(L.FILTRO_RUTEO_TODOS).click();
+    return ordenId;
+  }
 
   /**
    * Selecciona ("Seleccionar órden") una Orden de Ruteo YA CREADA, localizada
@@ -6048,9 +6431,13 @@ export class PosPage {
    * "Facturado", L.RUTEO_LISTA_LBL_FACTURA) — independiente del estado de
    * envío (obtenerEstadoTarjetaRuteo()): una orden puede estar Entregada y
    * seguir con la factura Pendiente, o viceversa (ver el comentario de
-   * L.RUTEO_LISTA_LBL_FACTURA).
+   * L.RUTEO_LISTA_LBL_FACTURA). Antes de leerla, asegura que esté visible
+   * en la vista correcta (ver el comentario de
+   * asegurarOrdenRuteoVisibleEnListado()): una orden ya Entregada +
+   * Facturada vive en "H. de Órdenes", no en "Todos".
    */
   async obtenerEstadoFacturacionOrdenRuteo(ordenId: string): Promise<string> {
+    await this.asegurarOrdenRuteoVisibleEnListado(ordenId);
     const texto = await this.tarjetaRuteo(ordenId).locator(L.RUTEO_LISTA_LBL_FACTURA).textContent();
     return (texto ?? '').trim();
   }
@@ -7446,6 +7833,22 @@ export class PosPage {
   }
 
   /**
+   * Indica si la vista actual es la del catálogo abierto por
+   * abrirAgregarItem(): el botón "Volver" (IMPORTAR_FACTURA_BTN_VOLVER,
+   * #hide_btn_items) reemplaza a "AGREGAR ITEMS" en ese mismo lugar de la
+   * interfaz mientras esa vista está activa (ver el comentario de
+   * abrirAgregarItem()) y solo entonces. Útil para escenarios que deben
+   * confirmar que NUNCA entraron a ese flujo — confirmado en vivo que el
+   * catálogo de productos (L.PRODUCTO) sigue presente en el DOM y sus
+   * métodos de lectura (obtenerCodigoProducto()/obtenerPrimerProducto*())
+   * funcionan igual sin pasar por "Agregar Ítem", así que la sola presencia
+   * de esas tarjetas no basta para confirmar que se entró a ese flujo.
+   */
+  async seEncuentraEnVistaAgregarItem(): Promise<boolean> {
+    return this.page.locator(L.IMPORTAR_FACTURA_BTN_VOLVER).isVisible().catch(() => false);
+  }
+
+  /**
    * Presiona "Volver" (#hide_btn_items) para regresar de la vista de catálogo
    * (abierta con abrirAgregarItem()) a la pestaña de origen indicada, sin
    * perder ninguna línea ya cargada en el carrito — confirmado en vivo que
@@ -7587,8 +7990,22 @@ export class PosPage {
    * usado en el resto de la suite (crecimiento de L.CARRITO_CLAVES), sin
    * duplicar esa lógica de validación.
    */
-  async agregarProductoPorCodigoEnVistaExpandida(codigo: string): Promise<void> {
-    const clavesAntes = await this.obtenerClavesProductos();
+  async agregarProductoPorCodigoEnVistaExpandida(codigo: string, montoSiEsPorMonto = PRECIO_PRODUCTO_RAPIDO): Promise<void> {
+    // obtenerClavesFilasCarrito() (no obtenerClavesProductos()): confirmado
+    // en vivo (Escenario 16 de pos-ruteo.spec.ts, root-cause investigado a
+    // fondo, no asumido) que este método causaba un timeout de 120s
+    // permanente al buscar un producto sobre el carrito de una Orden de
+    // Ruteo ya cargada — el producto SÍ se agregaba correctamente (visible
+    // en el DOM, con su precio/código reales), pero obtenerClavesProductos()
+    // solo cuenta filas con id "drag_and_drop_" (ver su propio comentario:
+    // ausente en líneas IMPORTADAS, como las de una Orden de Ruteo/Caja/
+    // factura ya cargada) — con clavesAntes ya en 0 por ese motivo,
+    // clavesDespues también podía quedar en 0 si la fila recién agregada
+    // tampoco quedaba marcada así en este contexto, dejando la condición
+    // ">0" imposible de cumplir para siempre. obtenerClavesFilasCarrito()
+    // cubre ambos tipos de fila (documentado en su propio comentario) y es
+    // la fuente ya usada por el resto de la suite para este mismo problema.
+    const clavesAntes = await this.obtenerClavesFilasCarrito();
 
     const respuestaPromise = this.page.waitForResponse(
       (res) => res.url().includes(L.AJAX_BUSCADOR_INTERNO),
@@ -7598,8 +8015,32 @@ export class PosPage {
     await this.page.locator(L.BUSCADOR_INTERNO_VISTA_EXPANDIDA).press('Enter');
     await respuestaPromise;
 
+    // Modal "Monto a comprar" (ver L.DIALOG_MONTO_A_COMPRAR y el comentario
+    // de agregarProductoDelGridAlCarrito(), que ya maneja este mismo caso
+    // para el click directo del grid): confirmado en vivo (root-cause real,
+    // reportado en vivo por el usuario mientras corría este mismo
+    // escenario) que el buscador interno de Vista Expandida puede
+    // encontrar un producto que se vende "por monto"/peso y abrir este
+    // modal en vez de agregar la línea directo — sin manejarlo, el poll de
+    // abajo esperaría para siempre una línea que nunca llega porque el
+    // modal queda abierto sin confirmar. No es anticipable de antemano
+    // (mismo motivo ya documentado en L.DIALOG_MONTO_A_COMPRAR: no viene
+    // como argumento de add_to_table()), así que se espera con el timeout
+    // completo de PAYMENT_MODAL y se completa si aparece, igual criterio
+    // que la versión de grid.
+    const modalMontoACompra = this.page.locator(L.DIALOG_MONTO_A_COMPRAR);
+    const abrioModalMonto = await modalMontoACompra
+      .waitFor({ state: 'visible', timeout: TIMEOUTS.PAYMENT_MODAL })
+      .then(() => true)
+      .catch(() => false);
+    if (abrioModalMonto) {
+      await this.page.locator(L.MONTO_A_COMPRAR_INPUT_MONTO).fill(montoSiEsPorMonto);
+      await this.page.locator(L.MONTO_A_COMPRAR_BTN_CONFIRMAR).click();
+      await expect(modalMontoACompra, 'El modal "Monto a comprar" no se cerró tras presionar "Continuar"').toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    }
+
     await expect.poll(
-      async () => (await this.obtenerClavesProductos()).length,
+      async () => (await this.obtenerClavesFilasCarrito()).length,
       { timeout: TIMEOUTS.PRODUCTS_LOAD }
     ).toBeGreaterThan(clavesAntes.length);
   }

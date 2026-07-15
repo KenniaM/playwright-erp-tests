@@ -80,8 +80,16 @@ export const SUBMODULOS_TALLER_PRINCIPALES: SubmoduloTaller[] = [
     tituloEsperado: /reporte de [oó]rdenes/i,
     obtenerLocatorDeCarga: (page) => page.locator('#btn_toggle_advanced_filters'),
   },
-  // "Reporte de Inspección" queda fuera de este listado — ver hallazgo
-  // documentado junto a REPORTE_INSPECCION_ROTO más abajo.
+  {
+    // El <title> del documento en esta página es idéntico al de "Reporte de
+    // órdenes" ("Reporte de órdenes | Sistema Web ERP", confirmado en vivo)
+    // — no identifica la página, así que se omite `tituloEsperado` y se
+    // valida solo con el encabezado de contenido real, que sí es propio.
+    nombre: 'Reporte de Inspección',
+    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/reports/order_report_inspection',
+    rutaEsperada: 'order_report_inspection',
+    obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /reporte de inspecci[oó]n/i),
+  },
   {
     nombre: 'Listado de Vehículo',
     url: 'https://dev.designsoftcr.com/qa_talleralpha/public/reports/vehicle_report',
@@ -90,19 +98,6 @@ export const SUBMODULOS_TALLER_PRINCIPALES: SubmoduloTaller[] = [
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /reporte de veh[ií]culos/i),
   },
 ];
-
-/**
- * Hallazgo confirmado en vivo (dos veces, en aislamiento): "Reporte de
- * Inspección" no carga — el backend responde con un error de Laravel
- * ("Route [getOrderInspectionSearchReportExcel] not defined") en vez de
- * renderizar el reporte. El <title> queda vacío y el body muestra la página
- * "Whoops" de Laravel. Se documenta como hallazgo (mismo criterio que el tab
- * "Twilio" en panel-control.spec.ts) en vez de omitirlo silenciosamente.
- */
-export const REPORTE_INSPECCION_ROTO = {
-  nombre: 'Reporte de Inspección',
-  url: 'https://dev.designsoftcr.com/qa_talleralpha/public/reports/order_report_inspection',
-} as const;
 
 export const SUBMODULOS_TALLER_CONFIGURACION: SubmoduloTaller[] = [
   {
