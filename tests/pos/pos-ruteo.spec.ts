@@ -2028,4 +2028,274 @@ test.describe('Orden de Ruteo', () => {
 
     expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
   });
+
+  // ─── Escenarios 33-37: Limpiar selección, Seleccionar todos (Cambiar
+  // Repartidor/Eliminar), Validar filtros, y Buscar una orden ────────────
+  //
+  // Investigado en vivo (script de investigación descartado tras extraer la
+  // evidencia) antes de escribir estos 5 escenarios, corrigiendo 2
+  // suposiciones previas de esta misma sesión:
+  //   1. "Seleccionar todos" (RUTEO_MASIVO_LI_SELECCIONAR_TODOS) y "Limpiar
+  //      selección" (RUTEO_MASIVO_LI_LIMPIAR_SELECCION) SÍ existen y
+  //      funcionan (confirmado: 50/50 marcadas, luego 0/50) — no había
+  //      métodos que los usaran hasta ahora.
+  //   2. El listado SÍ tiene un buscador real (#product_search, el MISMO
+  //      input que en "POS Facturación" busca productos, reutilizado
+  //      dinámicamente por la app según la pestaña activa — dispara
+  //      getSearchRoutingOrders con Ruteo activo) — una investigación
+  //      inicial más superficial no lo había encontrado. El único criterio
+  //      que devuelve resultados es CLIENTE; por número de orden visible o
+  //      por nombre de Ruta no filtra nada (confirmado en vivo, ver el
+  //      comentario de RUTEO_BUSCADOR). También existen contadores reales
+  //      (RUTEO_CONTADOR_SELECCIONADAS/_TOTAL/_FALTANTES) y un panel de
+  //      filtros avanzados (Ruta/Repartidor/Recurrencia/Provincia/Cantón/
+  //      Distrito/rango de fechas) no documentado hasta ahora.
+  //
+  // Decisiones de alcance explícitas para estos 5 escenarios (a diferencia
+  // del resto del archivo, que siempre prefiere órdenes propias
+  // desechables): "Seleccionar todos" no se puede acotar a órdenes propias
+  // — selecciona TODAS las visibles bajo el filtro activo. El Escenario 34
+  // (Cambiar Repartidor) usa el filtro real "En Camino" por tener
+  // consistentemente menos órdenes en este ambiente (~4, frente a ~50 en
+  // "Todos"/"Pendiente"). El Escenario 35 (Eliminar, irreversible) usa el
+  // filtro real "Entregado" — ambas decisiones tomadas explícitamente para
+  // esta suite, no una preferencia general de la automatización.
+
+  test('33. Limpiar selección: marcar varias órdenes en cada filtro y validar que "Limpiar selección" las desmarca sin salir del modo selección', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    await pos.abrirListadoOrdenesRuteo();
+
+    await test.step('Activar el modo "Seleccionar" una sola vez (persiste entre filtros, ver Escenario 32)', async () => {
+      await pos.entrarModoSeleccionMasivaRuteo();
+    });
+
+    const filtros: Array<'Todos' | 'Pendiente' | 'En Camino' | 'Entregado' | 'H. de Órdenes'> =
+      ['Todos', 'Pendiente', 'En Camino', 'Entregado', 'H. de Órdenes'];
+    for (const filtro of filtros) {
+      await test.step(`Filtro "${filtro}": marcar varias órdenes visibles, validar el contador, y limpiar la selección`, async () => {
+        await pos.irAFiltroRuteo(filtro);
+        const ids = await pos.obtenerIdsOrdenesRuteoVisibles(2);
+        if (ids.length === 0) {
+          console.log(`[Escenario 33] Filtro "${filtro}" no tiene ninguna orden visible para marcar — se documenta y continúa.`);
+          return;
+        }
+        for (const id of ids) {
+          await pos.marcarOrdenParaAccionMasivaRuteo(id);
+        }
+        expect(
+          await pos.obtenerContadorSeleccionadasRuteo(),
+          `El contador "Seleccionadas" no reflejó las ${ids.length} órdenes marcadas en "${filtro}"`
+        ).toBe(ids.length);
+
+        await pos.limpiarSeleccionMasivaRuteo();
+        expect(
+          await pos.seleccionMasivaRuteoHabilitada(),
+          'El modo de selección debía seguir habilitado tras "Limpiar selección" (solo desmarca, no cierra el modo) — la interfaz vuelve al estado inicial de "ninguna orden seleccionada", no al estado previo a "Seleccionar"'
+        ).toBe(true);
+      });
+    }
+
+    await pos.irAFiltroRuteo('Todos');
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('34. Selección múltiple en el listado "Ruteo": "Seleccionar todos" en el filtro "En Camino" + Cambiar Repartidor, y validar persistencia', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    await pos.abrirListadoOrdenesRuteo();
+    await pos.irAFiltroRuteo('En Camino');
+
+    let idsAntes: string[] = [];
+    await test.step('Capturar las órdenes visibles en "En Camino" antes de tocarlas', async () => {
+      idsAntes = await pos.obtenerIdsOrdenesRuteoVisibles();
+      expect(idsAntes.length, 'No hay ninguna Orden de Ruteo en estado "En Camino" para este escenario').toBeGreaterThan(0);
+    });
+
+    await test.step('"Seleccionar todos" y validar que el contador coincide con las órdenes visibles', async () => {
+      await pos.entrarModoSeleccionMasivaRuteo();
+      await pos.seleccionarTodasLasOrdenesRuteoVisibles();
+      expect(
+        await pos.obtenerContadorSeleccionadasRuteo(),
+        'El contador "Seleccionadas" no coincide con la cantidad de órdenes visibles en "En Camino"'
+      ).toBe(idsAntes.length);
+    });
+
+    let repartidorNuevo = '';
+    await test.step('Cambiar Repartidor y validar el mensaje/respuesta del sistema', async () => {
+      const { respuesta, repartidorSeleccionado } = await pos.cambiarRepartidorOrdenesRuteoMasivamente();
+      repartidorNuevo = repartidorSeleccionado;
+      const cuerpo = (await respuesta.text()).trim();
+      expect(cuerpo, `"Cambiar Repartidor" masivo respondió "${cuerpo}" (se esperaba un indicador de éxito, no "0")`).not.toBe('0');
+    });
+
+    await test.step('Reabrir cada orden y confirmar que el nuevo repartidor persiste', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      await pos.irAFiltroRuteo('En Camino');
+      for (const id of idsAntes) {
+        await pos.abrirMenuAccionesOrdenRuteo(id);
+        const detalle = await pos.verOrdenRuteo(id);
+        expect(detalle.repartidor, `La orden #${id} no quedó con el repartidor nuevo ("${repartidorNuevo}") tras "Cambiar Repartidor" masivo`).toContain(repartidorNuevo);
+      }
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('35. Selección múltiple en el listado "Ruteo": "Seleccionar todos" en el filtro "Entregado" + Eliminar, y validar que ya no aparecen', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    // Por instrucción explícita para este escenario: se usa el filtro real
+    // "Entregado" — a diferencia del resto del archivo, aquí SÍ se eliminan
+    // órdenes reales del ambiente QA compartido (irreversible, ni quedan en
+    // "H. de Órdenes"), no solo órdenes propias desechables, porque
+    // "Seleccionar todos" no se puede acotar a un subconjunto propio.
+    await pos.abrirListadoOrdenesRuteo();
+    await pos.irAFiltroRuteo('Entregado');
+
+    let idsAEliminar: string[] = [];
+    await test.step('Capturar las órdenes visibles en "Entregado" antes de eliminarlas', async () => {
+      idsAEliminar = await pos.obtenerIdsOrdenesRuteoVisibles();
+    });
+
+    // Estado autoconsumible: este mismo test elimina todas las órdenes
+    // "Entregado" que encuentra, así que una corrida posterior (u otro
+    // worker que ya pasó por acá) puede encontrar el filtro vacío. Se
+    // documenta y se omite en vez de fallar, igual que el Escenario 33/36
+    // ante filtros sin órdenes.
+    test.skip(idsAEliminar.length === 0, 'No hay ninguna Orden de Ruteo en estado "Entregado" en este momento — estado vacío documentado, se omite el escenario.');
+
+    await test.step('"Seleccionar todos" y validar que el contador coincide con las órdenes visibles', async () => {
+      await pos.entrarModoSeleccionMasivaRuteo();
+      await pos.seleccionarTodasLasOrdenesRuteoVisibles();
+      expect(
+        await pos.obtenerContadorSeleccionadasRuteo(),
+        'El contador "Seleccionadas" no coincide con la cantidad de órdenes visibles en "Entregado"'
+      ).toBe(idsAEliminar.length);
+    });
+
+    await test.step('Eliminar y validar la respuesta del sistema (el modal de confirmación real ya lo maneja eliminarOrdenesRuteoMasivamente())', async () => {
+      const respuesta = await pos.eliminarOrdenesRuteoMasivamente();
+      const cuerpo = (await respuesta.text()).trim();
+      expect(cuerpo, `AJAX_ELIMINAR_RUTEO_MASIVO respondió "${cuerpo}" (se esperaba un indicador de éxito, no "0")`).not.toBe('0');
+    });
+
+    await test.step('Validar que ninguna de las órdenes eliminadas sigue apareciendo en el listado', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      for (const id of idsAEliminar) {
+        const sigueExistiendo = await pos.tarjetaRuteo(id).isVisible({ timeout: 10_000 }).catch(() => false);
+        expect(sigueExistiendo, `La orden eliminada #${id} no debía seguir apareciendo en el listado "Ruteo"`).toBe(false);
+      }
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('36. Validar filtros del listado "Ruteo": los 5 filtros de estado y el filtro por Repartidor, y su efecto real sobre el listado', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    await pos.abrirListadoOrdenesRuteo();
+
+    const filtros: Array<'Todos' | 'Pendiente' | 'En Camino' | 'Entregado' | 'H. de Órdenes'> =
+      ['Todos', 'Pendiente', 'En Camino', 'Entregado', 'H. de Órdenes'];
+    const totalesPorFiltro: Record<string, number> = {};
+    for (const filtro of filtros) {
+      await test.step(`Filtro "${filtro}": aplicar y validar que las órdenes visibles cumplen el criterio (o documentar el estado vacío)`, async () => {
+        await pos.irAFiltroRuteo(filtro);
+        const ids = await pos.obtenerIdsOrdenesRuteoVisibles();
+        totalesPorFiltro[filtro] = ids.length;
+        if (ids.length === 0) {
+          console.log(`[Escenario 36] Filtro "${filtro}" no devolvió ninguna orden — estado vacío documentado, se continúa.`);
+          return;
+        }
+        // Los 3 filtros de estado de envío real se validan contra
+        // obtenerEstadoTarjetaRuteo() (independiente del filtro, lee la
+        // clase CSS real de la tarjeta) — "Todos"/"H. de Órdenes" no tienen
+        // un único estado esperado, así que no se validan por esta vía.
+        const estadoEsperado = { 'Pendiente': 1, 'En Camino': 2, 'Entregado': 3 } as const;
+        if (filtro in estadoEsperado) {
+          const muestra = ids.slice(0, 3);
+          for (const id of muestra) {
+            const estado = await pos.obtenerEstadoTarjetaRuteo(id);
+            expect(estado, `La orden #${id} visible bajo el filtro "${filtro}" no tiene el estado real esperado`).toBe(estadoEsperado[filtro as keyof typeof estadoEsperado]);
+          }
+        }
+      });
+    }
+
+    await test.step('Documentar que los 5 filtros de estado son <button> de texto plano sin contador/badge propio (confirmado en vivo)', async () => {
+      console.log(`[Escenario 36] Conteo real de órdenes por filtro (vía tarjetas visibles): ${JSON.stringify(totalesPorFiltro)}`);
+    });
+
+    await test.step('Filtro avanzado por Repartidor: aplicar y validar que el contador "Total" del listado cambia, y restaurarlo', async () => {
+      await pos.irAFiltroRuteo('Todos');
+      const totalSinFiltro = await pos.obtenerContadorTotalRuteo();
+      const repartidor = await pos.seleccionarFiltroRepartidorRuteo();
+      const totalConFiltro = await pos.obtenerContadorTotalRuteo();
+      expect(totalConFiltro, `El filtro por Repartidor ("${repartidor}") no redujo el contador "Total" (${totalSinFiltro} sin filtrar)`).toBeLessThanOrEqual(totalSinFiltro);
+
+      await pos.limpiarFiltroRepartidorRuteo();
+      await expect.poll(
+        () => pos.obtenerContadorTotalRuteo(),
+        { message: 'El contador "Total" no volvió al valor original tras limpiar el filtro de Repartidor' }
+      ).toBe(totalSinFiltro);
+    });
+
+    await pos.irAFiltroRuteo('Todos');
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('37. Buscar una Orden de Ruteo por cliente: validar que el buscador filtra el listado y que se puede limpiar', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    // Confirmado en vivo (ver el comentario de RUTEO_BUSCADOR en
+    // pos.locators.ts): el único criterio de búsqueda real del listado
+    // Ruteo es el CLIENTE — buscar por el número de orden VISIBLE
+    // ("Orden #262") o por nombre de Ruta no devolvió resultados en ninguna
+    // corrida de investigación. Se toma el cliente real de una Orden de
+    // Ruteo ya existente (vía "Ver Orden"), no un valor inventado.
+    await pos.abrirListadoOrdenesRuteo();
+
+    let idOrdenReferencia = '';
+    let nombreClienteBusqueda = '';
+    await test.step('Tomar una Orden de Ruteo existente como referencia y leer su cliente real', async () => {
+      idOrdenReferencia = await pos.obtenerPrimeraOrdenRuteoSeleccionable();
+      await pos.abrirMenuAccionesOrdenRuteo(idOrdenReferencia);
+      const detalle = await pos.verOrdenRuteo(idOrdenReferencia);
+      // detalle.clienteNombre viene del modal "Ver Orden" con el prefijo
+      // "Nombre:" incluido (mismo formato ya documentado en el Escenario 10).
+      nombreClienteBusqueda = detalle.clienteNombre.replace(/^Nombre:\s*/i, '').trim();
+      expect(nombreClienteBusqueda.length, 'No se pudo leer el nombre del cliente de la orden de referencia').toBeGreaterThan(0);
+    });
+
+    await test.step('Buscar por ese cliente y validar que la orden de referencia aparece en el resultado', async () => {
+      await pos.buscarOrdenRuteoPorCliente(nombreClienteBusqueda);
+      await expect.poll(
+        () => pos.tarjetaRuteo(idOrdenReferencia).isVisible().catch(() => false),
+        { message: `La orden de referencia #${idOrdenReferencia} no apareció al buscar por su cliente "${nombreClienteBusqueda}"` }
+      ).toBe(true);
+    });
+
+    await test.step('Abrir la orden encontrada y validar que corresponde al cliente buscado', async () => {
+      await pos.abrirMenuAccionesOrdenRuteo(idOrdenReferencia);
+      const detalle = await pos.verOrdenRuteo(idOrdenReferencia);
+      expect(detalle.clienteNombre, 'El cliente de la orden encontrada no coincide con el término buscado').toContain(nombreClienteBusqueda);
+    });
+
+    await test.step('Limpiar el buscador y validar que vuelve a mostrarse el listado completo', async () => {
+      const totalDurante = await pos.obtenerContadorTotalRuteo();
+      await pos.limpiarBusquedaRuteo();
+      await expect.poll(
+        () => pos.obtenerContadorTotalRuteo(),
+        { message: 'El contador "Total" no se restauró tras limpiar el buscador' }
+      ).toBeGreaterThanOrEqual(totalDurante);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
 });

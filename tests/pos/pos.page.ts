@@ -724,6 +724,9 @@ export class PosPage {
   async irAFiltroRuteo(...args: Parameters<PosRuteo['irAFiltroRuteo']>) {
     return this.ruteo.irAFiltroRuteo(...args);
   }
+  async obtenerIdsOrdenesRuteoVisibles(...args: Parameters<PosRuteo['obtenerIdsOrdenesRuteoVisibles']>) {
+    return this.ruteo.obtenerIdsOrdenesRuteoVisibles(...args);
+  }
   get _btnAccionesMasivasRuteo() { return this.ruteo._btnAccionesMasivasRuteo; }
   async _abrirMenuAccionesMasivasRuteo(...args: Parameters<PosRuteo['_abrirMenuAccionesMasivasRuteo']>) {
     return this.ruteo._abrirMenuAccionesMasivasRuteo(...args);
@@ -736,6 +739,30 @@ export class PosPage {
   }
   async marcarOrdenParaAccionMasivaRuteo(...args: Parameters<PosRuteo['marcarOrdenParaAccionMasivaRuteo']>) {
     return this.ruteo.marcarOrdenParaAccionMasivaRuteo(...args);
+  }
+  async seleccionarTodasLasOrdenesRuteoVisibles(...args: Parameters<PosRuteo['seleccionarTodasLasOrdenesRuteoVisibles']>) {
+    return this.ruteo.seleccionarTodasLasOrdenesRuteoVisibles(...args);
+  }
+  async limpiarSeleccionMasivaRuteo(...args: Parameters<PosRuteo['limpiarSeleccionMasivaRuteo']>) {
+    return this.ruteo.limpiarSeleccionMasivaRuteo(...args);
+  }
+  async obtenerContadorSeleccionadasRuteo(...args: Parameters<PosRuteo['obtenerContadorSeleccionadasRuteo']>) {
+    return this.ruteo.obtenerContadorSeleccionadasRuteo(...args);
+  }
+  async obtenerContadorTotalRuteo(...args: Parameters<PosRuteo['obtenerContadorTotalRuteo']>) {
+    return this.ruteo.obtenerContadorTotalRuteo(...args);
+  }
+  async seleccionarFiltroRepartidorRuteo(...args: Parameters<PosRuteo['seleccionarFiltroRepartidorRuteo']>) {
+    return this.ruteo.seleccionarFiltroRepartidorRuteo(...args);
+  }
+  async limpiarFiltroRepartidorRuteo(...args: Parameters<PosRuteo['limpiarFiltroRepartidorRuteo']>) {
+    return this.ruteo.limpiarFiltroRepartidorRuteo(...args);
+  }
+  async buscarOrdenRuteoPorCliente(...args: Parameters<PosRuteo['buscarOrdenRuteoPorCliente']>) {
+    return this.ruteo.buscarOrdenRuteoPorCliente(...args);
+  }
+  async limpiarBusquedaRuteo(...args: Parameters<PosRuteo['limpiarBusquedaRuteo']>) {
+    return this.ruteo.limpiarBusquedaRuteo(...args);
   }
   async _confirmarModalAccionMasivaRuteo(...args: Parameters<PosRuteo['_confirmarModalAccionMasivaRuteo']>) {
     return this.ruteo._confirmarModalAccionMasivaRuteo(...args);

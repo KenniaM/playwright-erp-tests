@@ -698,6 +698,23 @@ export class PosRuteo {
   }
 
 
+  /**
+   * IDs reales de las tarjetas de Orden de Ruteo actualmente visibles bajo
+   * el filtro/búsqueda activos, en el orden en que aparecen en el DOM —
+   * genérico, no exige que sean "seleccionables para facturar" (a
+   * diferencia de obtenerPrimeraOrdenRuteoSeleccionable()): útil para
+   * escenarios de selección múltiple/filtros/búsqueda que solo necesitan
+   * CUALQUIER orden visible, sin importar su estado de facturación.
+   */
+  async obtenerIdsOrdenesRuteoVisibles(cantidad?: number): Promise<string[]> {
+    const ids = await this.page.locator(`[id^="${L.RUTEO_LISTA_TARJETA_PREFIJO}"]`).evaluateAll(
+      (els, prefijo) => els.map((e) => e.id.replace(prefijo, '')),
+      L.RUTEO_LISTA_TARJETA_PREFIJO
+    );
+    return cantidad ? ids.slice(0, cantidad) : ids;
+  }
+
+
   /** Cambia al filtro real indicado del listado "Ruteo" (ver el comentario de FILTRO_RUTEO_TODOS). */
   async irAFiltroRuteo(filtro: 'Todos' | 'Pendiente' | 'En Camino' | 'Entregado' | 'H. de Órdenes') {
     const selector = {
@@ -798,6 +815,126 @@ export class PosRuteo {
       this.page.locator(`#${checkboxId}`),
       `El checkbox de selección de la Orden de Ruteo #${ordenId} no quedó marcado`
     ).toBeChecked();
+  }
+
+
+  /**
+   * "Seleccionar todos" del menú "Acciones": marca TODAS las tarjetas
+   * actualmente visibles bajo el filtro real activo — confirmado en vivo
+   * (50/50 checkboxes marcados). No hay forma de acotarlo a un subconjunto
+   * propio: afecta cualquier orden real que esté visible en ese momento, no
+   * solo las creadas por el propio test — quien llama debe asegurarse de
+   * que el filtro activo sea uno donde eso sea aceptable (ver el comentario
+   * de cada escenario que lo usa en pos-ruteo.spec.ts). Requiere
+   * entrarModoSeleccionMasivaRuteo() ya activo.
+   */
+  async seleccionarTodasLasOrdenesRuteoVisibles() {
+    await this._abrirMenuAccionesMasivasRuteo();
+    await this.page.locator(L.RUTEO_MASIVO_LI_SELECCIONAR_TODOS).click();
+    await expect.poll(
+      () => this.obtenerContadorSeleccionadasRuteo(),
+      { message: '"Seleccionar todos" no marcó ninguna orden (el contador "Seleccionadas" siguió en 0)' }
+    ).toBeGreaterThan(0);
+  }
+
+
+  /**
+   * "Limpiar selección" del menú "Acciones": desmarca todas las órdenes
+   * actualmente seleccionadas (confirmado en vivo: 0/50 tras usarlo) sin
+   * salir del modo selección múltiple (los checkboxes y los 3 `<li>` de
+   * acción masiva siguen visibles — ver seleccionMasivaRuteoHabilitada()).
+   */
+  async limpiarSeleccionMasivaRuteo() {
+    await this._abrirMenuAccionesMasivasRuteo();
+    await this.page.locator(L.RUTEO_MASIVO_LI_LIMPIAR_SELECCION).click();
+    await expect.poll(
+      () => this.obtenerContadorSeleccionadasRuteo(),
+      { message: '"Limpiar selección" no dejó el contador "Seleccionadas" en 0' }
+    ).toBe(0);
+  }
+
+
+  /** Contador real "Seleccionadas" del listado Ruteo — se actualiza en vivo al marcar/desmarcar órdenes. */
+  async obtenerContadorSeleccionadasRuteo(): Promise<number> {
+    const texto = await this.page.locator(L.RUTEO_CONTADOR_SELECCIONADAS).textContent();
+    return parseInt(texto?.trim() ?? '0', 10) || 0;
+  }
+
+
+  /** Contador real "Total" del listado Ruteo — refleja el total de órdenes bajo el filtro/búsqueda activos, no solo las tarjetas ya renderizadas. */
+  async obtenerContadorTotalRuteo(): Promise<number> {
+    const texto = await this.page.locator(L.RUTEO_CONTADOR_TOTAL).textContent();
+    return parseInt(texto?.trim() ?? '0', 10) || 0;
+  }
+
+
+  /**
+   * Selecciona el primer Repartidor real disponible en el filtro avanzado
+   * "Seleccionar Repartidor" (Chosen, distinto del Chosen del modal de
+   * acción masiva) y espera a que el contador "Total" del listado responda
+   * — confirmado en vivo que sí dispara un filtrado real (246→222 en la
+   * investigación en vivo), no solo un cambio visual del propio Chosen.
+   */
+  async seleccionarFiltroRepartidorRuteo(): Promise<string> {
+    const totalAntes = await this.obtenerContadorTotalRuteo();
+    await this.core._seleccionarPrimeraOpcionChosen(L.RUTEO_FILTRO_REPARTIDOR_CHOSEN);
+    const repartidor = await this.core._obtenerTextoChosenSeleccionado(L.RUTEO_FILTRO_REPARTIDOR_CHOSEN);
+    await expect.poll(
+      () => this.obtenerContadorTotalRuteo(),
+      { message: `El filtro por Repartidor ("${repartidor}") no cambió el contador "Total" (seguía en ${totalAntes})` }
+    ).not.toBe(totalAntes);
+    return repartidor;
+  }
+
+
+  /**
+   * Restaura el filtro "Seleccionar Repartidor" a su placeholder (value="0").
+   * BUG DE AUTOMATIZACIÓN encontrado y corregido en vivo: `locator.selectOption()`
+   * exige que el `<select>` esté visible por defecto — este queda
+   * `display:none` de forma PERMANENTE (Chosen pinta la UI real encima), así
+   * que se colgó reintentando 10 minutos completos sin nunca reportar el
+   * fallo real. Mismo criterio ya usado en esta clase para checkboxes
+   * "outside of viewport" (ver RUTEO_MASIVO_CHECKBOX_PREFIJO): se asigna el
+   * valor vía evaluate() y se disparan los eventos reales (`change`, el que
+   * escucha el propio filtro; `chosen:updated`, el que usa la librería
+   * Chosen para refrescar su UI) en vez de depender de una acción de
+   * Playwright que requiere visibilidad.
+   */
+  async limpiarFiltroRepartidorRuteo() {
+    await this.page.locator(L.RUTEO_FILTRO_REPARTIDOR_SELECT).evaluate((select) => {
+      const el = select as HTMLSelectElement;
+      el.value = '0';
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      // @ts-expect-error — jQuery global de la app, no tipado en este proyecto.
+      if (window.jQuery) window.jQuery(el).trigger('chosen:updated');
+    });
+  }
+
+
+  /**
+   * Busca órdenes de Ruteo por CLIENTE usando el buscador real del listado
+   * (#product_search, reutilizado dinámicamente por la app — ver el
+   * comentario de RUTEO_BUSCADOR). Confirmado en vivo que `fill()` por sí
+   * solo no dispara la búsqueda: hace falta Enter (mismo criterio que
+   * recepcion.page.ts). Devuelve la respuesta cruda del AJAX real para que
+   * quien llama pueda inspeccionar su contenido si lo necesita (ej. "No se
+   * encontraron órdenes que mostrar").
+   */
+  async buscarOrdenRuteoPorCliente(termino: string): Promise<Response> {
+    const buscador = this.page.locator(L.RUTEO_BUSCADOR);
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_BUSCAR_RUTEO),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await buscador.fill(termino);
+    await buscador.press('Enter');
+    return respuestaPromise;
+  }
+
+
+  /** Limpia el buscador del listado Ruteo y espera la respuesta que restaura el listado completo. */
+  async limpiarBusquedaRuteo(): Promise<Response> {
+    return this.buscarOrdenRuteoPorCliente('');
   }
 
 

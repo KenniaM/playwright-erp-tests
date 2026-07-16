@@ -769,6 +769,66 @@ export const L = {
   // el comentario de `_cambiarMetodoPago()`): se marca vía `evaluate()`.
   RUTEO_MASIVO_CHECKBOX_PREFIJO:           'select_order_remove_',
 
+  // "Seleccionar todos"/"Limpiar selección" — mismo dropdown "Acciones" que
+  // RUTEO_MASIVO_LI_SELECCIONAR, confirmados en vivo volcando su HTML real
+  // (ambos `<li class="hide ...">` hasta que "Seleccionar" los revela, igual
+  // que Eliminar/Cambiar Repartidor/Enviar a Ruteo). "Seleccionar todos"
+  // marca TODAS las tarjetas actualmente visibles bajo el filtro real
+  // activo (no hay forma de acotarlo a un subconjunto propio) — confirmado
+  // en vivo: 50/50 checkboxes quedaron marcados. "Limpiar selección" solo
+  // desmarca (confirmado 0/50 tras usarlo); el modo selección en sí
+  // permanece activo, no hay que reabrir "Seleccionar".
+  RUTEO_MASIVO_LI_SELECCIONAR_TODOS:      'li[onclick="toggle_all_order_switches()"]',
+  RUTEO_MASIVO_LI_LIMPIAR_SELECCION:      'li[onclick="clear_selected_orders_quick()"]',
+
+  // Contadores reales del listado "Ruteo" (parte de #pos_routing_order_filter_content,
+  // visible siempre, no solo en modo selección) — confirmados en vivo:
+  // "Seleccionadas" refleja en tiempo real cuántas tarjetas están marcadas
+  // (0 fuera de modo selección o tras Limpiar selección); "Faltantes"/"Total"
+  // reflejan el total real de órdenes bajo el filtro/búsqueda activos —
+  // ambos cambiaron de 246→222 al aplicar un filtro por Repartidor en la
+  // investigación en vivo, confirmando que sí responden a filtros reales
+  // (no solo a las tarjetas ya renderizadas/paginadas en el DOM).
+  RUTEO_CONTADOR_SELECCIONADAS: '#orders_selected_count',
+  RUTEO_CONTADOR_TOTAL:         '#orders_total_count',
+  RUTEO_CONTADOR_FALTANTES:     '#orders_pending_count',
+
+  // Filtros avanzados reales del listado "Ruteo" (Chosen, misma fila que
+  // Ruta/Repartidor/Recurrencia, debajo de los 5 filtros de estado) —
+  // confirmados en vivo volcando el HTML completo de
+  // #pos_routing_order_filter_content. "Ruta" y "Repartidor" sí disparan un
+  // filtrado real del listado (confirmado: el contador total bajó al
+  // elegir un repartidor real). Provincia/Cantón/Distrito/Recurrencia/rango
+  // de fechas viven detrás de "Opciones Avanzadas" (BTN_RUTEO_FILTROS_AVANZADOS,
+  // oculto por defecto) — no se valida cada uno individualmente en esta
+  // suite, solo se documenta su existencia.
+  RUTEO_FILTRO_RUTA_CHOSEN:       '#filter_routing_order_route_select_chosen',
+  RUTEO_FILTRO_REPARTIDOR_CHOSEN: '#filter_routing_order_agent_assigned_chosen',
+  // <select> nativo detrás de cada Chosen — oculto (`display:none`, Chosen
+  // pinta la UI real), pero Playwright.selectOption() no requiere
+  // visibilidad y sí dispara el evento `change` real que restaura el
+  // filtro a su placeholder ("Seleccionar ruta"/"Seleccionar Repartidor").
+  RUTEO_FILTRO_RUTA_SELECT:       '#filter_routing_order_route_select',
+  RUTEO_FILTRO_REPARTIDOR_SELECT: '#filter_routing_order_agent_assigned',
+  BTN_RUTEO_FILTROS_AVANZADOS:    '#btn_toggle_advanced_filters',
+
+  // Buscador real del listado "Ruteo" — confirmado en vivo (NO es una
+  // suposición): es el MISMO input `#product_search` que en "POS
+  // Facturación" busca productos (placeholder " Buscar...."), reutilizado
+  // dinámicamente por la propia app según la pestaña activa — con "Ruteo"
+  // activo dispara `getSearchRoutingOrders` (confirmado interceptando la
+  // red) en vez de la búsqueda de productos. Mismo criterio ya documentado
+  // para `recepcion.page.ts`: dispara la búsqueda con la tecla Enter
+  // (`fill()` por sí solo, evento `input`, NO la activa — confirmado en
+  // vivo, timeout esperando la respuesta sin el `press('Enter')`).
+  // Confirmado en vivo qué criterios realmente filtran: por CLIENTE
+  // (ej. "CITA DE PRUEBA") sí devuelve resultados; por número de orden
+  // VISIBLE ("Orden #262") y por nombre de Ruta, no — el buscador parece
+  // limitarse a datos del cliente (nombre/correo/teléfono/dirección), no al
+  // consecutivo de la orden ni a metadatos de ruta.
+  RUTEO_BUSCADOR: '#product_search',
+  AJAX_BUSCAR_RUTEO: 'getSearchRoutingOrders',
+
   // "Enviar a Ruteo" y "Cambiar Repartidor" masivos reutilizan EL MISMO modal
   // (`#modal_change_sellers`, solo cambia su `data-mode`/título/endpoint según
   // cuál de los dos `<li>` lo abrió) — confirmado en vivo volcando su HTML
