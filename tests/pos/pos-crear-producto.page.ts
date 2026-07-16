@@ -7,6 +7,7 @@ import {
   CABYS_BUSQUEDA_SIN_IVA, PRECIO_PRODUCTO_RAPIDO, EscenarioDescuento, ResultadoDescuento,
   EstadoCheckIva, ConfigBusquedaCabys, LineaCarrito, MetadatoProducto, DASHBOARD_URL,
 } from './pos.types';
+import { esperarQuedaActivo } from './pos.utils';
 import { PosCore } from './pos-core.page';
 
 // Parte del plan de migración a composición: dominio "CREAR_PRODUCTO" extraído
@@ -488,6 +489,18 @@ export class PosCrearProducto {
    * Fraccionado: stock mínimo, descuento de proveedor, descuento máximo,
    * tipo de unidad y sección/sub sección (Chosen, primera opción real).
    *
+   * "Sección" (a diferencia de "Tipo de Unidad", confirmado en vivo que
+   * siempre está visible en este paso) puede no estar visible en absoluto
+   * según la configuración de la compañía — investigado en vivo (HONDURAS)
+   * volcando la estructura real del modal: el label y el Chosen completo de
+   * "Sección" quedan con `offsetParent === null`, no es un problema de
+   * timing/carga. Por eso usa _seleccionarPrimeraOpcionChosenSiEsPosible()
+   * (omite el campo si no aparece) en vez de la variante obligatoria — mismo
+   * criterio ya usado para CABYS y "Descuento de proveedor" en este wizard.
+   * "Sub sección" sigue con _seleccionarPrimeraOpcionChosenSiHayOpciones()
+   * (su Chosen SÍ está visible, pero depende de la Sección elegida para
+   * tener opciones reales).
+   *
    * "Descuento de proveedor" (#product_discount_app) se omite si no está
    * interactuable — confirmado en vivo (reproducido de forma determinística,
    * esperando hasta 120s sin recuperación): cuando el producto tiene un
@@ -505,8 +518,16 @@ export class PosCrearProducto {
     await this._llenarDescuentoProveedorSiEsPosible(descuentoProveedor);
     await this.page.locator(L.PRODUCTO_DESCUENTO_MAXIMO).fill(descuentoMaximo);
     await this.core._seleccionarPrimeraOpcionChosen(L.PRODUCTO_TIPO_UNIDAD_CHOSEN);
-    await this.core._seleccionarPrimeraOpcionChosen(L.PRODUCTO_SECCION_CHOSEN);
-    await this.core._seleccionarPrimeraOpcionChosenSiHayOpciones(L.PRODUCTO_SUBSECCION_CHOSEN);
+    // "Sub sección" depende de "Sección" (ver el comentario de
+    // _seleccionarPrimeraOpcionChosenSiHayOpciones()): si "Sección" no
+    // estaba visible y se omitió, "Sub sección" tampoco tiene razón para
+    // volverse visible — confirmado en vivo, por eso también usa la
+    // variante que primero confirma visibilidad del trigger, no solo la que
+    // asume el trigger visible y solo revisa si tiene opciones.
+    const seccionSeleccionada = await this.core._seleccionarPrimeraOpcionChosenSiEsPosible(L.PRODUCTO_SECCION_CHOSEN);
+    if (seccionSeleccionada) {
+      await this.core._seleccionarPrimeraOpcionChosenSiHayOpciones(L.PRODUCTO_SUBSECCION_CHOSEN);
+    }
   }
 
 
@@ -627,10 +648,31 @@ export class PosCrearProducto {
 
   /**
    * Avanza del paso "Costos" al paso "Desc. Producto" y espera la respuesta
-   * real de red (updateProductSteptwo) — confirmado en vivo interceptando
-   * la red.
+   * real de red (updateProductSteptwo).
+   *
+   * Estructura actual del wizard confirmada en vivo (HONDURAS, volcando el
+   * `<div class="actions">` real): el `<li>` de "Siguiente" puede quedar
+   * `aria-disabled="true"`/`display:none` mientras "Finalizar" ya está
+   * disponible directamente desde "Costos" — confirmado tanto con los
+   * campos mínimos (Producto Sencillo) como con todos los campos de
+   * "Costos" llenos (Producto Completo, incluidos los Chosen): no depende
+   * de qué tan completo esté el paso, es la estructura real de este wizard
+   * en este ambiente. Cuando eso ocurre, ya no hay paso "Desc. Producto"
+   * al que avanzar — este método lo detecta ANTES de clickear (nunca
+   * clickea un `<a>` deshabilitado a ciegas) y no hace nada, dejando que
+   * quien llama continúe directo con finalizarCrearProducto().
    */
   async avanzarPasoCostosProducto() {
+    const siguienteDisponible = await this.page
+      .locator(L.PRODUCTO_WIZARD_SIGUIENTE)
+      .locator('xpath=ancestor::li[1]')
+      .getAttribute('aria-disabled')
+      .then((v) => v !== 'true')
+      .catch(() => false);
+    if (!siguienteDisponible) {
+      console.log('[avanzarPasoCostosProducto] "Siguiente" no está disponible en este wizard (Finalizar ya accesible directo desde "Costos") — no hay paso "Desc. Producto" al que avanzar, se omite.');
+      return;
+    }
     const respuestaPromise = this.page.waitForResponse(
       (res) => res.url().includes(L.AJAX_GUARDAR_PRODUCTO_PASO2),
       { timeout: TIMEOUTS.PAYMENT_MODAL }
@@ -641,9 +683,20 @@ export class PosCrearProducto {
   }
 
 
-  /** Llena tamaño y descripción (paso "Desc. Producto", producto Completo/Fraccionado). */
+  /**
+   * Llena tamaño y descripción (paso "Desc. Producto", producto Completo/
+   * Fraccionado) — se omite si ese paso no está alcanzable en este wizard
+   * (ver el comentario de avanzarPasoCostosProducto()): sin paso al que
+   * haber avanzado, estos campos tampoco están visibles para llenarlos.
+   */
   async llenarDescripcionProducto(tamano: string, descripcion: string) {
-    await this.page.locator(L.PRODUCTO_TAMANO).fill(tamano);
+    const campoTamano = this.page.locator(L.PRODUCTO_TAMANO);
+    const visible = await campoTamano.isVisible({ timeout: 3_000 }).catch(() => false);
+    if (!visible) {
+      console.log('[llenarDescripcionProducto] El paso "Desc. Producto" no está visible en este wizard — se omite tamaño/descripción.');
+      return;
+    }
+    await campoTamano.fill(tamano);
     await this.page.locator(L.PRODUCTO_DESCRIPCION).fill(descripcion);
   }
 

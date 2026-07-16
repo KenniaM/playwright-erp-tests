@@ -7,6 +7,7 @@ import {
   CABYS_BUSQUEDA_SIN_IVA, PRECIO_PRODUCTO_RAPIDO, EscenarioDescuento, ResultadoDescuento,
   EstadoCheckIva, ConfigBusquedaCabys, LineaCarrito, MetadatoProducto, DASHBOARD_URL,
 } from './pos.types';
+import { esperarQuedaActivo } from './pos.utils';
 
 // Paso 1/9 de la migración a composición (ver el plan aprobado): helpers
 // realmente transversales del módulo POS, extraídos de pos.page.ts. Todo
@@ -2457,13 +2458,23 @@ export class PosCore {
    */
   async _seleccionarPrimeraOpcionChosen(contenedorChosenSelector: string) {
     const trigger = this.page.locator(`${contenedorChosenSelector} .chosen-single`);
+    // Espera explícita con timeout acotado (no el default del test, varios
+    // minutos) ANTES de intentar el scroll: sin este límite propio,
+    // scrollIntoViewIfNeeded() (sin actionTimeout configurado en el
+    // proyecto) reintentaba en silencio hasta agotar el timeout COMPLETO
+    // del test antes de reportar nada. Con este límite, si el trigger
+    // nunca aparece (p. ej. porque el campo no es aplicable en esta
+    // configuración — ver _seleccionarPrimeraOpcionChosenSiEsPosible() para
+    // el caso donde eso es esperado, no un error) el fallo se reporta
+    // rápido y con un mensaje claro en vez de colgar el test entero.
+    await expect(trigger, `El trigger del Chosen "${contenedorChosenSelector}" nunca quedó visible`).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
     // El menú desplegado de Chosen se posiciona relativo al trigger: si el
     // trigger queda fuera del viewport (confirmado en vivo en formularios
     // largos, p. ej. "Crear Producto" con "¿Fraccionar?" activado, que hace
     // el modal mucho más alto), el resultado también nace fuera del
     // viewport y el auto-scroll de Playwright nunca llega a alcanzarlo.
-    await trigger.scrollIntoViewIfNeeded();
-    await trigger.click();
+    await trigger.scrollIntoViewIfNeeded({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await trigger.click({ timeout: TIMEOUTS.PAYMENT_MODAL });
     // Excluir SIEMPRE `data-option-array-index="0"` (el placeholder real,
     // primera <option> de cada uno de estos <select> por convención de esta
     // app — mismo criterio que `option:not([value="0"])` ya usado en otros
@@ -2495,8 +2506,8 @@ export class PosCore {
    */
   async _seleccionarPrimeraOpcionChosenSiHayOpciones(contenedorChosenSelector: string) {
     const trigger = this.page.locator(`${contenedorChosenSelector} .chosen-single`);
-    await trigger.scrollIntoViewIfNeeded();
-    await trigger.click();
+    await trigger.scrollIntoViewIfNeeded({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await trigger.click({ timeout: TIMEOUTS.PAYMENT_MODAL });
     const opcion = this.page.locator(`${contenedorChosenSelector} .chosen-results li:not(.result-selected)`).first();
     const hayOpcion = await opcion.isVisible({ timeout: 3_000 }).catch(() => false);
     if (hayOpcion) {
@@ -2505,6 +2516,28 @@ export class PosCore {
       // Cerrar el Chosen desplegado sin elegir nada, presionando Escape.
       await this.page.keyboard.press('Escape');
     }
+  }
+
+  /**
+   * Otra variante de _seleccionarPrimeraOpcionChosen(), para campos cuya
+   * SECCIÓN COMPLETA (label + Chosen) puede no estar visible en absoluto
+   * según la configuración de la compañía/país — a diferencia de
+   * _seleccionarPrimeraOpcionChosenSiHayOpciones() (el trigger SÍ está
+   * visible, pero su catálogo de opciones puede venir vacío), aquí el
+   * propio trigger puede no llegar a renderizarse. Confirmado en vivo
+   * (HONDURAS): "Sección" (a diferencia de "Tipo de Unidad", siempre
+   * visible en el mismo paso "Costos" de "Crear Producto") queda oculta —
+   * mismo criterio ya usado para CABYS y "Descuento de proveedor" en este
+   * wizard: se intenta con un timeout corto propio y, si no aparece, se
+   * omite en vez de fallar (no es un error, es un campo no aplicable en
+   * esta configuración).
+   */
+  async _seleccionarPrimeraOpcionChosenSiEsPosible(contenedorChosenSelector: string): Promise<boolean> {
+    const trigger = this.page.locator(`${contenedorChosenSelector} .chosen-single`);
+    const visible = await trigger.isVisible({ timeout: 5_000 }).catch(() => false);
+    if (!visible) return false;
+    await this._seleccionarPrimeraOpcionChosen(contenedorChosenSelector);
+    return true;
   }
 
 
