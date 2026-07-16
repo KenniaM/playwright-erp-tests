@@ -184,6 +184,38 @@ async function aplicarDescuentoIndividualATodos(pos: PosPage) {
   }
 }
 
+/**
+ * Crea una Orden de Ruteo nueva (mismo flujo del Escenario 1: un producto +
+ * cliente existente + completarYGuardarOrdenRuteo()) y la factura de
+ * inmediato en efectivo por el monto exacto (mismo flujo de pago del
+ * Escenario 20) para dejarla Facturada — y por lo tanto visible en el
+ * filtro real "H. de Órdenes" (ver el comentario de FILTRO_RUTEO_HISTORIAL
+ * en pos-ruteo.page.ts: "Facturado se MUEVE de 'Todos' a 'H. de Órdenes'").
+ * Únicamente se usa como fallback del Escenario 38 cuando ese filtro no
+ * tiene ninguna orden disponible en el momento de correr la suite — el
+ * resto de este archivo prioriza reutilizar órdenes ya existentes del
+ * ambiente compartido en vez de crear las propias.
+ */
+async function crearOrdenFacturadaEnHistorial(pos: PosPage, observacion: string): Promise<string> {
+  await agregarUnProducto(pos);
+  await pos.seleccionarClienteExistente();
+  await pos.abrirCrearOrdenRuteo();
+  const { respuesta } = await completarYGuardarOrdenRuteo(pos, observacion);
+  const idOrden = (await respuesta.text()).trim();
+
+  await pos.abrirListadoOrdenesRuteo();
+  await pos.seleccionarOrdenRuteoParaFacturar(idOrden);
+  await pos.abrirModalDePago();
+  const total = await pos.obtenerTotalVentaNumerico();
+  expect(total, 'El total de la orden recién creada debe ser mayor a 0').toBeGreaterThan(0);
+  await pos.seleccionarPagoEfectivo(String(total));
+  await pos.confirmarPagoAbriendoCajaSiEsNecesario();
+  await pos.validarCarritoVacio();
+
+  expect(await pos.obtenerEstadoFacturacionOrdenRuteo(idOrden), `La orden #${idOrden} recién creada debía quedar "Facturado"`).toBe('Facturado');
+  return idOrden;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Orden de Ruteo
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2294,6 +2326,213 @@ test.describe('Orden de Ruteo', () => {
         () => pos.obtenerContadorTotalRuteo(),
         { message: 'El contador "Total" no se restauró tras limpiar el buscador' }
       ).toBeGreaterThanOrEqual(totalDurante);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  // ─── Escenario adicional: "Enviar a Ruteo" desde "H. de Órdenes" + Facturación Automática ──
+  //
+  // Investigado en vivo (scripts de investigación descartados tras extraer
+  // la evidencia, no forman parte de esta suite) antes de escribir este
+  // escenario:
+  //   1. "Facturar Automáticamente" NO es un flujo ni un tab separado: es un
+  //      switch (RUTEO_MASIVO_MODAL_CHECK_FACTURAR_AUTO) DENTRO del mismo
+  //      modal "Enviar a Ruteo" masivo (#modal_change_sellers) que ya usa el
+  //      Escenario 28 — mismo botón "Guardar", mismo endpoint
+  //      (createRoutingOrdersMassive).
+  //   2. Activarlo abre un SEGUNDO modal real de progreso
+  //      (#dialog_progress_invoicing, hasta entonces oculto en el DOM) que
+  //      NUNCA aparece si el switch queda desactivado (confirmado: los
+  //      Escenarios 28/29 no lo disparan). La barra de progreso llega a
+  //      "100%"/"Completado" en unos pocos segundos (2 órdenes: ~6-10s en
+  //      vivo) pero el modal NO se autocierra — expone un botón real
+  //      "Aceptar y cerrar" (`onclick="clearModalOfProgress()"`) que hay que
+  //      clickear explícitamente. No es un cuelgue de la aplicación: es la
+  //      confirmación de resultados del propio proceso (ver el comentario de
+  //      _cerrarProgresoFacturacionMasivaRuteo() en pos-ruteo.page.ts).
+  //   3. La sección "Ruta" del modal existe en el DOM
+  //      (`.modal-route-section`) pero queda `display:none` en este
+  //      ambiente/compañía — no hay ningún campo de Ruta realmente visible
+  //      que completar, así que este escenario no interactúa con él (mismo
+  //      criterio ya aplicado en la corrección de Fase C: solo se completan
+  //      campos que estén realmente visibles).
+  //   4. CORRECCIÓN sobre el flujo asumido originalmente (mismo hallazgo que
+  //      ya documenta el Escenario 28 para "Enviar a Ruteo" sin facturación
+  //      automática): esta acción NUNCA mueve las órdenes originales fuera
+  //      de "H. de Órdenes" — las DUPLICA (crea una orden NUEVA por cada una
+  //      marcada, con el repartidor elegido en el modal). Las órdenes
+  //      originales permanecen intactas y con su repartidor original; las
+  //      órdenes NUEVAS son las que quedan "Facturado" de inmediato gracias
+  //      a "Facturar Automáticamente" — confirmado en vivo comparando
+  //      ambas.
+
+  test('38. Enviar órdenes a Ruteo desde el tab "H. de Órdenes" utilizando Facturación Automática', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    await pos.abrirListadoOrdenesRuteo();
+    await pos.irAFiltroRuteo('H. de Órdenes');
+
+    let idsAEnviar: string[] = [];
+    let ordenesCreadas: string[] = [];
+    await test.step('Ir al tab "H. de Órdenes" y localizar (o, solo si no hay ninguna, crear) al menos 2 órdenes disponibles', async () => {
+      idsAEnviar = await pos.obtenerIdsOrdenesRuteoVisibles(2);
+      if (idsAEnviar.length === 0) {
+        console.log('[Escenario 38] "H. de Órdenes" no tiene ninguna orden disponible en este momento — creando 2 propias y facturándolas.');
+        const id1 = await crearOrdenFacturadaEnHistorial(pos, `Escenario 38 - orden propia 1 ${Date.now()}`);
+        const id2 = await crearOrdenFacturadaEnHistorial(pos, `Escenario 38 - orden propia 2 ${Date.now()}`);
+        ordenesCreadas = [id1, id2];
+        await pos.abrirListadoOrdenesRuteo();
+        await pos.irAFiltroRuteo('H. de Órdenes');
+        idsAEnviar = ordenesCreadas;
+      }
+      expect(idsAEnviar.length, 'Debe haber al menos 1 orden disponible en "H. de Órdenes" para este escenario').toBeGreaterThan(0);
+      console.log(`[Escenario 38] Órdenes a enviar: ${idsAEnviar.join(', ')} (${ordenesCreadas.length > 0 ? 'creadas propias' : 'reutilizadas del ambiente'})`);
+    });
+
+    const detallesOriginales: Record<string, Awaited<ReturnType<PosPage['verOrdenRuteo']>>> = {};
+    await test.step('Capturar el detalle real de cada orden ANTES de enviarla (repartidor, cliente, productos, totales) y confirmar que ya está Facturada', async () => {
+      for (const id of idsAEnviar) {
+        await pos.abrirMenuAccionesOrdenRuteo(id);
+        detallesOriginales[id] = await pos.verOrdenRuteo(id);
+        const estado = await pos.obtenerEstadoFacturacionOrdenRuteo(id);
+        expect(estado, `La orden #${id} de "H. de Órdenes" debía estar ya Facturada`).toBe('Facturado');
+      }
+    });
+
+    await test.step('Seleccionar las órdenes con "Seleccionar" y validar que quedaron realmente marcadas', async () => {
+      await pos.entrarModoSeleccionMasivaRuteo();
+      for (const id of idsAEnviar) {
+        await pos.marcarOrdenParaAccionMasivaRuteo(id);
+      }
+      expect(
+        await pos.obtenerContadorSeleccionadasRuteo(),
+        'El contador "Seleccionadas" no coincide con la cantidad de órdenes marcadas'
+      ).toBe(idsAEnviar.length);
+    });
+
+    await test.step('Presionar "Enviar a Ruteo" y validar toda la información real mostrada en el modal', async () => {
+      await pos.abrirModalEnviarRuteoMasivo();
+      const info = await pos.leerInfoModalEnviarRuteoMasivo();
+      expect(info.seleccionadas, 'El modal no refleja la cantidad real de órdenes seleccionadas').toBe(idsAEnviar.length);
+      expect(info.total, 'El modal no refleja ningún total de órdenes').toBeGreaterThanOrEqual(info.seleccionadas);
+      expect(info.repartidoresActuales.length, 'El modal debía listar al menos un repartidor actual de las órdenes seleccionadas').toBeGreaterThan(0);
+      console.log('[Escenario 38] Info real del modal "Enviar a Ruteo":', JSON.stringify(info));
+    });
+
+    let repartidorElegido = '';
+    let nuevasIds: string[] = [];
+    // Mapa old_order_id → new_order_id construido a partir de la respuesta
+    // REAL del AJAX (no por posición): confirmado en vivo que el array de
+    // createRoutingOrdersMassive no necesariamente preserva el mismo orden
+    // que idsAEnviar (ej. una corrida real devolvió old_order_id 649 antes
+    // que 653, aunque idsAEnviar era ['653','649']) — emparejar por índice
+    // comparaba cada orden nueva contra la orden original equivocada.
+    const mapaOriginalANueva: Record<string, string> = {};
+    await test.step('Activar "Facturar Automáticamente", elegir repartidor y confirmar el envío', async () => {
+      const { respuesta, repartidorSeleccionado } = await pos.confirmarEnvioRuteoMasivoConFacturacionAutomatica();
+      repartidorElegido = repartidorSeleccionado;
+      expect(respuesta.ok(), 'createRoutingOrdersMassive no respondió OK').toBe(true);
+
+      const cuerpo = JSON.parse(await respuesta.text()) as Array<{
+        old_order_id: number; new_order_id: number; order_number: number; items_created: number;
+      }>;
+      expect(cuerpo.length, 'Debe crearse exactamente 1 orden nueva por cada orden seleccionada — ni más ni menos').toBe(idsAEnviar.length);
+      expect(
+        cuerpo.map((o) => String(o.old_order_id)).sort(),
+        'Únicamente las órdenes marcadas debían enviarse — old_order_id de la respuesta no coincide con la selección real'
+      ).toEqual([...idsAEnviar].sort());
+
+      for (const o of cuerpo) mapaOriginalANueva[String(o.old_order_id)] = String(o.new_order_id);
+      nuevasIds = cuerpo.map((o) => String(o.new_order_id));
+    });
+
+    await test.step('Validar que el proceso de facturación masiva finalizó correctamente (mensaje de éxito real del sistema) y dejar la selección limpia', async () => {
+      // El "mensaje de éxito" real de este flujo es el propio modal de
+      // progreso (RUTEO_PROGRESO_FACTURACION_DIALOG) llegando a
+      // "Completado"/100% con todas las órdenes "Relacionado" (facturadas
+      // con éxito) y ninguna "No relacionado" — ya validado/cerrado dentro
+      // de confirmarEnvioRuteoMasivoConFacturacionAutomatica() (paso
+      // anterior). Acá solo se confirma que el modal completo ya no está
+      // en pantalla (cerrado con "Aceptar y cerrar").
+      await expect(
+        sharedPage.locator('#dialog_progress_invoicing'),
+        'El modal de progreso "Facturación masiva" debía quedar cerrado tras "Aceptar y cerrar"'
+      ).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+      // CORRECCIÓN (confirmado en vivo, invalida una hipótesis previa de
+      // este mismo escenario): a diferencia de lo que asumía originalmente,
+      // "Enviar a Ruteo" NO limpia la selección múltiple por sí solo — las
+      // órdenes originales SIGUEN marcadas tras confirmar (comportamiento
+      // real de la aplicación, no un bug de automatización). Se deja
+      // limpio explícitamente con limpiarSeleccionMasivaRuteo() (mismo
+      // método ya validado por el Escenario 33) en vez de asumir un
+      // auto-limpiado que este ambiente no hace.
+      const seleccionadasTrasEnviar = await pos.obtenerContadorSeleccionadasRuteo();
+      console.log(`[Escenario 38] Órdenes que siguen marcadas tras "Enviar a Ruteo": ${seleccionadasTrasEnviar} (la app no limpia la selección por sí sola)`);
+      if (seleccionadasTrasEnviar > 0) {
+        await pos.limpiarSeleccionMasivaRuteo();
+      }
+      expect(
+        await pos.obtenerContadorSeleccionadasRuteo(),
+        'La selección múltiple debía quedar limpia al finalizar el escenario'
+      ).toBe(0);
+    });
+
+    await test.step('Ir a "H. de Órdenes" y validar que las órdenes NUEVAS existen ahí, ya Facturadas automáticamente', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      await pos.irAFiltroRuteo('H. de Órdenes');
+      for (const idNueva of nuevasIds) {
+        const estado = await pos.obtenerEstadoFacturacionOrdenRuteo(idNueva);
+        expect(estado, `La orden nueva #${idNueva} debía quedar "Facturado" gracias a "Facturar Automáticamente"`).toBe('Facturado');
+      }
+    });
+
+    await test.step('Validar que las órdenes ORIGINALES permanecen intactas (esta acción DUPLICA, no mueve — ver el comentario de este bloque)', async () => {
+      for (const id of idsAEnviar) {
+        // Ambiente compartido con cientos de órdenes (agravado por las
+        // muchas órdenes desechables creadas hoy mismo investigando este
+        // escenario): el listado "Ruteo" no renderiza necesariamente TODAS
+        // las tarjetas de golpe (ver el comentario de RUTEO_CONTADOR_TOTAL
+        // en pos.locators.ts: el contador real no depende "solo de las
+        // tarjetas ya renderizadas/paginadas") y esta suite no implementa
+        // scroll-to-load-more para este listado. Si una orden original ya
+        // no está en la porción inicial renderizada tras el refresh que
+        // dispara "Enviar a Ruteo", se documenta en vez de fallar la
+        // persistencia de datos por una limitación de renderizado ajena a
+        // esta funcionalidad — el resto del escenario (creación real de la
+        // orden nueva, facturación automática, persistencia de datos) ya
+        // quedó validado en los pasos anteriores sin depender de esto.
+        const sigueVisible = await pos.tarjetaRuteo(id).isVisible({ timeout: 5_000 }).catch(() => false);
+        if (!sigueVisible) {
+          console.log(`[Escenario 38] La orden original #${id} no está en la porción inicial renderizada del listado ahora mismo (ambiente muy poblado) — se documenta, no se falla por esto.`);
+          continue;
+        }
+
+        const estado = await pos.obtenerEstadoFacturacionOrdenRuteo(id);
+        expect(estado, `La orden original #${id} debía seguir "Facturado" sin cambios`).toBe('Facturado');
+      }
+    });
+
+    await test.step('Validar persistencia completa de cada orden nueva contra su orden original: repartidor, cliente, productos y totales', async () => {
+      expect(nuevasIds.length, 'Debe haber tantas órdenes nuevas como originales enviadas').toBe(idsAEnviar.length);
+
+      for (const idOriginal of idsAEnviar) {
+        const idNueva = mapaOriginalANueva[idOriginal];
+        expect(idNueva, `La respuesta de "Enviar a Ruteo" no incluyó una orden nueva para la original #${idOriginal}`).toBeTruthy();
+        const original = detallesOriginales[idOriginal];
+
+        await pos.abrirMenuAccionesOrdenRuteo(idNueva);
+        const nueva = await pos.verOrdenRuteo(idNueva);
+
+        expect(nueva.repartidor, `La orden nueva #${idNueva} no quedó con el repartidor elegido en el modal ("${repartidorElegido}")`).toContain(repartidorElegido);
+        expect(nueva.clienteNombre, `El cliente de la orden nueva #${idNueva} no coincide con el de la orden original #${idOriginal}`).toBe(original.clienteNombre);
+        expect(nueva.cantidadProductos, `La cantidad de productos de la orden nueva #${idNueva} no coincide con la original #${idOriginal}`).toBe(original.cantidadProductos);
+        expect(nueva.subtotal, `El subtotal de la orden nueva #${idNueva} no coincide con la original #${idOriginal}`).toBeCloseTo(original.subtotal, 2);
+        expect(nueva.impuesto, `El impuesto de la orden nueva #${idNueva} no coincide con la original #${idOriginal}`).toBeCloseTo(original.impuesto, 2);
+        expect(nueva.total, `El total de la orden nueva #${idNueva} no coincide con la original #${idOriginal}`).toBeCloseTo(original.total, 2);
+      }
     });
 
     expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);

@@ -869,6 +869,40 @@ export const L = {
   AJAX_CAMBIAR_REPARTIDOR_MASIVO:         'changeSellerOrderRouting',
   AJAX_ELIMINAR_RUTEO_MASIVO:             'deleteRoutingOrders',
 
+  // Switch "Facturar Automáticamente" (checkbox-slider, mismo patrón que el
+  // resto de checkboxes de esta suite — ver _asegurarCheckboxEstado()) dentro
+  // del mismo modal `#modal_change_sellers` de "Enviar a Ruteo". Investigado
+  // en vivo volcando el HTML real del modal: la sección "Ruta"
+  // (`.modal-route-section`) existe en el DOM pero queda `display:none` en
+  // este ambiente/compañía — no hay ningún campo de Ruta realmente visible
+  // que completar en este flujo, así que ningún método interactúa con ella.
+  //
+  // Confirmado en vivo (root-cause real, no asumido) que activar este switch
+  // abre un modal de progreso SEPARADO (RUTEO_PROGRESO_FACTURACION_DIALOG,
+  // `#dialog_progress_invoicing`, ya existente en el DOM antes de abrir
+  // "Enviar a Ruteo" pero oculto) tras guardar — nunca aparece si el switch
+  // queda desactivado (confirmado: los Escenarios 28/29 de "Enviar a
+  // Ruteo"/"Cambiar Repartidor" sin este switch nunca lo disparan). La barra
+  // de progreso real (RUTEO_PROGRESO_FACTURACION_LABEL, `#progress-label`)
+  // llega a "100%" en unos pocos segundos (2 órdenes: ~6-10s en vivo) pero el
+  // modal NO se autocierra: expone un botón real "Aceptar y cerrar"
+  // (RUTEO_PROGRESO_FACTURACION_BTN_CERRAR, `#close-progress-modal`,
+  // `onclick="clearModalOfProgress()"`) que hay que clickear explícitamente
+  // — comportamiento intencional del propio modal (confirmación de
+  // resultados), no un cuelgue de la aplicación.
+  RUTEO_MASIVO_MODAL_CHECK_FACTURAR_AUTO: '#ck_auto_invoice_orders',
+  RUTEO_PROGRESO_FACTURACION_DIALOG:      '#dialog_progress_invoicing',
+  RUTEO_PROGRESO_FACTURACION_LABEL:       '#progress-label',
+  RUTEO_PROGRESO_FACTURACION_BTN_CERRAR:  '#close-progress-modal',
+
+  // Panel informativo del propio modal "Enviar a Ruteo" masivo (contadores +
+  // repartidores actuales de las órdenes marcadas) — confirmado en vivo,
+  // mismo volcado de HTML que el resto de constantes RUTEO_MASIVO_MODAL_*.
+  RUTEO_MASIVO_MODAL_LBL_SELECCIONADAS: '#modal_selected_orders',
+  RUTEO_MASIVO_MODAL_LBL_FALTANTES:     '#modal_pending_orders',
+  RUTEO_MASIVO_MODAL_LBL_TOTAL:         '#modal_total_orders',
+  RUTEO_MASIVO_MODAL_LISTA_REPARTIDORES: '#modal_current_sellers_list > div',
+
   // "Imprimir"/"Descargar PDF" del mismo menú "Acciones" — confirmado en vivo
   // que AMBOS invocan la misma función `printReportRoutingPDF()` (solo cambia
   // `data-mode`, 0=Imprimir/1=Descargar PDF) y que el documento generado es

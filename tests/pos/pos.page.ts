@@ -767,8 +767,20 @@ export class PosPage {
   async _confirmarModalAccionMasivaRuteo(...args: Parameters<PosRuteo['_confirmarModalAccionMasivaRuteo']>) {
     return this.ruteo._confirmarModalAccionMasivaRuteo(...args);
   }
+  async abrirModalEnviarRuteoMasivo(...args: Parameters<PosRuteo['abrirModalEnviarRuteoMasivo']>) {
+    return this.ruteo.abrirModalEnviarRuteoMasivo(...args);
+  }
+  async leerInfoModalEnviarRuteoMasivo(...args: Parameters<PosRuteo['leerInfoModalEnviarRuteoMasivo']>) {
+    return this.ruteo.leerInfoModalEnviarRuteoMasivo(...args);
+  }
   async enviarOrdenesRuteoMasivamente(...args: Parameters<PosRuteo['enviarOrdenesRuteoMasivamente']>) {
     return this.ruteo.enviarOrdenesRuteoMasivamente(...args);
+  }
+  async enviarOrdenesRuteoMasivamenteConFacturacionAutomatica(...args: Parameters<PosRuteo['enviarOrdenesRuteoMasivamenteConFacturacionAutomatica']>) {
+    return this.ruteo.enviarOrdenesRuteoMasivamenteConFacturacionAutomatica(...args);
+  }
+  async confirmarEnvioRuteoMasivoConFacturacionAutomatica(...args: Parameters<PosRuteo['confirmarEnvioRuteoMasivoConFacturacionAutomatica']>) {
+    return this.ruteo.confirmarEnvioRuteoMasivoConFacturacionAutomatica(...args);
   }
   async cambiarRepartidorOrdenesRuteoMasivamente(...args: Parameters<PosRuteo['cambiarRepartidorOrdenesRuteoMasivamente']>) {
     return this.ruteo.cambiarRepartidorOrdenesRuteoMasivamente(...args);

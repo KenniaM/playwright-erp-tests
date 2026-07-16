@@ -948,12 +948,23 @@ export class PosRuteo {
    * endpoints NO tienen el mismo contrato de éxito/fallo, ver el comentario
    * de RUTEO_MASIVO_MODAL) y el nombre del repartidor elegido.
    */
-  async _confirmarModalAccionMasivaRuteo(fragmentoUrlAjax: string): Promise<{ respuesta: Response; repartidorSeleccionado: string }> {
+  async _confirmarModalAccionMasivaRuteo(
+    fragmentoUrlAjax: string,
+    activarFacturacionAutomatica = false
+  ): Promise<{ respuesta: Response; repartidorSeleccionado: string }> {
     const modal = this.page.locator(L.RUTEO_MASIVO_MODAL);
     await expect(
       modal,
       'El modal de acción masiva del listado Ruteo ("Enviar a Ruteo"/"Cambiar Repartidor") no se abrió'
     ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    if (activarFacturacionAutomatica) {
+      await this.core._asegurarCheckboxEstado(
+        this.page.locator(L.RUTEO_MASIVO_MODAL_CHECK_FACTURAR_AUTO),
+        'ck_auto_invoice_orders',
+        true
+      );
+    }
 
     // _seleccionarPrimeraOpcionChosen() (NO un `.chosen-results li` "a mano"):
     // confirmado en vivo (root-cause real, no asumido — mismo hallazgo ya
@@ -973,7 +984,75 @@ export class PosRuteo {
     await this.page.locator(L.RUTEO_MASIVO_MODAL_BTN_GUARDAR).click();
     const respuesta = await respuestaPromise;
 
+    if (activarFacturacionAutomatica) {
+      await this._cerrarProgresoFacturacionMasivaRuteo();
+    }
+
     return { respuesta, repartidorSeleccionado };
+  }
+
+
+  /**
+   * Cierra el modal de progreso "Facturación masiva" (RUTEO_PROGRESO_FACTURACION_DIALOG)
+   * que "Enviar a Ruteo" abre cuando "Facturar Automáticamente" queda
+   * activado (ver el comentario de RUTEO_MASIVO_MODAL_CHECK_FACTURAR_AUTO).
+   * Espera la condición real (la barra llega a "100%"), no un tiempo fijo —
+   * confirmado en vivo que 2 órdenes tardan ~6-10s — y solo entonces clickea
+   * "Aceptar y cerrar": el modal NO se autocierra al terminar.
+   */
+  async _cerrarProgresoFacturacionMasivaRuteo() {
+    await expect.poll(
+      async () => (await this.page.locator(L.RUTEO_PROGRESO_FACTURACION_LABEL).textContent().catch(() => '')) ?? '',
+      { timeout: TIMEOUTS.PRODUCTS_LOAD, message: 'La barra de progreso de "Facturación masiva" nunca llegó a 100%' }
+    ).toBe('100%');
+
+    await this.page.locator(L.RUTEO_PROGRESO_FACTURACION_BTN_CERRAR).click();
+    await expect(
+      this.page.locator(L.RUTEO_PROGRESO_FACTURACION_DIALOG),
+      'El modal de progreso "Facturación masiva" no se cerró tras "Aceptar y cerrar"'
+    ).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+
+  /**
+   * Abre el modal "Enviar a Ruteo" masivo (`#modal_change_sellers`) desde el
+   * menú "Acciones" ya con órdenes marcadas — extraído como paso propio
+   * (antes duplicado al inicio de enviarOrdenesRuteoMasivamente()/
+   * ConFacturacionAutomatica()) para que un escenario pueda inspeccionar el
+   * contenido real del modal (ver leerInfoModalEnviarRuteoMasivo()) ANTES de
+   * confirmarlo con _confirmarModalAccionMasivaRuteo().
+   */
+  async abrirModalEnviarRuteoMasivo() {
+    await this._abrirMenuAccionesMasivasRuteo();
+    await this.page.locator(L.RUTEO_MASIVO_LI_ENVIAR).click();
+    await expect(
+      this.page.locator(L.RUTEO_MASIVO_MODAL),
+      'El modal "Enviar a Ruteo" masivo no se abrió'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+
+  /**
+   * Lee la información real mostrada en el modal "Enviar a Ruteo" masivo ya
+   * abierto (contadores Seleccionadas/Faltantes/Total y la lista de
+   * repartidores actuales de las órdenes marcadas) — confirmado en vivo
+   * volcando su HTML completo (ver el comentario de
+   * RUTEO_MASIVO_MODAL_CHECK_FACTURAR_AUTO). La sección "Ruta" existe en el
+   * DOM pero queda oculta en este ambiente/compañía, así que no se lee acá:
+   * no hay ningún dato real que validar en ella.
+   */
+  async leerInfoModalEnviarRuteoMasivo(): Promise<{ seleccionadas: number; faltantes: number; total: number; repartidoresActuales: string[] }> {
+    const leerNumero = async (selector: string) =>
+      parseInt(((await this.page.locator(selector).textContent()) ?? '0').trim(), 10) || 0;
+
+    return {
+      seleccionadas: await leerNumero(L.RUTEO_MASIVO_MODAL_LBL_SELECCIONADAS),
+      faltantes: await leerNumero(L.RUTEO_MASIVO_MODAL_LBL_FALTANTES),
+      total: await leerNumero(L.RUTEO_MASIVO_MODAL_LBL_TOTAL),
+      repartidoresActuales: (await this.page.locator(L.RUTEO_MASIVO_MODAL_LISTA_REPARTIDORES).allTextContents())
+        .map((t) => t.replace(/\s+/g, ' ').trim())
+        .filter(Boolean),
+    };
   }
 
 
@@ -988,9 +1067,40 @@ export class PosRuteo {
    * debe leer `new_order_id` para localizar la orden resultante real.
    */
   async enviarOrdenesRuteoMasivamente() {
-    await this._abrirMenuAccionesMasivasRuteo();
-    await this.page.locator(L.RUTEO_MASIVO_LI_ENVIAR).click();
+    await this.abrirModalEnviarRuteoMasivo();
     return this._confirmarModalAccionMasivaRuteo(L.AJAX_ENVIAR_RUTEO_MASIVO);
+  }
+
+
+  /**
+   * "Enviar a Ruteo" masivo con el switch "Facturar Automáticamente"
+   * activado (ver el comentario de RUTEO_MASIVO_MODAL_CHECK_FACTURAR_AUTO):
+   * misma duplicación que enviarOrdenesRuteoMasivamente() (crea una orden
+   * nueva por cada una marcada, con el repartidor elegido aquí), pero
+   * además factura automáticamente cada orden nueva — confirmado en vivo
+   * que la respuesta de AJAX_ENVIAR_RUTEO_MASIVO llega ANTES de que termine
+   * la facturación real: el modal de progreso que se abre después
+   * (manejado por _cerrarProgresoFacturacionMasivaRuteo(), ya incluido acá)
+   * es la única señal confiable de que la facturación en sí ya terminó.
+   * Atajo conveniente para escenarios que no necesitan inspeccionar el
+   * modal antes de confirmarlo — ver abrirModalEnviarRuteoMasivo()/
+   * leerInfoModalEnviarRuteoMasivo() para un escenario que sí lo necesita.
+   */
+  async enviarOrdenesRuteoMasivamenteConFacturacionAutomatica() {
+    await this.abrirModalEnviarRuteoMasivo();
+    return this.confirmarEnvioRuteoMasivoConFacturacionAutomatica();
+  }
+
+
+  /**
+   * Confirma un modal "Enviar a Ruteo" masivo YA ABIERTO (abrirModalEnviarRuteoMasivo())
+   * activando "Facturar Automáticamente" — separado de
+   * enviarOrdenesRuteoMasivamenteConFacturacionAutomatica() para que un
+   * escenario pueda inspeccionar el modal (leerInfoModalEnviarRuteoMasivo())
+   * entre abrirlo y confirmarlo.
+   */
+  async confirmarEnvioRuteoMasivoConFacturacionAutomatica() {
+    return this._confirmarModalAccionMasivaRuteo(L.AJAX_ENVIAR_RUTEO_MASIVO, true);
   }
 
 
