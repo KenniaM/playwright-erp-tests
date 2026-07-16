@@ -101,47 +101,6 @@ export class PosImportarFactura {
 
 
   /**
-   * Indica si hay un cliente REAL seleccionado en el carrito ahora mismo
-   * (ver el comentario de L.CLIENTE_BTN_QUITAR) — "Cliente de contado" (el
-   * placeholder por defecto, p. ej. de una factura recién importada sin
-   * cliente propio) devuelve false.
-   */
-  async hayClienteRealSeleccionado(): Promise<boolean> {
-    return this.page.locator(L.CLIENTE_BTN_QUITAR).isVisible().catch(() => false);
-  }
-
-
-  /**
-   * Lee el nombre del cliente actualmente mostrado arriba del carrito
-   * (L.CLIENTE_NOMBRE_SELECCIONADO) — mismo campo que seleccionarClienteExistente()/
-   * seleccionarClienteExistenteDistintoDe() ya leen justo después de elegir
-   * uno, expuesto aquí como lectura independiente para validar qué cliente
-   * quedó asociado a una venta ya cargada al carrito (p. ej. una Orden de
-   * Ruteo seleccionada con seleccionarOrdenRuteoParaFacturar()) sin tener que
-   * volver a elegir ninguno.
-   */
-  async obtenerClienteSeleccionado(): Promise<string> {
-    return ((await this.page.locator(L.CLIENTE_NOMBRE_SELECCIONADO).textContent()) ?? '').trim();
-  }
-
-
-  /**
-   * Quita el cliente real actualmente seleccionado del carrito (ícono "X"
-   * junto a su nombre), dejándolo en "Cliente de contado". Sin SweetAlert de
-   * confirmación que esperar (confirmado en vivo, ver el comentario de
-   * L.CLIENTE_BTN_QUITAR) — solo se espera a que el propio ícono desaparezca,
-   * señal real de que el cliente ya no está seleccionado.
-   */
-  async quitarClienteSeleccionado() {
-    await this.page.locator(L.CLIENTE_BTN_QUITAR).click();
-    await expect(
-      this.page.locator(L.CLIENTE_BTN_QUITAR),
-      'El cliente no se quitó: el ícono "X" sigue visible'
-    ).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
-  }
-
-
-  /**
    * Importa la factura en la posición `indice` de la lista ya renderizada —
    * mismo click+espera de AJAX que importarPrimeraFacturaDisponible() (no se
    * reutiliza esa función tal cual porque siempre opera sobre `.first()`;
@@ -217,13 +176,13 @@ export class PosImportarFactura {
 
   /** Importa la primera factura disponible que YA tenga un cliente real asociado. */
   async importarPrimeraFacturaConCliente() {
-    await this._importarFacturaQueCumpla(() => this.hayClienteRealSeleccionado(), 'tenga un cliente real asociado');
+    await this._importarFacturaQueCumpla(() => this.core.hayClienteRealSeleccionado(), 'tenga un cliente real asociado');
   }
 
 
   /** Importa la primera factura disponible que NO tenga cliente asociado (queda en "Cliente de contado"). */
   async importarPrimeraFacturaSinCliente() {
-    await this._importarFacturaQueCumpla(async () => !(await this.hayClienteRealSeleccionado()), 'NO tenga cliente asociado (Cliente de contado)');
+    await this._importarFacturaQueCumpla(async () => !(await this.core.hayClienteRealSeleccionado()), 'NO tenga cliente asociado (Cliente de contado)');
   }
 
 
