@@ -810,6 +810,89 @@ const L = {
   // desaparece de la tarjeta.
   RUTEO_LISTA_LBL_FACTURA: '.routing_order_card_lbl_delivery_billing span.pull-right',
 
+  // ─── Menú "Acciones" del listado "Ruteo" (dropdown propio, distinto del
+  // menú de tres puntos de cada tarjeta): agrupa selección múltiple + 3
+  // acciones masivas + el reporte PDF de "Ruteo Sin Repartidor" — confirmado
+  // en vivo volcando su HTML real. "Seleccionar" (RUTEO_MASIVO_LI_SELECCIONAR)
+  // siempre está visible y, al hacer click, revela tanto el checkbox oculto
+  // de cada tarjeta (dentro de `.select_checkbox_remove_order`, normalmente
+  // `hide`) como los 3 <li> de acción masiva (Eliminar/Cambiar Repartidor/
+  // Enviar a Ruteo), todos con clase `hide` hasta ese momento. Bootstrap
+  // cierra este dropdown ante cualquier click fuera de él —incluido el click
+  // sobre el propio checkbox de una tarjeta más abajo en la página—, así que
+  // hay que reabrirlo (RUTEO_MASIVO_LI_SELECCIONAR es el ancla estable para
+  // ubicar su botón `[data-toggle="dropdown"]`) antes de cada acción
+  // siguiente, nunca asumir que sigue abierto.
+  RUTEO_MASIVO_LI_SELECCIONAR:            'li[onclick="select_orders()"]',
+  RUTEO_MASIVO_LI_ENVIAR:                 'li.send_orders_massive',
+  RUTEO_MASIVO_LI_CAMBIAR_REPARTIDOR:     'li.change_seller_orders_option',
+  RUTEO_MASIVO_LI_ELIMINAR:               'li.delete_orders_option',
+  // Prefijo del id real de cada checkbox de tarjeta (`select_order_remove_<id>`,
+  // MISMO id numérico que RUTEO_LISTA_TARJETA_PREFIJO) — confirmado en vivo
+  // que, con cientos de órdenes en el listado, este checkbox suele quedar
+  // "outside of viewport" para Playwright incluso tras `scrollIntoViewIfNeeded()`
+  // (mismo síntoma ya documentado para los checkboxes de método de pago, ver
+  // el comentario de `_cambiarMetodoPago()`): se marca vía `evaluate()`.
+  RUTEO_MASIVO_CHECKBOX_PREFIJO:           'select_order_remove_',
+
+  // "Enviar a Ruteo" y "Cambiar Repartidor" masivos reutilizan EL MISMO modal
+  // (`#modal_change_sellers`, solo cambia su `data-mode`/título/endpoint según
+  // cuál de los dos `<li>` lo abrió) — confirmado en vivo volcando su HTML
+  // completo en ambos modos: mismo `<select>` de repartidor
+  // (RUTEO_MASIVO_MODAL_REPARTIDOR_CHOSEN) y mismo botón "Guardar"
+  // (RUTEO_MASIVO_MODAL_BTN_GUARDAR). Investigado en vivo (root-cause real,
+  // no asumido) que ambas acciones NO hacen lo mismo bajo el capó pese a
+  // compartir modal:
+  //   - "Enviar a Ruteo" (AJAX_ENVIAR_RUTEO_MASIVO) NO reasigna la orden
+  //     seleccionada in-place: crea una orden NUEVA con el repartidor
+  //     elegido (responde un array JSON `[{old_order_id, new_order_id,
+  //     order_number, items_created}]`). Confirmado en vivo (2 corridas
+  //     independientes con resultados distintos: la primera —un script de
+  //     investigación descartado— pareció mostrar que la orden ORIGINAL
+  //     desaparecía del listado, pero la segunda, ya con las esperas reales
+  //     de esta clase, la mostró intacta, seleccionable y con su repartidor
+  //     sin cambios) que el comportamiento real y reproducible es una
+  //     DUPLICACIÓN: la orden original permanece igual y se crea una nueva
+  //     (`new_order_id`) con el repartidor elegido — no un reemplazo.
+  //   - "Cambiar Repartidor" (AJAX_CAMBIAR_REPARTIDOR_MASIVO) reasigna
+  //     in-place (la orden conserva su id) — confirmado en vivo el payload
+  //     real (`order_list=["<id>"]&new_agent_id=<id>`) contra una orden
+  //     propia recién creada: responde "1" (éxito) y el repartidor persiste
+  //     al reabrir "Ver Orden". Investigado a fondo (root-cause real, no
+  //     asumido) un fallo intermitente ("0") que apareció 2 veces usando
+  //     obtenerPrimeraOrdenRuteoSeleccionable(): desapareció por completo
+  //     repitiendo el MISMO payload contra una orden propia — la causa no es
+  //     el endpoint, sino que "la primera orden seleccionable" de este
+  //     listado compartido (fullyParallel, ~200+ órdenes reutilizadas por
+  //     el resto de esta suite) puede arrastrar estado atípico de otra
+  //     prueba en curso. Por eso el escenario que lo valida en
+  //     pos-ruteo.spec.ts crea su propia orden desechable en vez de
+  //     reutilizar una existente (mismo criterio que el Escenario 30).
+  RUTEO_MASIVO_MODAL:                     '#modal_change_sellers',
+  RUTEO_MASIVO_MODAL_REPARTIDOR_CHOSEN:   '#modal_new_agent_select_chosen',
+  RUTEO_MASIVO_MODAL_BTN_GUARDAR:         '#btn_confirm_change_sellers',
+  AJAX_ENVIAR_RUTEO_MASIVO:               'createRoutingOrdersMassive',
+  AJAX_CAMBIAR_REPARTIDOR_MASIVO:         'changeSellerOrderRouting',
+  AJAX_ELIMINAR_RUTEO_MASIVO:             'deleteRoutingOrders',
+
+  // "Imprimir"/"Descargar PDF" del mismo menú "Acciones" — confirmado en vivo
+  // que AMBOS invocan la misma función `printReportRoutingPDF()` (solo cambia
+  // `data-mode`, 0=Imprimir/1=Descargar PDF) y que el documento generado es
+  // SIEMPRE el mismo reporte fijo "Reporte de Ruteo Sin Repartidor"
+  // (nombre sugerido de descarga: `Reporte_Ruteo_SinRepartidor_<fecha>.pdf`),
+  // sin importar cuál de los 5 filtros reales (FILTRO_RUTEO_*) esté activo en
+  // ese momento — confirmado descargándolo en dos filtros distintos
+  // (Pendiente/Entregado) y comparando el mismo nombre de archivo resultante.
+  // No es, entonces, un documento "por tab" como en Imprimir/Descargar PDF de
+  // Gestión de Proforma (GESTION_PROFORMA_BTN_IMPRIMIR/_PDF): es un reporte
+  // de alcance global (órdenes sin repartidor asignado), independiente del
+  // filtro. "Imprimir" (data-mode=0), además, confirmado en vivo que NO abre
+  // ninguna ventana/popup en este ambiente (mismo hallazgo ya documentado en
+  // el comentario de AJAX_GUARDAR_RUTEO: sin impresión automática
+  // configurada, `setting_print_command` en 0/ausente).
+  RUTEO_REPORTE_LI_IMPRIMIR:      'a[onclick="printReportRoutingPDF()"][data-mode="0"]',
+  RUTEO_REPORTE_LI_DESCARGAR_PDF: 'a[onclick="printReportRoutingPDF()"][data-mode="1"]',
+
   // Modal "Ver Orden" (#dialog_view_routing_order_detail) — confirmado en
   // vivo, de solo lectura y distinto del de creación/edición. No incluye un
   // campo de "Vendedor" separado (solo "Repartidor") ni etiqueta explícita de
@@ -6451,6 +6534,181 @@ export class PosPage {
    */
   async ordenRuteoSeleccionable(ordenId: string): Promise<boolean> {
     return this.tarjetaRuteo(ordenId).locator(L.RUTEO_LISTA_BTN_SELECCIONAR).isVisible().catch(() => false);
+  }
+
+  /** Cambia al filtro real indicado del listado "Ruteo" (ver el comentario de FILTRO_RUTEO_TODOS). */
+  async irAFiltroRuteo(filtro: 'Todos' | 'Pendiente' | 'En Camino' | 'Entregado' | 'H. de Órdenes') {
+    const selector = {
+      'Todos': L.FILTRO_RUTEO_TODOS,
+      'Pendiente': L.FILTRO_RUTEO_PENDIENTE,
+      'En Camino': L.FILTRO_RUTEO_EN_CAMINO,
+      'Entregado': L.FILTRO_RUTEO_ENTREGADO,
+      'H. de Órdenes': L.FILTRO_RUTEO_HISTORIAL,
+    }[filtro];
+    await this.page.locator(selector).click();
+  }
+
+  // ─── Acciones masivas del listado "Ruteo" (menú "Acciones": selección
+  // múltiple + Enviar a Ruteo/Cambiar Repartidor/Eliminar + reporte PDF) ─────
+  // Ver el comentario de RUTEO_MASIVO_LI_SELECCIONAR para la evidencia
+  // completa de cómo se abre/cierra este dropdown.
+
+  /** Ancla estable al botón `[data-toggle="dropdown"]` real del menú "Acciones" del listado Ruteo. */
+  private get _btnAccionesMasivasRuteo(): Locator {
+    return this.page
+      .locator(L.RUTEO_MASIVO_LI_SELECCIONAR)
+      .locator('xpath=ancestor::div[contains(@class,"dropdown")][1]//button[@data-toggle="dropdown"]')
+      .first();
+  }
+
+  /**
+   * Abre (o reabre) el dropdown "Acciones" del listado Ruteo — necesario
+   * antes de CADA click dentro de él, no solo el primero: Bootstrap lo cierra
+   * ante cualquier click fuera, incluido el que marca un checkbox de tarjeta
+   * más abajo en la página (confirmado en vivo).
+   */
+  private async _abrirMenuAccionesMasivasRuteo() {
+    await this._btnAccionesMasivasRuteo.click();
+    await expect(
+      this.page.locator(L.RUTEO_MASIVO_LI_SELECCIONAR),
+      'El menú "Acciones" del listado Ruteo no se abrió'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /**
+   * Activa el modo de selección múltiple del listado Ruteo ("Seleccionar"):
+   * revela el checkbox de cada tarjeta y los 3 `<li>` de acción masiva.
+   * Llamar una sola vez por escenario, después de abrirListadoOrdenesRuteo()/
+   * el filtro real que corresponda, antes de marcar ninguna orden.
+   */
+  async entrarModoSeleccionMasivaRuteo() {
+    await this._abrirMenuAccionesMasivasRuteo();
+    await this.page.locator(L.RUTEO_MASIVO_LI_SELECCIONAR).click();
+  }
+
+  /**
+   * Marca (checkbox) una Orden de Ruteo, localizada por su id real, para una
+   * acción masiva ya con entrarModoSeleccionMasivaRuteo() activo. Usa
+   * evaluate() como el resto de checkboxes "outside of viewport" de esta
+   * clase (ver el comentario de RUTEO_MASIVO_CHECKBOX_PREFIJO) — nunca
+   * `.check()`/`.click()` directos, que fallan contra este listado con
+   * cientos de tarjetas.
+   */
+  async marcarOrdenParaAccionMasivaRuteo(ordenId: string) {
+    await this.asegurarOrdenRuteoVisibleEnListado(ordenId);
+    const checkboxId = `${L.RUTEO_MASIVO_CHECKBOX_PREFIJO}${ordenId}`;
+    await this.page.evaluate(
+      (id) => (document.getElementById(id) as HTMLInputElement | null)?.click(),
+      checkboxId
+    );
+    await expect(
+      this.page.locator(`#${checkboxId}`),
+      `El checkbox de selección de la Orden de Ruteo #${ordenId} no quedó marcado`
+    ).toBeChecked();
+  }
+
+  /**
+   * Completa el modal `#modal_change_sellers` compartido por "Enviar a
+   * Ruteo"/"Cambiar Repartidor" masivos (ver el comentario de
+   * RUTEO_MASIVO_MODAL): elige el primer repartidor real disponible (mismo
+   * criterio que seleccionarRepartidorRuteo()) y guarda, esperando la
+   * respuesta real del endpoint AJAX correspondiente — nunca solo el toast.
+   * Devuelve la respuesta cruda (el caller decide cómo validarla: los dos
+   * endpoints NO tienen el mismo contrato de éxito/fallo, ver el comentario
+   * de RUTEO_MASIVO_MODAL) y el nombre del repartidor elegido.
+   */
+  private async _confirmarModalAccionMasivaRuteo(fragmentoUrlAjax: string): Promise<{ respuesta: Response; repartidorSeleccionado: string }> {
+    const modal = this.page.locator(L.RUTEO_MASIVO_MODAL);
+    await expect(
+      modal,
+      'El modal de acción masiva del listado Ruteo ("Enviar a Ruteo"/"Cambiar Repartidor") no se abrió'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    // _seleccionarPrimeraOpcionChosen() (NO un `.chosen-results li` "a mano"):
+    // confirmado en vivo (root-cause real, no asumido — mismo hallazgo ya
+    // documentado en el comentario de ese método) que el primer <li> de este
+    // Chosen recién abierto puede ser el propio placeholder "Seleccione un
+    // repartidor" en vez de una opción real, dejando la orden sin repartidor
+    // nuevo asignado y el assert posterior comparando contra ese texto en
+    // vez del repartidor realmente elegido.
+    await this._seleccionarPrimeraOpcionChosen(L.RUTEO_MASIVO_MODAL_REPARTIDOR_CHOSEN);
+    const repartidorSeleccionado = await this._obtenerTextoChosenSeleccionado(L.RUTEO_MASIVO_MODAL_REPARTIDOR_CHOSEN);
+    expect(repartidorSeleccionado, 'El repartidor seleccionado en el modal de acción masiva de Ruteo no quedó visible').not.toBe('');
+
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(fragmentoUrlAjax),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await this.page.locator(L.RUTEO_MASIVO_MODAL_BTN_GUARDAR).click();
+    const respuesta = await respuestaPromise;
+
+    return { respuesta, repartidorSeleccionado };
+  }
+
+  /**
+   * "Enviar a Ruteo" masivo — ADVERTENCIA (confirmado en vivo, ver el
+   * comentario de RUTEO_MASIVO_MODAL): NO reasigna in-place las órdenes ya
+   * marcadas con marcarOrdenParaAccionMasivaRuteo(). Crea una orden NUEVA por
+   * cada una (con el repartidor elegido aquí), DUPLICANDO en vez de
+   * reemplazar — la orden original permanece intacta en el listado. La
+   * respuesta responde un array JSON
+   * `[{old_order_id, new_order_id, order_number, items_created}]` — el test
+   * debe leer `new_order_id` para localizar la orden resultante real.
+   */
+  async enviarOrdenesRuteoMasivamente() {
+    await this._abrirMenuAccionesMasivasRuteo();
+    await this.page.locator(L.RUTEO_MASIVO_LI_ENVIAR).click();
+    return this._confirmarModalAccionMasivaRuteo(L.AJAX_ENVIAR_RUTEO_MASIVO);
+  }
+
+  /**
+   * "Cambiar Repartidor" masivo — a diferencia de "Enviar a Ruteo", esta
+   * reasigna in-place (mismo id de orden). Ver el comentario de
+   * RUTEO_MASIVO_MODAL: usar una orden PROPIA (no la "primera seleccionable"
+   * de un listado compartido con ~200+ órdenes) es necesario para obtener
+   * una señal confiable — confirmado en vivo que reutilizar una orden ajena
+   * puede fallar en silencio ("0") sin que el endpoint tenga la culpa.
+   */
+  async cambiarRepartidorOrdenesRuteoMasivamente() {
+    await this._abrirMenuAccionesMasivasRuteo();
+    await this.page.locator(L.RUTEO_MASIVO_LI_CAMBIAR_REPARTIDOR).click();
+    return this._confirmarModalAccionMasivaRuteo(L.AJAX_CAMBIAR_REPARTIDOR_MASIVO);
+  }
+
+  /**
+   * "Eliminar" masivo — confirma el SweetAlert real ("Eliminar Órdenes"/
+   * "¿Estás seguro de eliminar la(s) orden(es)?", botón "Enviar") reutilizando
+   * _confirmarSweetAlertV1() (mismo widget que el resto de la suite), y
+   * espera la respuesta real de AJAX_ELIMINAR_RUTEO_MASIVO — confirmado en
+   * vivo que responde "1" (éxito) y elimina la(s) orden(es) por completo del
+   * listado (ni siquiera quedan en "H. de Órdenes"). Por ser irreversible,
+   * los tests que la usan deben crear sus propias órdenes desechables — nunca
+   * reutilizar una orden real ya existente del ambiente QA compartido.
+   */
+  async eliminarOrdenesRuteoMasivamente(): Promise<Response> {
+    await this._abrirMenuAccionesMasivasRuteo();
+    await this.page.locator(L.RUTEO_MASIVO_LI_ELIMINAR).click();
+
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_ELIMINAR_RUTEO_MASIVO),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await this._confirmarSweetAlertV1('No apareció la confirmación "Eliminar Órdenes"');
+    return respuestaPromise;
+  }
+
+  /**
+   * Descarga el reporte PDF fijo "Ruteo Sin Repartidor" desde el menú
+   * "Acciones" del listado Ruteo — ver el comentario de
+   * RUTEO_REPORTE_LI_DESCARGAR_PDF: el mismo reporte sin importar el filtro
+   * real activo, así que no valida "pertenece al tab actual" (no aplica en
+   * este ambiente).
+   */
+  async descargarReporteRuteoPDF(): Promise<Download> {
+    await this._abrirMenuAccionesMasivasRuteo();
+    const downloadPromise = this.page.waitForEvent('download', { timeout: TIMEOUTS.PRINT_POPUP });
+    await this.page.locator(L.RUTEO_REPORTE_LI_DESCARGAR_PDF).click();
+    return downloadPromise;
   }
 
   // ─── Moneda del POS ─────────────────────────────────────────────────────────

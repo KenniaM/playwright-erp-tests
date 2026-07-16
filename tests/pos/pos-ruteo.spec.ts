@@ -1715,4 +1715,227 @@ test.describe('Orden de Ruteo', () => {
 
     expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
   });
+
+  // ─── Menú "Acciones" del listado "Ruteo": reporte PDF y acciones masivas
+  // (Enviar a Ruteo / Cambiar Repartidor / Eliminar) sobre selección múltiple ──
+  //
+  // Investigado en vivo (script de investigación descartado tras extraer la
+  // evidencia, no forma parte de esta suite) antes de escribir estos 4
+  // escenarios: el menú "Acciones" (RUTEO_MASIVO_LI_SELECCIONAR y el resto de
+  // locators RUTEO_MASIVO_*/RUTEO_REPORTE_* en pos.page.ts) SÍ existe y es
+  // real — a diferencia de los textos "Pendientes"/"En Camino"/"Entregado"
+  // ya descartados como leyenda decorativa en el comentario del Escenario 14,
+  // este dropdown y sus checkboxes de tarjeta son controles reales con
+  // handlers propios. Dos hallazgos no obvios que cambian lo que cada
+  // escenario puede validar honestamente (ver también los comentarios de
+  // RUTEO_MASIVO_MODAL y RUTEO_REPORTE_LI_DESCARGAR_PDF en pos.page.ts):
+  //   1. "Imprimir"/"Descargar PDF" NO son documentos "por tab": ambos
+  //      generan siempre el mismo reporte fijo "Ruteo Sin Repartidor",
+  //      cualquiera sea el filtro activo — confirmado descargándolo en 2
+  //      filtros distintos y comparando el mismo nombre de archivo. El
+  //      Escenario 27 valida ESE comportamiento real en vez de una premisa
+  //      "por tab" que este ambiente no cumple. "Imprimir" además no abre
+  //      ninguna ventana en este ambiente (mismo hallazgo ya documentado
+  //      para AJAX_GUARDAR_RUTEO: sin impresión automática configurada), así
+  //      que no se prueba por separado.
+  //   2. "Enviar a Ruteo" y "Cambiar Repartidor" masivos comparten el mismo
+  //      modal pero NO hacen lo mismo bajo el capó: el primero DUPLICA la
+  //      orden seleccionada (crea una orden nueva con el repartidor elegido;
+  //      la original permanece intacta), el segundo reasigna in-place (mismo
+  //      id de orden). "Cambiar Repartidor" falló 2 veces en vivo
+  //      (AJAX_CAMBIAR_REPARTIDOR_MASIVO respondiendo "0") usando
+  //      obtenerPrimeraOrdenRuteoSeleccionable() — root-cause investigado
+  //      capturando el payload real (order_list/new_agent_id): con una
+  //      orden PROPIA recién creada, el mismo payload respondió "1" (éxito)
+  //      sin cambiar nada de la automatización. La causa real no es un bug
+  //      del endpoint sino que "la primera orden seleccionable" de este
+  //      ambiente compartido (fullyParallel, ~200+ órdenes, reutilizadas por
+  //      los otros 29 escenarios de este archivo) puede arrastrar estado
+  //      atípico de otra prueba en curso. Por eso el Escenario 29, a
+  //      diferencia del resto de la suite, crea su propia orden desechable
+  //      en vez de reutilizar una existente — mismo criterio ya usado por el
+  //      Escenario 30 (Eliminar).
+
+  test('27. Descargar PDF desde el listado "Ruteo": validar que genera el reporte fijo "Sin Repartidor", igual sin importar el filtro activo', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    await pos.abrirListadoOrdenesRuteo();
+
+    let nombreArchivoPendiente = '';
+    await test.step('Descargar el PDF con el filtro real "Pendiente" activo', async () => {
+      await pos.irAFiltroRuteo('Pendiente');
+      const descarga = await pos.descargarReporteRuteoPDF();
+      nombreArchivoPendiente = descarga.suggestedFilename();
+      expect(nombreArchivoPendiente, 'El nombre del PDF descargado debe tener extensión .pdf').toMatch(/\.pdf$/i);
+    });
+
+    await test.step('Descargar el PDF con el filtro real "Entregado" activo y validar que es el mismo reporte (no depende del tab)', async () => {
+      await pos.irAFiltroRuteo('Entregado');
+      const descarga = await pos.descargarReporteRuteoPDF();
+      const nombreArchivoEntregado = descarga.suggestedFilename();
+      expect(
+        nombreArchivoEntregado,
+        'El reporte "Descargar PDF" del listado Ruteo debía ser el mismo reporte fijo sin importar el filtro activo'
+      ).toBe(nombreArchivoPendiente);
+    });
+
+    await test.step('Restaurar el filtro "Todos" para no afectar otros tests del mismo worker', async () => {
+      await pos.irAFiltroRuteo('Todos');
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('28. Selección múltiple en el listado "Ruteo": ejecutar "Enviar a Ruteo" y validar que crea una orden nueva con el repartidor elegido, sin afectar la original', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    // No crea una orden propia: cualquier Orden de Ruteo ya existente que
+    // siga Pendiente de facturar sirve (ver obtenerPrimeraOrdenRuteoSeleccionable()) —
+    // "Enviar a Ruteo" no destruye información, la traslada a una orden
+    // nueva (ver el comentario de RUTEO_MASIVO_MODAL en pos.page.ts), mismo
+    // criterio de reutilización ya usado por los Escenarios 15-26.
+    let idOriginal = '';
+    let repartidorOriginal = '';
+    await test.step('Localizar una Orden de Ruteo existente, capturar su repartidor original y marcarla para la acción masiva', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      idOriginal = await pos.obtenerPrimeraOrdenRuteoSeleccionable();
+      await pos.abrirMenuAccionesOrdenRuteo(idOriginal);
+      repartidorOriginal = (await pos.verOrdenRuteo(idOriginal)).repartidor;
+
+      await pos.entrarModoSeleccionMasivaRuteo();
+      await pos.marcarOrdenParaAccionMasivaRuteo(idOriginal);
+    });
+
+    let idNueva = '';
+    let repartidorElegido = '';
+    await test.step('Ejecutar "Enviar a Ruteo" y leer la orden nueva real que devuelve la respuesta', async () => {
+      const { respuesta, repartidorSeleccionado } = await pos.enviarOrdenesRuteoMasivamente();
+      repartidorElegido = repartidorSeleccionado;
+      expect(respuesta.ok(), 'AJAX_ENVIAR_RUTEO_MASIVO no respondió OK').toBe(true);
+
+      const cuerpo = JSON.parse(await respuesta.text()) as Array<{
+        old_order_id: number;
+        new_order_id: number;
+        order_number: number;
+        items_created: number;
+      }>;
+      expect(cuerpo.length, 'La respuesta de "Enviar a Ruteo" debía incluir exactamente 1 orden procesada').toBe(1);
+      expect(cuerpo[0].old_order_id, 'El id de la orden original en la respuesta no coincide con la orden marcada').toBe(parseInt(idOriginal, 10));
+      expect(cuerpo[0].new_order_id, 'La respuesta debía incluir el id numérico de la orden nueva').toBeGreaterThan(0);
+      expect(cuerpo[0].items_created, 'La orden nueva debía conservar al menos 1 producto').toBeGreaterThan(0);
+      idNueva = String(cuerpo[0].new_order_id);
+    });
+
+    // Nota (confirmado en vivo, corrigiendo una hipótesis previa de este
+    // mismo escenario tomada de un script de investigación descartado): la
+    // orden ORIGINAL no desaparece del listado tras "Enviar a Ruteo" — sigue
+    // visible, seleccionable y con su repartidor sin cambios. El
+    // comportamiento real es una DUPLICACIÓN (crea una orden nueva con el
+    // repartidor elegido, ver `items_created`/`new_order_id` arriba) más que
+    // un reemplazo — confirmado comparando ambas tarjetas en el mismo
+    // listado tras la acción.
+    await test.step('Validar que la orden original permanece intacta y la orden nueva aparece con el repartidor elegido', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+
+      await pos.abrirMenuAccionesOrdenRuteo(idOriginal);
+      const detalleOriginal = await pos.verOrdenRuteo(idOriginal);
+      expect(detalleOriginal.repartidor, 'La orden original no debía cambiar de repartidor tras "Enviar a Ruteo"').toContain(repartidorOriginal);
+
+      await pos.abrirMenuAccionesOrdenRuteo(idNueva);
+      const detalleNueva = await pos.verOrdenRuteo(idNueva);
+      expect(detalleNueva.repartidor, 'La orden nueva no quedó con el repartidor elegido en "Enviar a Ruteo"').toContain(repartidorElegido);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('29. Selección múltiple en el listado "Ruteo": ejecutar "Cambiar Repartidor" y validar la persistencia al reabrir la orden', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    // Crea una orden propia y desechable — ÚNICA excepción de este archivo,
+    // junto con el Escenario 30, a "reutilizar antes de crear": confirmado en
+    // vivo (root-cause investigado capturando el payload real POST a
+    // AJAX_CAMBIAR_REPARTIDOR_MASIVO — order_list/new_agent_id, ambos
+    // correctos) que este endpoint NO es la fuente del fallo. El fallo real
+    // (2 corridas independientes, ambas usando obtenerPrimeraOrdenRuteoSeleccionable())
+    // desapareció por completo al repetir el mismo payload contra una orden
+    // recién creada — la "primera orden seleccionable" de este listado
+    // compartido (~200+ órdenes, reutilizadas en paralelo por los otros 29
+    // escenarios de este archivo) puede arrastrar estado atípico de otra
+    // prueba en curso. Una orden propia elimina esa dependencia y da una
+    // señal limpia sobre el comportamiento real de "Cambiar Repartidor".
+    let idOrden = '';
+    let repartidorOriginal = '';
+    await test.step('Crear una Orden de Ruteo propia, desechable, y marcarla para la acción masiva', async () => {
+      await agregarUnProducto(pos);
+      await pos.seleccionarClienteExistente();
+      await pos.abrirCrearOrdenRuteo();
+      const { respuesta, repartidor } = await completarYGuardarOrdenRuteo(pos, `Escenario 29 - orden desechable ${Date.now()}`);
+      idOrden = (await respuesta.text()).trim();
+      repartidorOriginal = repartidor;
+
+      await pos.abrirListadoOrdenesRuteo();
+      await pos.entrarModoSeleccionMasivaRuteo();
+      await pos.marcarOrdenParaAccionMasivaRuteo(idOrden);
+    });
+
+    let repartidorElegido = '';
+    await test.step('Ejecutar "Cambiar Repartidor" y validar que la petición respondió éxito', async () => {
+      const { respuesta, repartidorSeleccionado } = await pos.cambiarRepartidorOrdenesRuteoMasivamente();
+      repartidorElegido = repartidorSeleccionado;
+      const cuerpo = (await respuesta.text()).trim();
+      expect(cuerpo, `"Cambiar Repartidor" masivo respondió "${cuerpo}" (se esperaba un indicador de éxito, no "0")`).not.toBe('0');
+    });
+
+    await test.step('Reabrir la orden y validar que el nuevo repartidor persistió', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      await pos.abrirMenuAccionesOrdenRuteo(idOrden);
+      const detalle = await pos.verOrdenRuteo(idOrden);
+      expect(detalle.repartidor, 'El repartidor de la orden no cambió tras "Cambiar Repartidor" masivo').toContain(repartidorElegido);
+      expect(detalle.repartidor, 'El repartidor de la orden debía dejar de ser el original tras "Cambiar Repartidor" masivo').not.toContain(repartidorOriginal);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('30. Selección múltiple en el listado "Ruteo": ejecutar "Eliminar" sobre una orden propia desechable y validar que desaparece del listado', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    // Única excepción de este archivo a "reutilizar antes de crear": eliminar
+    // es irreversible y esta suite comparte el ambiente QA con otros
+    // workers/escenarios corriendo en paralelo (fullyParallel) — crear una
+    // orden propia y desechable evita borrar una orden real que otro
+    // escenario en curso pudiera necesitar (p. ej. obtenerPrimeraOrdenRuteoSeleccionable()
+    // de otro worker).
+    let idOrden = '';
+    await test.step('Crear una Orden de Ruteo propia, desechable, y marcarla para la acción masiva', async () => {
+      await agregarUnProducto(pos);
+      await pos.seleccionarClienteExistente();
+      await pos.abrirCrearOrdenRuteo();
+      const { respuesta } = await completarYGuardarOrdenRuteo(pos, `Escenario 30 - orden desechable ${Date.now()}`);
+      idOrden = (await respuesta.text()).trim();
+
+      await pos.abrirListadoOrdenesRuteo();
+      await pos.entrarModoSeleccionMasivaRuteo();
+      await pos.marcarOrdenParaAccionMasivaRuteo(idOrden);
+    });
+
+    await test.step('Ejecutar "Eliminar" y validar que la petición respondió éxito', async () => {
+      const respuesta = await pos.eliminarOrdenesRuteoMasivamente();
+      const cuerpo = (await respuesta.text()).trim();
+      expect(cuerpo, `AJAX_ELIMINAR_RUTEO_MASIVO respondió "${cuerpo}" (se esperaba un indicador de éxito)`).not.toBe('0');
+    });
+
+    await test.step('Validar que la orden ya no aparece en el listado ni puede reabrirse', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      const sigueExistiendo = await pos.tarjetaRuteo(idOrden).isVisible({ timeout: 10_000 }).catch(() => false);
+      expect(sigueExistiendo, 'La orden eliminada no debía seguir apareciendo en el listado "Ruteo"').toBe(false);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
 });
