@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { ReportesPage, SUBMODULOS_REPORTES_GASTOS_OPERATIVOS, TIMEOUTS } from './reportes.page';
+import { ReportesPage, TIMEOUTS } from './reportes.page';
+import { SUBMODULOS_REPORTES_GASTOS_OPERATIVOS } from './rp-gastos-operativos.page';
 
 for (const submodulo of SUBMODULOS_REPORTES_GASTOS_OPERATIVOS) {
   test(`Cargar el submódulo "${submodulo.nombre}" del módulo Reportes > Gastos Operativos`, async ({ page }) => {

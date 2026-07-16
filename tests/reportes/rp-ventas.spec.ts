@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { ReportesPage, SUBMODULOS_REPORTES_VENTAS, TIMEOUTS } from './reportes.page';
+import { ReportesPage, TIMEOUTS } from './reportes.page';
+import { SUBMODULOS_REPORTES_VENTAS } from './rp-ventas.page';
 
 for (const submodulo of SUBMODULOS_REPORTES_VENTAS) {
   test(`Cargar el submódulo "${submodulo.nombre}" del módulo Reportes > Ventas`, async ({ page }) => {
