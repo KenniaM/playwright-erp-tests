@@ -1938,4 +1938,94 @@ test.describe('Orden de Ruteo', () => {
 
     expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
   });
+
+  // ─── Escenarios 31-32: corrección de un hallazgo previo sobre "Imprimir" y
+  // paridad de la selección múltiple entre los 5 filtros reales ────────────
+  //
+  // Investigado en vivo (script de investigación descartado tras extraer la
+  // evidencia): el comentario original de RUTEO_REPORTE_LI_IMPRIMIR en
+  // pos.page.ts afirmaba que "Imprimir" no abría ninguna ventana en este
+  // ambiente — falso. Un listener de solo el evento `popup` nunca lo
+  // detectaba porque Chromium headless entrega el PDF que el botón intenta
+  // abrir en una ventana nueva como un evento `download` (nombre de archivo
+  // aleatorio), no como `popup`. Confirmado comparando el PDF resultante
+  // byte a byte contra "Descargar PDF": mismo tamaño exacto, solo difieren
+  // ~60 bytes de metadata/timestamp interno — es el mismo reporte fijo
+  // "Ruteo Sin Repartidor" de RUTEO_REPORTE_LI_DESCARGAR_PDF, entregado de
+  // otra forma. Ver el comentario corregido de RUTEO_REPORTE_LI_IMPRIMIR y
+  // el nuevo método imprimirReporteRuteoPDF() en pos.page.ts.
+  //
+  // También se confirmó en vivo (mismo script) que el modo de selección
+  // múltiple (checkboxes + Eliminar/Cambiar Repartidor/Enviar a Ruteo) queda
+  // habilitado por igual en los 5 filtros reales, incluido "H. de Órdenes"
+  // (órdenes ya facturadas) — select_orders() es un TOGGLE cuyo estado
+  // persiste al cambiar de filtro, no hay que reactivarlo en cada uno. El
+  // Escenario 32 valida esa paridad de UI de forma segura (sin ejecutar
+  // ninguna acción real): las acciones masivas de escritura ya se prueban de
+  // punta a punta con órdenes propias desechables en los Escenarios 28-30;
+  // ejecutarlas también contra órdenes reales de "H. de Órdenes" arriesgaría
+  // modificar/eliminar facturas reales del ambiente QA compartido sin
+  // necesidad, solo para confirmar algo que ya queda probado sin ese riesgo.
+
+  test('31. Imprimir desde el listado "Ruteo": validar que SÍ genera el mismo reporte fijo "Sin Repartidor" que "Descargar PDF" (corrige un hallazgo previo)', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    await pos.abrirListadoOrdenesRuteo();
+
+    await test.step('Imprimir con el filtro real "Pendiente" activo y validar que SÍ descarga un PDF', async () => {
+      await pos.irAFiltroRuteo('Pendiente');
+      const descarga = await pos.imprimirReporteRuteoPDF();
+      expect(descarga.suggestedFilename(), 'El archivo generado por "Imprimir" debe tener extensión .pdf').toMatch(/\.pdf$/i);
+    });
+
+    await test.step('Imprimir con el filtro real "En Camino" activo: también descarga, confirmando que tampoco depende del filtro (igual que "Descargar PDF")', async () => {
+      await pos.irAFiltroRuteo('En Camino');
+      const descarga = await pos.imprimirReporteRuteoPDF();
+      expect(descarga.suggestedFilename(), 'El archivo generado por "Imprimir" debe tener extensión .pdf').toMatch(/\.pdf$/i);
+    });
+
+    await test.step('Restaurar el filtro "Todos" para no afectar otros tests del mismo worker', async () => {
+      await pos.irAFiltroRuteo('Todos');
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('32. Selección múltiple en el listado "Ruteo": validar que queda habilitada por igual en los 5 filtros reales, incluido "H. de Órdenes"', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    await pos.abrirListadoOrdenesRuteo();
+
+    await test.step('Activar el modo "Seleccionar" una sola vez (persiste entre filtros) y validar que queda habilitado', async () => {
+      await pos.entrarModoSeleccionMasivaRuteo();
+      // expect.poll() (no un solo chequeo): el listado se vuelve a renderizar
+      // tras cambiar de filtro (o de activar el modo selección) y los
+      // checkboxes/`<li>` de acción tardan un momento en reflejar el nuevo
+      // estado — espera funcional, sin waitForTimeout().
+      await expect.poll(
+        () => pos.seleccionMasivaRuteoHabilitada(),
+        { message: 'El modo de selección no quedó habilitado en el filtro inicial' }
+      ).toBe(true);
+    });
+
+    const filtros: Array<'Pendiente' | 'En Camino' | 'Entregado' | 'H. de Órdenes'> =
+      ['Pendiente', 'En Camino', 'Entregado', 'H. de Órdenes'];
+    for (const filtro of filtros) {
+      await test.step(`Cambiar al filtro real "${filtro}" y validar que el modo de selección sigue habilitado`, async () => {
+        await pos.irAFiltroRuteo(filtro);
+        await expect.poll(
+          () => pos.seleccionMasivaRuteoHabilitada(),
+          { message: `El modo de selección no quedó habilitado en el filtro "${filtro}"` }
+        ).toBe(true);
+      });
+    }
+
+    await test.step('Restaurar el filtro "Todos" para no afectar otros tests del mismo worker', async () => {
+      await pos.irAFiltroRuteo('Todos');
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
 });
