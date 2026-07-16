@@ -1,12 +1,4 @@
-import { expect, Download, Locator, Page, Response } from '@playwright/test';
-import { L } from './pos.locators';
-import {
-  TIMEOUTS, PAUSES, CAJA_TEXTO, CHECKBOX_ID, PestanaPos, PESTANA_POS_FACTURACION,
-  PESTANAS_POS_A_RECORRER, MetodoPago, METODO, DESCUENTO_INDIVIDUAL_PCT, DESCUENTO_GENERAL_PCT,
-  TipoPagoOrdenCaja, TipoProforma, VEHICULO_PINTURA_TIPO, COMPANIA_POS, CABYS_BUSQUEDA,
-  CABYS_BUSQUEDA_SIN_IVA, PRECIO_PRODUCTO_RAPIDO, EscenarioDescuento, ResultadoDescuento,
-  EstadoCheckIva, ConfigBusquedaCabys, LineaCarrito, MetadatoProducto, DASHBOARD_URL,
-} from './pos.types';
+import { Page } from '@playwright/test';
 import { espiarErroresJS, esperarQuedaActivo } from './pos.utils';
 import { PosCore } from './pos-core.page';
 import { PosCierreCaja } from './pos-cierre-caja.page';
@@ -19,18 +11,17 @@ import { PosOrdenCaja } from './pos-orden-caja.page';
 import { PosApartados } from './pos-apartado.page';
 import { PosRuteo } from './pos-ruteo.page';
 
-// Pasos 0-1 de la migración a composición (ver el plan aprobado en
+// Migración a composición completa (ver el plan aprobado en
 // /Users/mobileimacimac/.claude/plans/hazy-noodling-stream.md): tipos,
-// constantes y locators se movieron a pos.types.ts/pos.locators.ts, y las 2
-// funciones sueltas a pos.utils.ts. Este archivo sigue siendo el punto de
-// entrada público único (barrel): re-exporta todo para que ningún import
-// existente en los .spec.ts, ni el cruzado desde
-// tests/gestion-de-taller/recepcion.page.ts, tenga que cambiar. Próximos
-// pasos del plan: PosCore (helpers transversales) ya se extrajo a
-// pos-core.page.ts — PosPage delega a `this.core` cada uno de sus
-// miembros. Quedan por extraer: Cierre de Caja, Navegación, Pago,
-// Proforma, Crear Producto, Importar Factura, Orden de Caja, Apartado y
-// Ruteo, cada uno a su propia clase compuesta de la misma forma.
+// constantes y locators viven en pos.types.ts/pos.locators.ts, las 2
+// funciones sueltas en pos.utils.ts, y cada dominio de negocio (Core, Pago,
+// Cierre de Caja, Navegación, Proforma, Crear Producto, Importar Factura,
+// Orden de Caja, Apartado, Ruteo) en su propia clase, compuesta aquí. Este
+// archivo es ahora únicamente la fachada: instancia las 9 clases de
+// dominio y delega cada miembro público con un one-liner. Sigue siendo el
+// punto de entrada público único (barrel): re-exporta todo para que ningún
+// import existente en los .spec.ts, ni el cruzado desde
+// tests/gestion-de-taller/recepcion.page.ts, tenga que cambiar.
 export * from './pos.types';
 export { espiarErroresJS, esperarQuedaActivo };
 
