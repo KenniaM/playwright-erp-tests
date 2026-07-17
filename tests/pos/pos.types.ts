@@ -104,6 +104,20 @@ export const PESTANA_POS_FACTURACION: PestanaPos = {
   contenedorContenido: '#content_product_by_style',
 };
 
+// Misma pestaña que la entrada '#btn_proform_option' de PESTANAS_POS_A_RECORRER
+// (ver más abajo), expuesta aquí también por su propio nombre: es el listado
+// de Proformas YA CREADAS dentro del propio POS (tarjetas con menú de tres
+// puntos: Imprimir/Editar/WhatsApp/Enviar email/Descargar PDF/Eliminar) — NO
+// confundir con el listado externo `printPosProform` (otra ventana/pestaña
+// del navegador, con su propio conjunto más limitado de acciones). Es aquí,
+// y solo aquí, donde existe una edición real in-place (edit_proform(id) →
+// AJAX_ACTUALIZAR_PROFORMA) — confirmado en vivo.
+export const PESTANA_POS_PROFORMA: PestanaPos = {
+  selector: '#btn_proform_option',
+  etiqueta: 'Proforma / Cotizaciones',
+  contenedorContenido: '#content_invoice_order_list',
+};
+
 // Resto de pestañas a recorrer, en el orden solicitado. Todas confirmadas en
 // vivo con id técnico estable (ver el comentario de PESTANAS_POS_CONTENEDOR)
 // — "Apartados" queda fuera de este arreglo a propósito: a diferencia de

@@ -47,10 +47,10 @@ for (const submodulo of SUBMODULOS_REPORTES_GASTOS_OPERATIVOS) {
 //     disponibles en este ambiente — no se crean pruebas ficticias para
 //     ninguna de las dos.
 //   - No existe exportación a PDF ni CSV, solo "Descargar Excel".
-//   - "Eliminar" (menú de la fila) es una acción destructiva real: solo se
-//     valida que exista en el menú, nunca se ejecuta.
-//   - "Agregar" (crear un gasto nuevo) es una acción de escritura fuera del
-//     alcance de este reporte: no se prueba.
+//   - "Agregar" y "Eliminar" SÍ se prueban de punta a punta (ver el describe
+//     "Agregar y Eliminar gasto operativo" más abajo) — pero "Eliminar" solo
+//     se ejecuta sobre gastos que el propio test crea primero con "Agregar",
+//     nunca sobre registros preexistentes del ambiente compartido de QA.
 
 test.describe('Reporte de Gastos Operativos', () => {
   test('carga la tabla con sus columnas, con datos reales y sin errores', async ({ page }) => {
@@ -223,6 +223,125 @@ test.describe('Reporte de Gastos Operativos', () => {
 
     const { seAbrioVentanaNueva } = await gastos.imprimirFila(0);
     expect(seAbrioVentanaNueva).toBe(true);
+    await gastos.validarSinErrores();
+  });
+});
+
+// ─── Agregar y Eliminar gasto operativo ────────────────────────────────────
+//
+// A diferencia del resto de este archivo, estos tests SÍ ejecutan "Agregar" y
+// "Eliminar" de punta a punta. "Eliminar" nunca se ejecuta sobre un registro
+// preexistente del ambiente compartido de QA: cada test crea primero su
+// propio gasto operativo con crearGastoDePrueba() y solo elimina ESE gasto.
+//
+// Un gasto operativo en este ERP es una salida de productos reales del
+// inventario (no un monto libre a mano) — ver el comentario completo de
+// ReporteGastosOperativosPage en rp-gastos-operativos.page.ts para el
+// detalle del modal "Agregar gasto operativo" confirmado en vivo.
+
+test.describe('Agregar y Eliminar gasto operativo', () => {
+  /**
+   * Crea un gasto operativo real de principio a fin: abre el modal, busca un
+   * producto real del inventario ("a" es un término genérico que siempre
+   * devuelve resultados en este ambiente), lo agrega, fija la cantidad
+   * indicada (campo obligatorio, junto con el producto) y completa también
+   * los campos opcionales ("# Código reporte" y "Observaciones") antes de
+   * guardar. Devuelve los datos reales usados para que cada test valide que
+   * lo guardado coincide con lo ingresado.
+   */
+  async function crearGastoDePrueba(gastos: ReporteGastosOperativosPage, cantidad: number) {
+    const observacion = `Gasto de prueba automatizada ${Date.now()}`;
+    const codigoReporte = `QA-${Date.now()}`;
+
+    await gastos.abrirModalAgregarGasto();
+    await gastos.buscarProductoEnModalAgregar('a');
+    const { productId, costoUnitario } = await gastos.agregarPrimerProductoResultadoModal();
+    await gastos.fijarCantidadProductoModal(productId, cantidad, costoUnitario);
+    await gastos.llenarCodigoReporteModal(codigoReporte);
+    await gastos.llenarObservacionesModal(observacion);
+
+    const totalEsperado = costoUnitario * cantidad;
+    const idGasto = await gastos.guardarGastoModal();
+
+    return { observacion, codigoReporte, costoUnitario, totalEsperado, idGasto };
+  }
+
+  test('"Agregar gasto operativo" completa producto + cantidad (obligatorios) y código/observaciones (opcionales), y el gasto queda visible con esos mismos datos', async ({ page }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const gastos = new ReporteGastosOperativosPage(page);
+    await gastos.abrirReporteGastosOperativos();
+
+    const { observacion, totalEsperado, idGasto } = await test.step('Crear el gasto con producto, cantidad y campos opcionales completos', async () => {
+      return crearGastoDePrueba(gastos, 2);
+    });
+
+    expect(idGasto).toBeGreaterThan(0);
+
+    await test.step('El gasto recién creado aparece al buscarlo por su observación', async () => {
+      await gastos.aumentarRangoFechas(hoyISO(), hoyISO());
+      await gastos.buscar(observacion);
+      await expect.poll(() => gastos.contarFilas(), { timeout: TIMEOUTS.CARGA }).toBe(1);
+    });
+
+    await test.step('Los datos guardados coinciden con los ingresados', async () => {
+      const fecha = await gastos.obtenerFechaDeFila(0);
+      const observacionFila = await gastos.obtenerObservacionDeFila(0);
+      const totalFila = await gastos.obtenerTotalNumericoDeFila(0);
+
+      expect(fecha).toContain(hoyISO());
+      expect(observacionFila).toBe(observacion);
+      expect(totalFila).toBeCloseTo(totalEsperado, 2);
+    });
+
+    await gastos.validarSinErrores();
+  });
+
+  test('el monto del gasto se calcula como costo unitario × cantidad, y el total se refleja igual en el listado tras guardar', async ({ page }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const gastos = new ReporteGastosOperativosPage(page);
+    await gastos.abrirReporteGastosOperativos();
+
+    const cantidad = 4;
+    const { observacion, costoUnitario, totalEsperado } = await test.step(`Crear un gasto con cantidad ${cantidad}`, async () => {
+      return crearGastoDePrueba(gastos, cantidad);
+    });
+
+    expect(totalEsperado).toBeCloseTo(costoUnitario * cantidad, 2);
+
+    await test.step('El total mostrado en el listado coincide con costo unitario × cantidad', async () => {
+      await gastos.aumentarRangoFechas(hoyISO(), hoyISO());
+      await gastos.buscar(observacion);
+      await expect.poll(() => gastos.contarFilas(), { timeout: TIMEOUTS.CARGA }).toBe(1);
+
+      const totalFila = await gastos.obtenerTotalNumericoDeFila(0);
+      expect(totalFila).toBeCloseTo(totalEsperado, 2);
+    });
+  });
+
+  test('"Eliminar" borra un gasto creado por el propio test: confirma el SweetAlert2 real y el registro deja de aparecer en el listado', async ({ page }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const gastos = new ReporteGastosOperativosPage(page);
+    await gastos.abrirReporteGastosOperativos();
+
+    const { observacion } = await test.step('Crear un gasto de prueba para eliminarlo (nunca se elimina un registro preexistente del ambiente compartido)', async () => {
+      return crearGastoDePrueba(gastos, 1);
+    });
+
+    await test.step('El gasto creado aparece en el listado', async () => {
+      await gastos.aumentarRangoFechas(hoyISO(), hoyISO());
+      await gastos.buscar(observacion);
+      await expect.poll(() => gastos.contarFilas(), { timeout: TIMEOUTS.CARGA }).toBe(1);
+    });
+
+    await test.step('Eliminar la fila y confirmar el SweetAlert2 real ("¡Eliminar gasto operativo!")', async () => {
+      await gastos.eliminarFila(0);
+    });
+
+    await test.step('El gasto eliminado ya no aparece al volver a buscarlo', async () => {
+      await gastos.buscar(observacion);
+      await expect.poll(() => gastos.contarFilas(), { timeout: TIMEOUTS.CARGA }).toBe(0);
+    });
+
     await gastos.validarSinErrores();
   });
 });

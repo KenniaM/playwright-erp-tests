@@ -55,6 +55,11 @@ async function cerrarBannerNotificaciones(page: Page) {
   await page.locator('#workshop-web-notification-permission-dismiss').click({ timeout: 3000 }).catch(() => {});
 }
 
+/** Convierte un monto mostrado en pantalla (p.ej. "$ 1,000.00", "$600.00") a number, para comparar montos sin importar espacios/símbolo de moneda. */
+function montoANumero(texto: string): number {
+  return parseFloat(texto.replace(/[^\d.-]/g, ''));
+}
+
 // ─── Reporte de Gastos Operativos ──────────────────────────────────────────
 
 /**
@@ -96,15 +101,28 @@ async function cerrarBannerNotificaciones(page: Page) {
  *   `getprintVoucherFamilyExpense` y abre una pestaña nueva — igual que el
  *   resto de la suite, esa pestaña queda en `about:blank` en este ambiente,
  *   sin impresión automática configurada, no bloqueante) y "Eliminar"
- *   (`confirm_delete_subsidy`, ACCIÓN DESTRUCTIVA real). Mismo criterio que
- *   `ReporteCierreCajaPage` con "Enviar por correo"/"Enviar por WhatsApp":
- *   los tests solo verifican que "Eliminar" exista en el menú, nunca la
- *   ejecutan sobre datos reales del ambiente compartido.
- * - "Agregar" (`#add_family_expenses`) crea un gasto operativo nuevo — acción
- *   de escritura fuera del alcance de este reporte (ningún otro `rp-*` crea
- *   datos); no se prueba aquí. Ya hay registros reales en el ambiente para
- *   probar búsqueda/filtros/exportación/detalle/impresión sin necesidad de
- *   crear ninguno.
+ *   (ACCIÓN DESTRUCTIVA real, ver `eliminarFila()` abajo). A diferencia del
+ *   resto de la suite (donde "Eliminar" nunca se ejecuta por ser destructivo
+ *   sobre datos compartidos), aquí SÍ se ejecuta en los tests — pero
+ *   únicamente sobre gastos que el propio test crea primero con
+ *   `guardarGastoModal()`, nunca sobre registros preexistentes del ambiente.
+ * - "Agregar" (`#add_family_expenses`) abre el modal `#dialog_add_family_expenses`
+ *   ("Agregar gasto operativo"): un gasto operativo es, en este ERP, una
+ *   salida de productos reales del inventario (no un monto libre) — se busca
+ *   un producto (`#search_parameter` + `#basic-addon3`, resultados reales
+ *   `.afe-product-search-card` con `onclick="get_product_to_add(...)"`), se
+ *   agrega a `#report_expense_table` (fila `tr#product_row_<id>` con cantidad
+ *   editable `#product_quantity_<id>`, min 1) y el total del modal
+ *   (`#opex-total-amount`) se recalcula en vivo como costo unitario ×
+ *   cantidad. El único campo de texto libre es "Observaciones"
+ *   (`#product_observation`); "# Código reporte" (`#code_expense`) es el
+ *   único campo opcional adicional. "Guardar" dispara
+ *   `validate_add_product_family_expenses()`, que exige confirmar un
+ *   SweetAlert2 real ("¿Esta seguro de agregar este gasto operativo?", botón
+ *   "Procesar") antes de llamar `addReportFamilyExpensesHeader` (responde
+ *   `[{ family_expenses_header_id: N }]`); el éxito se anuncia con un
+ *   `.noty_bar` ("¡Se ha guardado exitosamente!") y el modal se cierra solo.
+ *   Ver `guardarGastoModal()` y el resto de métodos de esta sección.
  * - Totales: `.fem-total` es simplemente el valor de la columna "Total" de
  *   cada fila — no existe ningún resumen/total agregado del listado
  *   completo aparte de la suma visible fila por fila.
@@ -121,6 +139,18 @@ export class ReporteGastosOperativosPage {
   private readonly contenedorTabla = () => this.page.locator('#table_family_expenses');
   private readonly filaSinResultados = () => this.page.locator('tr.fem-empty-row');
   private readonly modalDetalle = () => this.page.locator('#product_expense_family_detail');
+
+  // Modal "Agregar gasto operativo" (`#dialog_add_family_expenses`).
+  private readonly btnAgregarGasto = () => this.page.locator('#add_family_expenses');
+  private readonly modalAgregarGasto = () => this.page.locator('#dialog_add_family_expenses');
+  private readonly buscadorProductoModal = () => this.modalAgregarGasto().locator('#search_parameter');
+  private readonly btnBuscarProductoModal = () => this.modalAgregarGasto().locator('#basic-addon3');
+  private readonly resultadosProductoModal = () => this.modalAgregarGasto().locator('#product_option_view .afe-product-search-card');
+  private readonly filasProductoModal = () => this.modalAgregarGasto().locator('#report_expense_table tr.product_row_table');
+  private readonly totalMontoModal = () => this.modalAgregarGasto().locator('#opex-total-amount');
+  private readonly campoCodigoReporteModal = () => this.modalAgregarGasto().locator('#code_expense');
+  private readonly campoObservacionesModal = () => this.modalAgregarGasto().locator('#product_observation');
+  private readonly btnGuardarModal = () => this.modalAgregarGasto().locator('.family-expenses-btn--success');
 
   /** Columnas (0-based) de cada fila — confirmadas en vivo. */
   static readonly COLUMNA_CODIGO = 1;
@@ -199,6 +229,11 @@ export class ReporteGastosOperativosPage {
 
   async obtenerTotalDeFila(indice: number): Promise<string> {
     return this.celdaDeFila(indice, ReporteGastosOperativosPage.COLUMNA_TOTAL);
+  }
+
+  /** Igual que obtenerTotalDeFila pero como number, para comparar montos exactos (ignora símbolo de moneda/espacios). */
+  async obtenerTotalNumericoDeFila(indice: number): Promise<number> {
+    return montoANumero(await this.obtenerTotalDeFila(indice));
   }
 
   /**
@@ -285,6 +320,133 @@ export class ReporteGastosOperativosPage {
     const popup = await popupPromise;
     if (popup) await popup.close().catch(() => {});
     return { seAbrioVentanaNueva: !!popup };
+  }
+
+  // ─── Agregar gasto operativo ──────────────────────────────────────────
+
+  /** Abre el modal real "Agregar gasto operativo" (`#dialog_add_family_expenses`) presionando "+ Agregar". */
+  async abrirModalAgregarGasto() {
+    await this.btnAgregarGasto().click();
+    await expect(this.modalAgregarGasto(), 'El modal "Agregar gasto operativo" no se abrió').toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /**
+   * Busca un producto real por texto libre dentro del modal
+   * (`#search_parameter` + botón de lupa `#basic-addon3`) y espera a que
+   * aparezca al menos un resultado real (`.afe-product-search-card`).
+   */
+  async buscarProductoEnModalAgregar(termino: string) {
+    await this.buscadorProductoModal().fill(termino);
+    await this.btnBuscarProductoModal().click();
+    await expect.poll(() => this.resultadosProductoModal().count(), { timeout: TIMEOUTS.CARGA }).toBeGreaterThan(0);
+  }
+
+  /**
+   * Agrega a la tabla del modal el primer producto real de los resultados de
+   * búsqueda (`get_product_to_add(...)`) y devuelve el id real del producto
+   * agregado junto con su costo unitario (campo oculto
+   * `#product_hide_cost_<id>`, leído justo tras agregarlo, cuando la
+   * cantidad todavía es 1) — necesario para calcular el total esperado tras
+   * fijar la cantidad.
+   */
+  async agregarPrimerProductoResultadoModal(): Promise<{ productId: string; costoUnitario: number }> {
+    const filasAntes = await this.filasProductoModal().count();
+    await this.resultadosProductoModal().first().click();
+    await expect.poll(() => this.filasProductoModal().count(), { timeout: TIMEOUTS.CARGA }).toBeGreaterThan(filasAntes);
+
+    const filaNueva = this.filasProductoModal().last();
+    const idFila = await filaNueva.getAttribute('id'); // "product_row_<id>"
+    const productId = (idFila ?? '').replace('product_row_', '');
+    const costoUnitario = montoANumero(await this.modalAgregarGasto().locator(`#product_hide_cost_${productId}`).inputValue());
+    return { productId, costoUnitario };
+  }
+
+  /**
+   * Cambia la cantidad del producto agregado (por su id real) y espera a que
+   * el total del modal (`#opex-total-amount`) refleje el nuevo monto
+   * esperado (costo unitario × cantidad) — valida en vivo que el cálculo se
+   * actualiza correctamente antes de guardar.
+   */
+  async fijarCantidadProductoModal(productId: string, cantidad: number, costoUnitario: number) {
+    const cantidadInput = this.modalAgregarGasto().locator(`#product_quantity_${productId}`);
+    await cantidadInput.fill(String(cantidad));
+    await cantidadInput.dispatchEvent('change');
+    await expect
+      .poll(async () => montoANumero((await this.totalMontoModal().textContent()) ?? ''), { timeout: TIMEOUTS.CARGA })
+      .toBe(costoUnitario * cantidad);
+  }
+
+  /** Llena el campo opcional "# Código reporte" del modal "Agregar gasto operativo". */
+  async llenarCodigoReporteModal(texto: string) {
+    await this.campoCodigoReporteModal().fill(texto);
+  }
+
+  /** Llena el campo "Observaciones" del modal "Agregar gasto operativo". */
+  async llenarObservacionesModal(texto: string) {
+    await this.campoObservacionesModal().fill(texto);
+  }
+
+  /**
+   * Presiona "Guardar", confirma el SweetAlert2 real ("¿Esta seguro de
+   * agregar este gasto operativo?", botón "Procesar") y espera la respuesta
+   * real de `addReportFamilyExpensesHeader` (`[{ family_expenses_header_id:
+   * N }]`). El propio modal se cierra solo tras el guardado exitoso — no
+   * hace falta cerrarlo manualmente. Devuelve el id real del gasto creado.
+   */
+  async guardarGastoModal(): Promise<number> {
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes('addReportFamilyExpensesHeader'),
+      { timeout: TIMEOUTS.CARGA }
+    );
+    await this.btnGuardarModal().click();
+
+    const confirmacion = this.page.locator('.swal2-popup', { hasText: 'agregar este gasto operativo' });
+    await expect(confirmacion, 'No apareció la confirmación "¿Esta seguro de agregar este gasto operativo?"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await confirmacion.locator('.swal2-confirm').click();
+
+    const respuesta = await respuestaPromise;
+    const cuerpo = (await respuesta.json()) as Array<{ family_expenses_header_id: number }>;
+
+    await expect(
+      this.page.locator('.noty_bar', { hasText: 'guardado exitosamente' }),
+      'No apareció el mensaje "¡Se ha guardado exitosamente!"'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await expect(this.modalAgregarGasto(), 'El modal "Agregar gasto operativo" no se cerró tras guardar').toBeHidden({ timeout: TIMEOUTS.CARGA });
+
+    return cuerpo[0].family_expenses_header_id;
+  }
+
+  // ─── Eliminar gasto operativo ─────────────────────────────────────────
+
+  /**
+   * Elimina la fila indicada (0-based) desde su menú de acciones: abre el
+   * menú, presiona "Eliminar", confirma el SweetAlert2 real ("¡Eliminar
+   * gasto operativo! ¿Desea continuar?", botón "Eliminar") y espera la
+   * respuesta real de `delete_operating_expense`. A diferencia del SweetAlert2
+   * de "Agregar", el de éxito de esta acción ("¡Éxito! El gasto operativo se
+   * eliminó correctamente...") NO se autocierra — hay que presionar
+   * "Aceptar" (confirmado en vivo).
+   */
+  async eliminarFila(indice = 0) {
+    await this.filas().nth(indice).locator('.pce-btn-more').click();
+    await expect(this.menuAccionesDeFila(indice)).toBeVisible({ timeout: TIMEOUTS.CARGA });
+
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes('delete_operating_expense'),
+      { timeout: TIMEOUTS.CARGA }
+    );
+    await this.menuAccionesDeFila(indice).locator('a', { hasText: 'Eliminar' }).click();
+
+    const confirmacion = this.page.locator('.swal2-popup', { hasText: 'Eliminar gasto operativo' });
+    await expect(confirmacion, 'No apareció la confirmación "¡Eliminar gasto operativo!"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await confirmacion.locator('.swal2-confirm').click();
+
+    await respuestaPromise;
+
+    const exito = this.page.locator('.swal2-popup', { hasText: 'se eliminó correctamente' });
+    await expect(exito, 'No apareció el mensaje de éxito de la eliminación').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await exito.locator('.swal2-confirm').click();
+    await expect(exito).toBeHidden({ timeout: TIMEOUTS.CARGA });
   }
 
   async validarTabla() {

@@ -45,7 +45,7 @@ export class PosPage {
     this.cierreCaja = new PosCierreCaja(this.core);
     this.payment = new PosPayment(this.core);
     this.navigation = new PosNavigation(this.core);
-    this.proforma = new PosProforma(this.core, this.payment);
+    this.proforma = new PosProforma(this.core, this.payment, this.navigation);
     this.crearProducto = new PosCrearProducto(this.core);
     this.importarFactura = new PosImportarFactura(this.core, this.payment);
     this.ordenCaja = new PosOrdenCaja(this.core, this.payment);
@@ -809,6 +809,9 @@ export class PosPage {
   async obtenerSimboloMonedaEnTotal(...args: Parameters<PosCore['obtenerSimboloMonedaEnTotal']>) {
     return this.core.obtenerSimboloMonedaEnTotal(...args);
   }
+  async obtenerSimbolosMonedaDisponibles(...args: Parameters<PosCore['obtenerSimbolosMonedaDisponibles']>) {
+    return this.core.obtenerSimbolosMonedaDisponibles(...args);
+  }
   get modalCrearProforma() { return this.proforma.modalCrearProforma; }
   async abrirCrearProforma(...args: Parameters<PosProforma['abrirCrearProforma']>) {
     return this.proforma.abrirCrearProforma(...args);
@@ -819,6 +822,10 @@ export class PosPage {
   get campoNombreClienteProforma() { return this.proforma.campoNombreClienteProforma; }
   async llenarNombreClienteProforma(...args: Parameters<PosProforma['llenarNombreClienteProforma']>) {
     return this.proforma.llenarNombreClienteProforma(...args);
+  }
+  get campoObservacionProforma() { return this.proforma.campoObservacionProforma; }
+  async llenarObservacionProforma(...args: Parameters<PosProforma['llenarObservacionProforma']>) {
+    return this.proforma.llenarObservacionProforma(...args);
   }
   async seleccionarVendedorProforma(...args: Parameters<PosProforma['seleccionarVendedorProforma']>) {
     return this.proforma.seleccionarVendedorProforma(...args);
@@ -844,6 +851,81 @@ export class PosPage {
   }
   async verTodasLasProformas(...args: Parameters<PosProforma['verTodasLasProformas']>) {
     return this.proforma.verTodasLasProformas(...args);
+  }
+  async obtenerIdProformaCreada(...args: Parameters<PosProforma['obtenerIdProformaCreada']>) {
+    return this.proforma.obtenerIdProformaCreada(...args);
+  }
+  async abrirVistaPreviaWhatsApp(...args: Parameters<PosProforma['abrirVistaPreviaWhatsApp']>) {
+    return this.proforma.abrirVistaPreviaWhatsApp(...args);
+  }
+  async enviarPorWhatsAppYObtenerPestana(...args: Parameters<PosProforma['enviarPorWhatsAppYObtenerPestana']>) {
+    return this.proforma.enviarPorWhatsAppYObtenerPestana(...args);
+  }
+  async abrirListadoProformas(...args: Parameters<PosProforma['abrirListadoProformas']>) {
+    return this.proforma.abrirListadoProformas(...args);
+  }
+  async seleccionarPrimeraProformaDelListado(...args: Parameters<PosProforma['seleccionarPrimeraProformaDelListado']>) {
+    return this.proforma.seleccionarPrimeraProformaDelListado(...args);
+  }
+  async eliminarProformaSeleccionadaDelListado(...args: Parameters<PosProforma['eliminarProformaSeleccionadaDelListado']>) {
+    return this.proforma.eliminarProformaSeleccionadaDelListado(...args);
+  }
+  async imprimirProformaSeleccionadaDelListado(...args: Parameters<PosProforma['imprimirProformaSeleccionadaDelListado']>) {
+    return this.proforma.imprimirProformaSeleccionadaDelListado(...args);
+  }
+  async descargarPdfProformaSeleccionadaDelListado(...args: Parameters<PosProforma['descargarPdfProformaSeleccionadaDelListado']>) {
+    return this.proforma.descargarPdfProformaSeleccionadaDelListado(...args);
+  }
+  async enviarProformaSeleccionadaDelListadoPorCorreo(...args: Parameters<PosProforma['enviarProformaSeleccionadaDelListadoPorCorreo']>) {
+    return this.proforma.enviarProformaSeleccionadaDelListadoPorCorreo(...args);
+  }
+  async abrirLinkFacturarDelListado(...args: Parameters<PosProforma['abrirLinkFacturarDelListado']>) {
+    return this.proforma.abrirLinkFacturarDelListado(...args);
+  }
+  async cargarProformaEnCarritoDesdeTab(...args: Parameters<PosProforma['cargarProformaEnCarritoDesdeTab']>) {
+    return this.proforma.cargarProformaEnCarritoDesdeTab(...args);
+  }
+  async intentarConvertirAOrdenDeReparacion(...args: Parameters<PosProforma['intentarConvertirAOrdenDeReparacion']>) {
+    return this.proforma.intentarConvertirAOrdenDeReparacion(...args);
+  }
+  async seleccionarPlacaClienteEnCarrito(...args: Parameters<PosProforma['seleccionarPlacaClienteEnCarrito']>) {
+    return this.proforma.seleccionarPlacaClienteEnCarrito(...args);
+  }
+  async confirmarConversionAOrdenDeReparacionYObtenerRespuesta(...args: Parameters<PosProforma['confirmarConversionAOrdenDeReparacionYObtenerRespuesta']>) {
+    return this.proforma.confirmarConversionAOrdenDeReparacionYObtenerRespuesta(...args);
+  }
+  async abrirMenuTarjetaProformaEnTab(...args: Parameters<PosProforma['abrirMenuTarjetaProformaEnTab']>) {
+    return this.proforma.abrirMenuTarjetaProformaEnTab(...args);
+  }
+  async cambiarSubTabProforma(...args: Parameters<PosProforma['cambiarSubTabProforma']>) {
+    return this.proforma.cambiarSubTabProforma(...args);
+  }
+  async editarProformaSeleccionada(...args: Parameters<PosProforma['editarProformaSeleccionada']>) {
+    return this.proforma.editarProformaSeleccionada(...args);
+  }
+  async guardarEdicionProformaYObtenerRespuesta(...args: Parameters<PosProforma['guardarEdicionProformaYObtenerRespuesta']>) {
+    return this.proforma.guardarEdicionProformaYObtenerRespuesta(...args);
+  }
+  async abrirWhatsAppDesdeTab(...args: Parameters<PosProforma['abrirWhatsAppDesdeTab']>) {
+    return this.proforma.abrirWhatsAppDesdeTab(...args);
+  }
+  async obtenerPrimeraProformaEnTab(...args: Parameters<PosProforma['obtenerPrimeraProformaEnTab']>) {
+    return this.proforma.obtenerPrimeraProformaEnTab(...args);
+  }
+  async descargarProformaDesdeModalWhatsApp(...args: Parameters<PosProforma['descargarProformaDesdeModalWhatsApp']>) {
+    return this.proforma.descargarProformaDesdeModalWhatsApp(...args);
+  }
+  async imprimirProformaDesdeTab(...args: Parameters<PosProforma['imprimirProformaDesdeTab']>) {
+    return this.proforma.imprimirProformaDesdeTab(...args);
+  }
+  async descargarPdfProformaDesdeTab(...args: Parameters<PosProforma['descargarPdfProformaDesdeTab']>) {
+    return this.proforma.descargarPdfProformaDesdeTab(...args);
+  }
+  async enviarEmailDesdeTab(...args: Parameters<PosProforma['enviarEmailDesdeTab']>) {
+    return this.proforma.enviarEmailDesdeTab(...args);
+  }
+  async eliminarProformaDesdeTab(...args: Parameters<PosProforma['eliminarProformaDesdeTab']>) {
+    return this.proforma.eliminarProformaDesdeTab(...args);
   }
   get botonGenerarApartado() { return this.apartados.botonGenerarApartado; }
   async abrirCrearApartado(...args: Parameters<PosApartados['abrirCrearApartado']>) {

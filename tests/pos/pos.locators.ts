@@ -978,6 +978,7 @@ export const L = {
   // (seleccionarClienteExistente()) sincroniza este mismo campo.
   PROFORMA_CLIENTE_INPUT:   '#customer_proform_select',
   PROFORMA_VENDEDOR_CHOSEN: '#select_payment_agent_assigned_chosen',
+  PROFORMA_OBSERVACION:     '#proform_observation',
   PROFORMA_BTN_GUARDAR:     '#make_proform',
 
   // Petición AJAX real que guarda la Proforma (confirmado en vivo
@@ -996,6 +997,213 @@ export const L = {
   // cliente existente (con nombre libre responde "0" y el sistema muestra
   // el toast "Error al enviar proforma!").
   AJAX_ENVIAR_PROFORMA_CORREO: 'sendProformByEmail',
+
+  // Input oculto con el id numérico real de la Proforma recién creada —
+  // confirmado en vivo (inspeccionando #modal_pos_proform_result en vivo):
+  // es la única fuente confiable de ese id dentro del propio modal (el
+  // resto de botones lo leen de aquí vía jQuery, nunca de la URL).
+  PROFORMA_RESULT_ID: '#pos_proform_result_id',
+
+  // Compartir por WhatsApp (botón "Compartir con el cliente" del modal de
+  // Gestión) — confirmado en vivo: al clickear el botón se revela un panel
+  // de vista previa con el mensaje ya armado (incluye el enlace real de
+  // descarga del PDF por hash) y un campo de teléfono; "Enviar por
+  // WhatsApp" abre una pestaña nueva hacia api.whatsapp.com/send con el
+  // mensaje ya codificado en la URL — confirmado en vivo end-to-end.
+  GESTION_PROFORMA_BTN_WHATSAPP:         '#pos_proform_result_whatsapp_btn',
+  GESTION_PROFORMA_WHATSAPP_PREVIEW:     '#pos_proform_result_whatsapp_preview',
+  GESTION_PROFORMA_WHATSAPP_TEXTAREA:    '#pos_proform_result_whatsapp_text',
+  GESTION_PROFORMA_WHATSAPP_TELEFONO:    '#pos_proform_result_phone_input',
+  GESTION_PROFORMA_WHATSAPP_BTN_ENVIAR:  '.proform-result-whatsapp-send',
+  GESTION_PROFORMA_WHATSAPP_BTN_CANCELAR: '.proform-result-whatsapp-cancel',
+
+  // ─── Listado de Proformas ya creadas (ventana emergente que abre
+  // GESTION_PROFORMA_BTN_VER_TODAS/HISTORIAL_PROFORMAS, URL real
+  // proform/printPosProform — confirmado en vivo, NO tiene page object
+  // propio hasta ahora) ────────────────────────────────────────────────────
+  // Cada Proforma listada es una tarjeta `.receip_item` (con la clase
+  // adicional `receip_item_<id>`, mismo id real que PROFORMA_RESULT_ID) con
+  // onclick="get_receip_detail(<id>)" que carga el detalle completo, vía
+  // AJAX, dentro de `.receip_detail` (columna derecha, vacía con el texto
+  // placeholder "Seleccionar Proforma..." hasta que se clickea una fila) —
+  // confirmado en vivo.
+  LISTADO_PROFORMA_BUSCADOR:    '#receip_search',
+  LISTADO_PROFORMA_BTN_BUSCAR:  '#btn_search_receip',
+  LISTADO_PROFORMA_FILA:        '.receip_item',
+  LISTADO_PROFORMA_DETALLE:     '.receip_detail',
+  LISTADO_PROFORMA_DETALLE_VACIO: '.select_receip_text',
+
+  // Botones reales del panel de detalle (`.receip_detail`), confirmados en
+  // vivo volcando su DOM tras seleccionar una fila:
+  //   - "Eliminar" (ícono papelera, tooltip real "Eliminar proforma"):
+  //     dispara confirm_proform(id) → SweetAlert v1 ("¿Esta seguro eliminar
+  //     esta proforma?", botón "Aceptar") → AJAX_ELIMINAR_PROFORMA, que
+  //     responde texto plano "1" (mismo contrato que el resto de AJAX de
+  //     este módulo) — confirmado en vivo que, tras la eliminación exitosa,
+  //     la propia aplicación cierra esta ventana emergente sola.
+  //   - "Facturar" (id real "print_proform_btn", pese al nombre NO es
+  //     Imprimir): <a target="_blank"> hacia pos/pointOfSale con
+  //     `proform_id`+`pos_type_option=5` en la query — abre el POS en una
+  //     pestaña nueva con el nombre del cliente de la Proforma ya
+  //     precargado. Confirmado en vivo que el carrito NO se repuebla con
+  //     los productos originales (permanece vacío incluso esperando >30s):
+  //     este enlace no ofrece una edición real de las líneas ya guardadas,
+  //     solo retoma el cliente para facturar de cero — no existe, en este
+  //     ambiente, ningún control ni endpoint que permita editar in-place
+  //     una Proforma ya creada (sin "Editar" en ningún locator/onclick de
+  //     toda la sección, confirmado con grep case-insensitive sobre el HTML
+  //     real de este panel).
+  LISTADO_PROFORMA_BTN_ELIMINAR: '#btn_delete_proform',
+  LISTADO_PROFORMA_BTN_FACTURAR: '#print_proform_btn',
+  LISTADO_PROFORMA_BTN_IMPRIMIR: '#print_btn',
+  LISTADO_PROFORMA_BTN_EMAIL:    '._email',
+  LISTADO_PROFORMA_BTN_PDF:      '#pdf_btn',
+
+  // Modal "Enviar Cotización/Proforma por correo" (abierto por
+  // LISTADO_PROFORMA_BTN_EMAIL) — confirmado en vivo volcando su DOM real:
+  // el botón "Enviar" dispara `send_proform_by_email(id)`, la MISMA función/
+  // AJAX que ya usa GESTION_PROFORMA_BTN_CORREO (AJAX_ENVIAR_PROFORMA_CORREO),
+  // así que responde con el mismo contrato ("1"/"0" texto plano). El campo
+  // de correos es un widget "selectize" (no un <input> nativo interactuable
+  // directamente: el real queda con `display:none`, reemplazado visualmente
+  // por `#email_tags-selectized`) — cada correo se confirma con Enter, según
+  // el propio texto de ayuda del modal ("Digite los correos... separados
+  // con un enter").
+  LISTADO_PROFORMA_DIALOG_EMAIL:      '#dialog_sent_email_info',
+  LISTADO_PROFORMA_EMAIL_INPUT:       '#email_tags-selectized',
+  LISTADO_PROFORMA_EMAIL_BTN_ENVIAR:  '.send_emails_btn',
+
+  // Confirmado en vivo interceptando la red tras confirmar el SweetAlert de
+  // "Eliminar proforma": responde texto plano "1" (éxito), mismo contrato
+  // que AJAX_GUARDAR_RUTEO/AJAX_GUARDAR_APARTADO.
+  AJAX_ELIMINAR_PROFORMA: 'deleteProform',
+
+  // ─── Pestaña "Proforma / Cotizaciones" DENTRO del propio POS (PESTANA_POS_PROFORMA,
+  // '#btn_proform_option') — el listado real de Proformas ya creadas con
+  // edición in-place, confirmado en vivo volcando el DOM real de una tarjeta.
+  // Cada tarjeta es `.pos_order_list_item_content` (mismo elemento base ya
+  // reutilizado por ORDEN_CAJA_TARJETA_TIPO_PAGO_HIDE/IMPORTAR_FACTURA_FILA),
+  // localizada por texto (nombre de cliente), nunca por id — mismo criterio
+  // ya establecido en el resto de la suite para identificar una tarjeta
+  // concreta sin depender de un id conocido de antemano.
+  //
+  // El ícono de tres puntos real (`.dropbtn`, `fa-ellipsis-v`) es DISTINTO
+  // del ícono de "vista previa" (`.a_proform_order_items`, un ojo que solo
+  // abre un popup de solo lectura con los items — investigado en vivo y
+  // confirmado que NO es un menú). Al clickear `.dropbtn` se revela
+  // `.proform-dropdown-content` con 6 acciones reales, en este orden exacto:
+  // Imprimir, Editar, WhatsApp, Enviar email, Descargar PDF, Eliminar.
+  // "Editar" (`href="javascript:void(edit_proform(<id>));"`) es la ÚNICA
+  // edición in-place real de toda la suite: abre el MISMO modal
+  // `#dialog_proform` que "Crear Proforma", pero con `#proform_mode`="update"
+  // y `#id_proform`=<id ya existente> (confirmado en vivo comparando ambos
+  // hidden inputs antes/después) — el cliente ya viene sincronizado en
+  // PROFORMA_CLIENTE_INPUT (a diferencia de clickear el CUERPO de la
+  // tarjeta, que solo repuebla el carrito para crear una Proforma NUEVA a
+  // partir de la anterior — misma limitación ya documentada, pero esa vía
+  // NO es "Editar": genera un id distinto). Guardar en este modo dispara
+  // AJAX_ACTUALIZAR_PROFORMA (no AJAX_GUARDAR_PROFORMA) y, a diferencia de
+  // crear, NO vuelve a abrir el modal de Gestión al terminar — confirmado en
+  // vivo interceptando la red completa tras el guardado.
+  // Sub-filtro de tipo dentro de esta misma pestaña — 3 botones reales
+  // (confirmados en vivo, no asumidos): "PROFORMA" (Normal),
+  // "PROFORMA de Consignación" y "PROFORMA de Taller", cada uno con
+  // onclick="show_proforms(1/2/3)" respectivamente. El id real del segundo
+  // botón trae un typo de la propia aplicación ("consignnent", con doble
+  // "n") — se preserva tal cual, no es un error de esta suite. El activo
+  // gana la clase real "btn_sale_selected" (mismo patrón de clase "activa"
+  // ya usado por TAB_ACTIVE_CLASS para Productos/Servicios/Pintura). Cambiar
+  // de sub-filtro dispara getPosProformSearch (AJAX_BUSCAR_PROFORMAS_TAB) +
+  // getPosProformTotals — confirmado en vivo.
+  PROFORMA_TAB_SUBTAB_NORMAL:       '#quotes_btn',
+  PROFORMA_TAB_SUBTAB_CONSIGNACION: '#consignnent_proforms_btn',
+  PROFORMA_TAB_SUBTAB_TALLER:       '#workshop_proforms_btn',
+  PROFORMA_TAB_SUBTAB_ACTIVA_CLASE: 'btn_sale_selected',
+  AJAX_BUSCAR_PROFORMAS_TAB: 'getPosProformSearch',
+
+  PROFORMA_TAB_TARJETA:        '.pos_order_list_item_content',
+  PROFORMA_TAB_DROPBTN:        '.dropbtn',
+  PROFORMA_TAB_DROPDOWN_CONTENT: '.proform-dropdown-content',
+  // Ícono de vista previa (el ojo) — no es un menú (ver el comentario de
+  // arriba), pero sus atributos `data-proform-*` son la fuente MÁS
+  // confiable del id/cliente real de la tarjeta: confirmado en vivo que
+  // existen siempre, ya poblados por el propio servidor al renderizar la
+  // tarjeta, sin depender de parsear el texto visible.
+  PROFORMA_TAB_ICONO_VISTA_PREVIA: '.a_proform_order_items',
+  PROFORMA_TAB_MENU_LINK_IMPRIMIR: 'a[onclick*="downloadProformPdf("][onclick*=", true)"]',
+  PROFORMA_TAB_MENU_LINK_EDITAR:   'a[href*="edit_proform("]',
+  PROFORMA_TAB_MENU_LINK_WHATSAPP: 'a[onclick*="open_proform_whatsapp_modal("]',
+  PROFORMA_TAB_MENU_LINK_EMAIL:    'a[href*="send_invoice_email("]',
+  PROFORMA_TAB_MENU_LINK_PDF:      'a[onclick*="downloadProformPdf("][onclick*=", false)"]',
+  PROFORMA_TAB_MENU_LINK_ELIMINAR: 'a[href*="confirm_proform("]',
+
+  // "Convertir a orden de reparación" — 7ª opción del menú, presente SOLO en
+  // las tarjetas del sub-filtro Taller (confirmado en vivo comparando el
+  // menú de una tarjeta Normal — 6 opciones — contra una Taller — 7,
+  // agregada al final). `validateProformToRepair(id)` valida en el cliente
+  // (sin AJAX propio) que la Proforma tenga cliente Y placa asociados antes
+  // de continuar: sin placa, muestra un toast usando un sistema DISTINTO al
+  // resto de la suite (`.toast-message`, no `.noty_bar`) con el texto exacto
+  // "Por favor agregue o seleccione una placa para el cliente!" y no dispara
+  // ningún SweetAlert ni petición de red — confirmado en vivo. Con placa ya
+  // seleccionada (ver PROFORMA_TAB_PLACA_CHOSEN), sí abre el SweetAlert v1
+  // real de confirmación ("¿Esta seguro convertir esta proforma a orden?
+  // Esta acción es irreversible y solo podrá realizarse una vez."),
+  // reutilizando el mismo patrón `_confirmarSweetAlertV1()` ya establecido;
+  // al confirmar, dispara AJAX_CONVERTIR_PROFORMA_ORDEN.
+  PROFORMA_TAB_MENU_LINK_CONVERTIR_ORDEN: 'a[href*="validateProformToRepair("]',
+  AJAX_CONVERTIR_PROFORMA_ORDEN: 'convertProformToOrder',
+
+  // Toast del sistema de validación de "Convertir a orden de reparación" —
+  // confirmado en vivo que usa un componente de notificación DISTINTO al
+  // resto de la suite (clase real `.toast-message`, no `.noty_bar`).
+  TOAST_MESSAGE_GENERICO: '.toast-message',
+
+  // Selector "Seleccionar Placa" del cliente — confirmado en vivo que SOLO
+  // existe en el DOM una vez que un cliente real está activo en el panel
+  // "customer-selected" arriba del carrito (mismo panel de
+  // CLIENTE_NOMBRE_SELECCIONADO), dentro de su sección "Ver detalle". Mismo
+  // widget Chosen que el resto de la suite — se opera con
+  // _seleccionarPrimeraOpcionChosen()/_obtenerTextoChosenSeleccionado() ya
+  // existentes, nunca con clicks manuales sobre el `<span>` visible:
+  // confirmado en vivo que un click directo sobre el trigger sin pasar por
+  // el propio widget Chosen dispara la selección visualmente pero NO
+  // completa el evento `change` real que `validateProformToRepair()` lee —
+  // quedaba "seleccionada" en apariencia pero el toast de bloqueo seguía
+  // apareciendo igual.
+  PROFORMA_TAB_PLACA_CHOSEN: '#customer_selected_plate_number_chosen',
+
+  // Modal de correo abierto DESDE esta pestaña (`send_invoice_email(id)`) —
+  // confirmado en vivo que, pese a compartir el mismo propósito y la misma
+  // función de envío real (`send_proform_by_email` → AJAX_ENVIAR_PROFORMA_CORREO),
+  // es un modal DISTINTO del que abre el listado externo
+  // (`#dialog_sent_email_info`, LISTADO_PROFORMA_DIALOG_EMAIL): id propio
+  // (`#dialog_sent_email_proform`) y su propio campo de correos
+  // (`#proform_email_tags-selectized`, no `#email_tags-selectized`) — dos
+  // instancias separadas del mismo componente, no el mismo modal reabierto
+  // desde dos triggers.
+  PROFORMA_TAB_DIALOG_EMAIL: '#dialog_sent_email_proform',
+  PROFORMA_TAB_EMAIL_INPUT:  '#proform_email_tags-selectized',
+  PROFORMA_TAB_EMAIL_BTN_ENVIAR: '.send_emails_btn',
+  PROFORMA_MODO_HIDDEN: '#proform_mode',
+  PROFORMA_ID_HIDDEN:   '#id_proform',
+  AJAX_ACTUALIZAR_PROFORMA: 'updateProform',
+
+  // Modal "¡Enviar WhatsApp!" (`#dialog_send_whatsapp_message`), abierto SOLO
+  // desde esta pestaña — confirmado en vivo que es un modal completamente
+  // distinto (más completo: contexto de documentos a compartir) del panel
+  // de WhatsApp embebido en el modal de Gestión
+  // (GESTION_PROFORMA_BTN_WHATSAPP), que solo existe justo tras crear.
+  // Confirmado en vivo (volcando su DOM completo) que, además del botón real
+  // "Enviar" (send_dialog_whatsapp_message(), con apariencia de disparar un
+  // envío real vía integración de WhatsApp Business — nunca ejecutado por
+  // esta suite, ver el comentario del test), ofrece botones de descarga de
+  // documento propios (downloadWhatsappDocument('proforma', event) y
+  // variantes), 100% seguros de ejecutar en un test automatizado: solo
+  // descargan un PDF, sin ningún efecto de envío.
+  DIALOG_WHATSAPP_TAB: '#dialog_send_whatsapp_message',
+  WHATSAPP_TAB_BTN_CERRAR: '#btn_close_send_whatsapp_modal',
+  WHATSAPP_TAB_BTN_DESCARGAR_PROFORMA: '.whatsapp-document-download-btn[onclick*="\'proforma\'"]',
 
   // ─── "Generar Apartado" (mismo menú que "Enviar a caja"/Proforma, L.ORDEN_CAJA_MENU_BTN) ──
   // Confirmado en vivo (Fase 1 + investigación de Riesgo #1): a diferencia de

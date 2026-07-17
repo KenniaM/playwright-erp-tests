@@ -2964,6 +2964,20 @@ export class PosCore {
 
 
   /**
+   * Lee todos los símbolos de moneda disponibles en el menú (p. ej. ["L",
+   * "$", "₡"], catálogo configurable por la empresa, nunca hardcodeado) —
+   * necesario para elegir una moneda "distinta de la base" sin asumir
+   * cuáles monedas concretas ofrece cada compañía/ambiente. Los `<li>` del
+   * menú MDL existen en el DOM desde la carga (confirmado en vivo), así que
+   * su texto puede leerse sin necesidad de abrir el menú primero.
+   */
+  async obtenerSimbolosMonedaDisponibles(): Promise<string[]> {
+    const textos = await this.page.locator(`${L.MENU_MONEDA_ITEM} .icon_type_currency_print_by_user`).allTextContents();
+    return textos.map((t) => t.trim()).filter((t) => t.length > 0);
+  }
+
+
+  /**
    * Verifica cuál es la moneda base real de la compañía (nunca asumida) y,
    * si la moneda activa no coincide, cambia automáticamente a ella —
    * necesario porque una Proforma de Taller solo puede crearse en la
