@@ -1050,42 +1050,113 @@ async function agregarCincoTiposDeItem(pos: PosPage, sufijoRapido: string) {
 }
 
 /**
- * Busca una Proforma de Taller existente que, además, tenga un cliente REAL
- * asociado (no solo nombre libre) y la deja cargada en el carrito. Necesario
- * específicamente para "Convertir a Orden de Reparación": el selector de
- * Placa (#customer_selected_plate_number_chosen) depende de un cliente real
- * (confirmado en vivo) — a diferencia del resto de los escenarios de este
- * describe, que aceptan cualquier Proforma reutilizable sin importar el tipo
- * de cliente (ver el comentario de cargarProformaEnCarritoDesdeTab() en
- * pos-proforma.page.ts). Si la primera Proforma Taller disponible no trae
- * cliente real (muy posible: varios describe de "Proformas — Crear" solo
- * usan nombre libre), crea una desechable forzando seleccionarClienteExistente()
- * y la relocaliza por NOMBRE (nunca "primera"), mismo criterio ya usado por
- * abrirMenuTarjetaProformaEnTab()/editarProformaSeleccionada() en "Proformas
- * — Gestión": la lista no garantiza que la recién creada quede primera.
+ * Vuelve a la pestaña "Productos" (POS Facturación) tras haber visitado
+ * "Proforma / Cotizaciones" (obtenerPrimeraProformaEnTab()/
+ * buscarOCrearProformaEnTab(), que dejan esa pestaña activa) — SIN recargar
+ * la página. Un reload (pos.irAlPos()) aquí NO es seguro: confirmado en
+ * vivo con un diagnóstico dedicado (log de red completo, todas las
+ * peticiones responden OK) que irAlPos()/esperarEstadoInicial() asumen que
+ * el reload siempre aterriza en "Productos", pero en realidad aterriza en
+ * la ÚLTIMA pestaña visitada — que en todo este describe es "Proforma /
+ * Cotizaciones" — donde no existe ni el modal "Abrir Caja" ni ningún
+ * producto del grid, las dos únicas señales que esperarEstadoInicial() sabe
+ * esperar, así que esa espera nunca se resuelve (120s, repetido, sin
+ * importar cuántas veces se reintente el reload).
+ *
+ * Tampoco basta con clickear la pestaña "Productos" directamente mientras
+ * el carrito todavía tiene una Proforma/Orden cargada (confirmado en vivo:
+ * el click no cambia nada visible — mismo bloqueo ya documentado para
+ * #menu_type_currency mientras hay una venta cargada). La secuencia que sí
+ * funciona, confirmada en vivo de punta a punta: 1) vaciar el carrito
+ * (botón "Vaciar Carrito", 100% client-side, sin AJAX — solo se intenta si
+ * de verdad hay algo cargado) y 2) clickear la pestaña "Productos",
+ * esperando la señal funcional real de que sí cambió (un producto del
+ * grid visible) en vez de asumirlo.
+ *
+ * No se reutiliza pos.vaciarCarrito() tal cual: confirmado en vivo que su
+ * SweetAlert de confirmación no aparece siempre (comportamiento real
+ * inconsistente, no un problema de timing) — a diferencia de esa función
+ * (que sí exige verlo), aquí se intenta confirmar SI aparece, pero la
+ * señal que de verdad se valida es el resultado funcional (el carrito
+ * queda en 0 líneas), sin importar si hubo diálogo o no.
  */
-async function buscarProformaTallerConClienteRealOCrear(pos: PosPage): Promise<Locator> {
-  const primera = await pos.obtenerPrimeraProformaEnTab('taller');
-  if (primera) {
-    await pos.cargarProformaEnCarritoDesdeTab(primera.tarjeta);
-    if (await pos.hayClienteRealSeleccionado()) {
-      return primera.tarjeta;
+async function volverAProductosSinReload(pos: PosPage, sharedPage: Page) {
+  await pos.cerrarOverlaysConocidos();
+
+  const clavesEnCarrito = await pos.obtenerClavesFilasCarrito();
+  if (clavesEnCarrito.length > 0) {
+    await sharedPage.locator('#cancel_sale').click();
+
+    const dialogo = sharedPage.locator('.sweet-alert.visible');
+    const aparecio = await dialogo.waitFor({ state: 'visible', timeout: 5_000 }).then(() => true).catch(() => false);
+    if (aparecio) {
+      await dialogo.locator('button.confirm').click();
     }
+
+    await expect.poll(
+      async () => (await pos.obtenerClavesFilasCarrito()).length,
+      { timeout: TIMEOUTS.PAYMENT_MODAL, message: 'El carrito no quedó vacío tras presionar "Vaciar Carrito"' }
+    ).toBe(0);
   }
 
+  await pos.cerrarOverlaysConocidos();
+  await sharedPage.locator('#btn_pos_option').click();
+  await sharedPage.locator('.product_box_name, td[id^="product_table_click_event_"]').first()
+    .waitFor({ state: 'visible', timeout: TIMEOUTS.PRODUCTS_LOAD });
+}
+
+/**
+ * Crea una Proforma de Taller desechable SIN cliente y la deja cargada en
+ * el carrito, lista para probar el bloqueo real de "Convertir a orden de
+ * reparación" — confirmado en vivo (dos hallazgos directos del usuario)
+ * que reutilizar "la primera Proforma de Taller disponible" en este
+ * ambiente NUNCA reproduce el estado bloqueado: esas Proformas ya existentes
+ * traen su propio cliente real Y su placa asociados desde su creación (el
+ * primer intento de convertir sin tocar nada salió permitido, no bloqueado).
+ * Por eso este escenario necesita una Proforma nueva, con nombre libre (sin
+ * cliente), para poder validar ambos caminos (bloqueado → asociar cliente
+ * real + placa → permitido) tal como pide el escenario.
+ */
+async function crearProformaTallerSinClientePararaConvertir(pos: PosPage): Promise<Locator> {
   await agregarProductoNormalAlCarrito(pos);
-  const nombreCliente = await pos.seleccionarClienteExistente();
-  const respuesta = await crearProformaBasica(pos, 'taller');
+  const nombreCliente = `Cliente Proforma Convertir ${Date.now()}`;
+  await pos.abrirCrearProforma();
+  await pos.seleccionarTipoProforma('taller');
+  await pos.llenarNombreClienteProforma(nombreCliente);
+  const respuesta = await pos.guardarProformaYObtenerRespuesta();
   await pos.validarProformaCreada(respuesta);
   await pos.cerrarModalGestionProforma();
 
   const tarjeta = await pos.abrirMenuTarjetaProformaEnTab(nombreCliente, 'taller');
   await pos.cargarProformaEnCarritoDesdeTab(tarjeta);
-  expect(
-    await pos.hayClienteRealSeleccionado(),
-    'La Proforma Taller recién creada con un cliente real no propagó ese cliente al carrito'
-  ).toBe(true);
   return tarjeta;
+}
+
+/**
+ * Restaura la moneda original al terminar un escenario de "Facturar y
+ * Convertir", pero SOLO si de verdad cambió. Vuelve primero a "Productos"
+ * sin reload (volverAProductosSinReload() — ver ese comentario para la
+ * causa raíz real: #menu_type_currency vive solo en esa pestaña, y estos
+ * escenarios terminan en "Proforma / Cotizaciones") y solo entonces lee la
+ * moneda realmente activa para decidir si de verdad hace falta cambiarla.
+ *
+ * No-fatal a propósito: esto corre en el `finally` de cada escenario, DESPUÉS
+ * de que la validación de negocio real (facturar/convertir) ya tuvo éxito o
+ * falló por su cuenta — un problema de limpieza aquí (p. ej. el carrito
+ * tardando en vaciarse tras una conversión exitosa, visto en vivo) no debe
+ * hacer fallar un escenario cuya parte relevante ya se validó. Se deja
+ * evidencia en el log en vez de silenciarlo del todo.
+ */
+async function restaurarMonedaSiCambio(pos: PosPage, sharedPage: Page, monedaOriginal: string) {
+  try {
+    await volverAProductosSinReload(pos, sharedPage);
+    const { simboloActivo } = await pos.obtenerInfoMoneda();
+    if (simboloActivo !== monedaOriginal) {
+      await pos.cambiarMoneda(monedaOriginal);
+    }
+  } catch (e) {
+    console.log(`[restaurarMonedaSiCambio] No se pudo restaurar la moneda tras este escenario (no fatal): ${(e as Error).message}`);
+  }
 }
 
 test.describe('Proformas — Facturar y Convertir', () => {
@@ -1093,50 +1164,62 @@ test.describe('Proformas — Facturar y Convertir', () => {
   // ─── Escenario 1: Convertir Proforma de Taller a Orden de Reparación ─────
   test.describe('Convertir a Orden de Reparación', () => {
     test('Convertir una Proforma de Taller a Orden de Reparación: bloqueada sin placa, permitida al completarla', async ({ pos, sharedPage }) => {
-      // TIMEOUTS.TEST_CON_RECUPERACION (no TEST): confirmado en vivo que la
-      // primera Proforma Taller disponible casi nunca trae un cliente real
-      // asociado (la mayoría de "Proformas — Crear" solo usan nombre libre),
-      // así que buscarProformaTallerConClienteRealOCrear() cae de forma
-      // determinística —no ocasional— en su rama de creación (agregar
-      // producto + seleccionarClienteExistente + Crear Proforma + relocalizar
-      // por nombre), que por sí sola ya se acerca al presupuesto de TEST
-      // (300s) antes de siquiera intentar la conversión — mismo criterio ya
-      // usado en pos-ruteo.spec.ts para escenarios con un paso lento
-      // estructural, no flaky.
+      // TIMEOUTS.TEST_CON_RECUPERACION (no TEST): margen extra confirmado
+      // necesario en vivo bajo carga real del ambiente compartido de QA
+      // (varias corridas concurrentes).
       test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
       const erroresJS = espiarErroresJS(sharedPage);
 
       const monedaOriginal = await pos.asegurarMonedaBaseActiva();
       try {
-        // Carga la Proforma en el carrito principal: expone el selector real
-        // de "Placa" del cliente asociado (#customer_selected_plate_number_chosen,
-        // confirmado en vivo) que la validación server-side de
-        // validateProformToRepair() necesita completar.
-        const tarjeta = await buscarProformaTallerConClienteRealOCrear(pos);
+        // Proforma desechable SIN cliente (crearProformaTallerSinClientePararaConvertir()):
+        // necesaria para reproducir el bloqueo real — confirmado en vivo que
+        // cualquier Proforma de Taller YA EXISTENTE en este ambiente ya trae
+        // su propio cliente real y su Placa asociados desde su creación, así
+        // que reutilizar "la primera disponible" nunca queda bloqueada.
+        const tarjeta = await crearProformaTallerSinClientePararaConvertir(pos);
 
-        await test.step('Intentar convertir sin placa asociada: el sistema debe impedirlo', async () => {
+        await test.step('Intentar convertir sin cliente ni placa asociados: el sistema debe impedirlo', async () => {
           // Confirmado en vivo: el camino bloqueado nunca dispara la llamada
           // AJAX real (convertProformToOrder) — solo un .toast-message
           // informativo del propio cliente — por lo que la ausencia de esa
           // llamada de red (nunca armada en este camino) ya es evidencia de
           // que ninguna Orden se creó.
           const resultado = await pos.intentarConvertirAOrdenDeReparacion(tarjeta);
-          expect(resultado.bloqueado, 'El sistema debía impedir la conversión sin una placa asociada al cliente').toBe(true);
+          expect(resultado.bloqueado, 'El sistema debía impedir la conversión sin cliente ni placa asociados').toBe(true);
           expect(resultado.mensaje, 'El mensaje de bloqueo no menciona la placa').toMatch(/placa/i);
         });
 
-        await test.step('Completar la placa del cliente y validar que ahora sí permite convertir', async () => {
+        await test.step('Asociar un cliente existente, completar la placa y validar que ahora sí permite convertir', async () => {
+          // El intento bloqueado de arriba deja un toast visible
+          // (TOAST_MESSAGE_GENERICO) que nada cierra todavía — sin este
+          // paso, ese toast (o su overlay) puede seguir presente cuando se
+          // reabre el menú de la tarjeta y se confirma el SweetAlert real
+          // más abajo, interceptando ese click (mismo síntoma ya visto en
+          // vivo con overlays de SweetAlert sin cerrar: ".sweet-overlay
+          // intercepts pointer events"). cerrarOverlaysConocidos() ya
+          // incluye cerrarTodosLosToastsSiAparecen(), mismo helper que usa
+          // el resto de la suite para esto.
+          await pos.cerrarOverlaysConocidos();
+          // Sin cliente asociado (creada con solo nombre libre), el
+          // selector de Placa no existe todavía (confirmado en vivo) — se
+          // asocia primero un cliente real, que es lo que hace aparecer ese
+          // selector.
+          await pos.seleccionarClienteExistente();
           await pos.seleccionarPlacaClienteEnCarrito();
           const resultado = await pos.intentarConvertirAOrdenDeReparacion(tarjeta);
-          expect(resultado.bloqueado, 'Tras seleccionar la placa, el sistema no debía seguir bloqueando la conversión').toBe(false);
+          expect(resultado.bloqueado, 'Tras asociar cliente y placa, el sistema no debía seguir bloqueando la conversión').toBe(false);
         });
 
         await test.step('Confirmar la conversión y validar que la Orden de Reparación se creó correctamente', async () => {
+          console.log(`[CONVERTIR] Presionando "Confirmar" en el SweetAlert de conversión — ${new Date().toISOString()}`);
           const respuesta = await pos.confirmarConversionAOrdenDeReparacionYObtenerRespuesta();
+          const cuerpo = await respuesta.text().catch(() => '(no se pudo leer el cuerpo)');
+          console.log(`[CONVERTIR] convertProformToOrder respondió status=${respuesta.status()} ok=${respuesta.ok()} cuerpo="${cuerpo.slice(0, 300)}" — ${new Date().toISOString()}`);
           expect(respuesta.ok(), `convertProformToOrder no respondió OK (status ${respuesta.status()})`).toBe(true);
         });
       } finally {
-        await pos.cambiarMoneda(monedaOriginal);
+        await restaurarMonedaSiCambio(pos, sharedPage, monedaOriginal);
       }
 
       expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
@@ -1336,7 +1419,7 @@ test.describe('Proformas — Facturar y Convertir', () => {
         if ((await pos.vistaExpandidaActiva()) !== expandidaAlInicio) {
           await pos.alternarVistaExpandida();
         }
-        await pos.cambiarMoneda(monedaOriginal);
+        await restaurarMonedaSiCambio(pos, sharedPage, monedaOriginal);
       }
 
       expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
@@ -1386,7 +1469,7 @@ test.describe('Proformas — Facturar y Convertir', () => {
           await pos.validarCarritoVacio();
         });
       } finally {
-        await pos.cambiarMoneda(monedaOriginal);
+        await restaurarMonedaSiCambio(pos, sharedPage, monedaOriginal);
       }
 
       expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
@@ -1428,7 +1511,7 @@ test.describe('Proformas — Facturar y Convertir', () => {
           await pos.validarCarritoVacio();
         });
       } finally {
-        await pos.cambiarMoneda(monedaOriginal);
+        await restaurarMonedaSiCambio(pos, sharedPage, monedaOriginal);
       }
 
       expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
