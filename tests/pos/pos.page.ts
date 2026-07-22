@@ -209,6 +209,9 @@ export class PosPage {
   async obtenerPrimerProductoNormalConCodigo(...args: Parameters<PosCore['obtenerPrimerProductoNormalConCodigo']>) {
     return this.core.obtenerPrimerProductoNormalConCodigo(...args);
   }
+  async obtenerPrimerProductoNormalConCodigoNoPresenteEnCarrito(...args: Parameters<PosCore['obtenerPrimerProductoNormalConCodigoNoPresenteEnCarrito']>) {
+    return this.core.obtenerPrimerProductoNormalConCodigoNoPresenteEnCarrito(...args);
+  }
   async obtenerSegundoProductoNormalDistinto(...args: Parameters<PosCore['obtenerSegundoProductoNormalDistinto']>) {
     return this.core.obtenerSegundoProductoNormalDistinto(...args);
   }

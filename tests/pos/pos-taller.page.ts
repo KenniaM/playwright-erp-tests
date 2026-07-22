@@ -36,6 +36,19 @@ const TL = {
   BTN_FACTURAR_SELECCIONADAS: '#btn_repair_order_generate_massive_invoice',
   CHECKBOX_MASIVO_POR_ID: (id: string) => `#repair_order_massive_checkbox_${id}`,
 
+  // Asistente "Facturación Masiva" (#dialog_repair_order_massive_invoice, 2
+  // pasos: "Resumen y cliente" → "Configurar líneas") que "Facturar
+  // Seleccionadas" abre — confirmado en vivo instrumentando el DOM real que
+  // NUNCA abre directamente el modal de pago del POS ni ningún SweetAlert:
+  // genera la factura combinada de las órdenes seleccionadas por su cuenta,
+  // con su propio modal de progreso al final. IDs técnicos estables leídos
+  // del propio HTML servido (no textos frágiles).
+  DIALOG_FACTURACION_MASIVA: '#dialog_repair_order_massive_invoice',
+  BTN_FACTURACION_MASIVA_CONTINUAR: '#btn_massive_repair_to_step2',
+  BTN_FACTURACION_MASIVA_GENERAR: '#btn_massive_repair_generate_invoice',
+  DIALOG_PROGRESO_FACTURACION_MASIVA: '#dialog_progress_invoicing',
+  BTN_PROGRESO_ACEPTAR_CERRAR: '#close-progress-modal',
+
   // Modal "Ver Orden" (#dialog_vehicle_detail, contenido cargado vía AJAX por
   // get_vehicle_detail(id) dentro de #modal_dialog_vehicle_detail). Usa
   // pestañas por radio+label (label[for="tabN"] → #contentN, confirmado en
@@ -55,13 +68,24 @@ const TL = {
 
   // Modal "Enviar Orden por Correo" (#dialog_send_order_email, abierto por
   // openSendOrderEmailModal(id, correoPorDefecto)). El campo de correos es un
-  // widget "selectize" con el mismo sufijo "-selectized" y el mismo botón
-  // ".send_emails_btn" que ya usa Proforma para su propio modal de correo
-  // (PROFORMA_TAB_EMAIL_INPUT/PROFORMA_TAB_EMAIL_BTN_ENVIAR en
-  // pos.locators.ts) — mismo componente reutilizado por la app.
+  // widget "selectize" (mismo sufijo "-selectized" que usa Proforma para su
+  // propio modal), pero NO es el mismo componente: confirmado en vivo
+  // (volcando el DOM real) que aquí el botón real es
+  // `.send_order_emails_btn` (onclick="sendOrderByEmailMultiple()"), un
+  // nombre de clase distinto al `.send_emails_btn` de Proforma — y que
+  // presionar Enter en el input ya dispara el envío y cierra el modal por sí
+  // solo (handler propio de este modal), sin necesitar ningún click
+  // adicional en ese botón — ver enviarEmail() más abajo.
   DIALOG_EMAIL: '#dialog_send_order_email',
   EMAIL_INPUT: '#order_email_tags-selectized',
-  EMAIL_BTN_ENVIAR: '.send_emails_btn',
+
+  // Búsqueda del listado Taller: mismo input compartido del header del POS
+  // (#product_search, L.PRODUCTO_BUSCADOR_GRID) que ya usa
+  // buscarProductoEnGrid()/buscarOrdenesCajaPorTexto() — confirmado en vivo
+  // (capturando la petición real) que, con la pestaña Taller activa, dispara
+  // su propio AJAX real `getSearchOrders`, distinto de `getPosCashSearch`
+  // (Órdenes de Caja) o del buscador del catálogo de productos.
+  AJAX_BUSCAR_ORDEN_TALLER: 'getSearchOrders',
 } as const;
 
 export type DatosTarjetaTaller = {
@@ -124,6 +148,61 @@ export class PosTaller {
       (els) => els.map((e) => e.id.replace('content_order_box_', ''))
     );
     return cantidad ? ids.slice(0, cantidad) : ids;
+  }
+
+  /**
+   * Filtra, entre las órdenes visibles, las primeras `cantidad` con monto
+   * real (total > 0) — confirmado en vivo que el listado compartido de
+   * Taller puede tener órdenes sin ningún producto/servicio cargado (monto
+   * $0.00): un abono no puede aplicarse ahí, un descuento no tiene nada que
+   * descontar, y "Ver Orden" no muestra ningún producto — cualquier
+   * escenario que dependa de un monto real puede fallar o comportarse de
+   * forma inesperada si toma una de estas órdenes vacías. Nunca crea una
+   * orden nueva: solo recorre las ya existentes, probando hasta
+   * `candidatosAProbar` antes de rendirse. Devuelve lo que haya encontrado
+   * (puede ser menos de `cantidad` si no hay suficientes) — cada escenario
+   * decide qué tan estricto ser sobre cuántas necesita realmente.
+   */
+  async obtenerIdsOrdenesConMontoValido(cantidad: number, candidatosAProbar = 15): Promise<string[]> {
+    const candidatos = await this.obtenerIdsOrdenesVisibles(candidatosAProbar);
+    const validos: string[] = [];
+    for (const candidato of candidatos) {
+      const datos = await this.obtenerDatosTarjeta(candidato);
+      if (datos.total > 0) {
+        validos.push(candidato);
+        if (validos.length === cantidad) break;
+      }
+    }
+    return validos;
+  }
+
+  /**
+   * Busca órdenes de Taller usando el campo de búsqueda REAL del header del
+   * POS (#product_search, mismo input que ya usa
+   * buscarProductoEnGrid()/buscarOrdenesCajaPorTexto()) — confirmado en vivo
+   * que, con la pestaña Taller activa, dispara su propio AJAX real
+   * (`getSearchOrders`) que reemplaza el listado de tarjetas por el
+   * resultado filtrado en el servidor. Mismo criterio de espera que
+   * buscarOrdenesCajaPorTexto(): se espera la respuesta que realmente
+   * contiene el texto buscado (no solo la próxima respuesta del endpoint,
+   * que podría ser una búsqueda anterior todavía en vuelo) y luego a que el
+   * conteo de tarjetas cambie del valor previo.
+   */
+  async buscarOrdenesTallerPorTexto(texto: string) {
+    const totalAntes = (await this.obtenerIdsOrdenesVisibles()).length;
+
+    const respuestaPromise = this.page.waitForResponse((res) => {
+      if (!res.url().includes(TL.AJAX_BUSCAR_ORDEN_TALLER)) return false;
+      const post = decodeURIComponent((res.request().postData() ?? '').replace(/\+/g, ' '));
+      return post.includes(texto);
+    }, { timeout: TIMEOUTS.PAYMENT_MODAL });
+    await this.pos.buscarProductoEnGrid(texto);
+    await respuestaPromise;
+
+    await expect.poll(
+      async () => (await this.obtenerIdsOrdenesVisibles()).length,
+      { timeout: TIMEOUTS.PAYMENT_MODAL, message: 'El resultado de la búsqueda no terminó de renderizarse' }
+    ).not.toBe(totalAntes);
   }
 
   /**
@@ -300,9 +379,26 @@ export class PosTaller {
 
   // ─── "Abono" (pestaña propia dentro de "Ver Orden") ─────────────────────
 
-  /** Cambia a la pestaña "Abono" dentro de "Ver Orden" ya abierto. */
+  /**
+   * Cambia a la pestaña "Abono" dentro de "Ver Orden" ya abierto. Confirmado
+   * en vivo (observando la ejecución real) que cambiar a esta pestaña
+   * dispara una petición real (`getPaymentToRepairOrder`) que carga el
+   * saldo pendiente REAL de la orden — el formulario (input de monto)
+   * aparece de inmediato en el DOM, pero ese saldo puede tardar varios
+   * segundos en llegar. Guardar un abono antes de que esa petición termine
+   * arriesga validar contra un saldo desactualizado. Se espera esa
+   * respuesta explícitamente (no solo la visibilidad del formulario) antes
+   * de dar la pestaña por lista.
+   */
   async abrirPestanaAbono() {
+    const respuestaSaldoPromise = this.page.waitForResponse(
+      (res) => res.url().includes('getPaymentToRepairOrder'),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    ).catch(() => null);
+
     await this.modalVerOrden.locator('label[for^="tab"]', { hasText: 'Abono' }).first().click();
+    await respuestaSaldoPromise;
+
     await expect(
       this.page.locator(TL.ABONO_MONTO),
       'El formulario "Agregar Abono" no apareció tras cambiar de pestaña'
@@ -315,10 +411,19 @@ export class PosTaller {
    * distinta del placeholder "Caja" (catálogo configurable por empresa, sin
    * nombre estable — mismo criterio que el resto de la suite para
    * ruta/repartidor/vendedor).
+   *
+   * ORDEN IMPORTA: la "Forma de pago" se selecciona ANTES de llenar el
+   * monto — confirmado en vivo (volcando el valor real del input) que
+   * cambiar "Forma de pago" dispara un handler propio de la app que
+   * reinicia "Abono" a 0, así que llenar el monto primero y elegir la forma
+   * de pago después dejaba silenciosamente el monto en 0 (bug real
+   * reproducido y confirmado: el campo mostraba `value="0"` pese al
+   * `fill(monto)` previo). Invertir el orden es la solución completa; no
+   * hace falta releer/reafirmar el monto después.
    */
   async aplicarAbono(monto: string, formaPago: FormaPagoAbono): Promise<{ cajaSeleccionada: string }> {
-    await this.page.locator(TL.ABONO_MONTO).fill(monto);
     await this.page.locator(TL.ABONO_FORMA_PAGO).selectOption({ label: formaPago });
+    await this.page.locator(TL.ABONO_MONTO).fill(monto);
 
     const cajaSelect = this.page.locator(TL.ABONO_CAJA);
     const opciones = await cajaSelect.locator('option').allTextContents();
@@ -327,38 +432,83 @@ export class PosTaller {
     await cajaSelect.selectOption({ index: indice });
     const cajaSeleccionada = opciones[indice].trim();
 
-    const historialAntes = await this.obtenerHistorialAbonos();
-
-    // La app puede responder con un SweetAlert de error ("¡Hubo un error al
-    // guardar el abono!", confirmado en vivo en las cadenas de texto ocultas
-    // del propio formulario) en vez de agregar la fila al historial — sin
-    // manejarlo, ese overlay (`.sweet-overlay`) queda bloqueando cualquier
-    // click posterior en el resto del test (confirmado en vivo: un intento
-    // posterior de "Guardar" se colgó reintentando 10 minutos completos
-    // contra "intercepts pointer events"). Se arma la carrera ANTES del
-    // click, se descarta el error si aparece y se relanza como una falla
-    // clara en vez de dejar que el overlay cuelgue el resto del escenario.
-    const historialCrecioPromise = expect.poll(
-      async () => (await this.obtenerHistorialAbonos()).length,
+    // La señal confiable de que el abono se guardó es la respuesta real de
+    // `addPaymentToRepairOrder` (POST), NO la tabla "Historial de Abonos"
+    // del DOM — confirmado en vivo con captura de red: el guardado
+    // responde 200 (body "1") en menos de 100ms, pero la tabla del
+    // historial NO se re-renderiza sola tras un guardado exitoso (quedó
+    // reintentando el poll sobre ella más de 2 minutos sin nunca detectar
+    // la fila nueva, mientras la red ya confirmaba éxito hacía rato). Una
+    // versión anterior de este método esperaba a que esa tabla creciera
+    // como señal de éxito — con este endpoint eso puede no ocurrir nunca.
+    //
+    // La app también puede responder con un SweetAlert (`.sweet-alert.visible`)
+    // en vez de (o junto con) la respuesta de red — sin manejarlo, ese
+    // overlay queda bloqueando cualquier click posterior (confirmado en
+    // vivo: un intento posterior de "Guardar" se colgó reintentando contra
+    // "intercepts pointer events"). Este mismo contenedor se usa tanto para
+    // el aviso de éxito ("Éxito / Abono agregado correctamente", ícono
+    // `.sa-icon.sa-success`) como para el de error ("¡Hubo un error al
+    // guardar el abono!", ícono `.sa-icon.sa-error`) — solo el ícono
+    // interno distingue cuál es cuál, nunca la clase del contenedor.
+    const guardadoPromise = this.page.waitForResponse(
+      (res) => res.url().includes('addPaymentToRepairOrder'),
       { timeout: TIMEOUTS.PAYMENT_MODAL }
-    ).toBeGreaterThan(historialAntes.length).then(() => 'ok' as const);
-    const errorAlertPromise = this.page.locator('.sweet-alert.visible').waitFor({ state: 'visible', timeout: TIMEOUTS.PAYMENT_MODAL })
-      .then(() => 'error' as const);
-    historialCrecioPromise.catch(() => {});
-    errorAlertPromise.catch(() => {});
+    ).then((res) => ({ tipo: 'red' as const, ok: res.ok() }));
+    const alertaPromise = this.page.locator('.sweet-alert.visible').waitFor({ state: 'visible', timeout: TIMEOUTS.PAYMENT_MODAL })
+      .then(() => ({ tipo: 'alerta' as const }));
+    guardadoPromise.catch(() => {});
+    alertaPromise.catch(() => {});
 
     await this.page.locator(TL.ABONO_BTN_GUARDAR).click();
-    const resultado = await Promise.any([historialCrecioPromise, errorAlertPromise]).catch(() => null);
+    const resultado = await Promise.any([guardadoPromise, alertaPromise]).catch(() => null);
 
-    if (resultado === 'error') {
+    if (resultado?.tipo === 'alerta') {
       const alerta = this.page.locator('.sweet-alert.visible');
+      const esExito = (await alerta.locator('.sa-icon.sa-success').count()) > 0;
       const texto = ((await alerta.textContent()) ?? '').trim();
-      await alerta.locator('button.confirm, button.cancel').first().click().catch(() => {});
+      // El DOM siempre incluye AMBOS botones ("Cancel" y "OK"/confirm), y
+      // "Cancel" aparece primero — confirmado en vivo volcando el HTML real
+      // que, para este SweetAlert, "Cancel" siempre está oculto
+      // (`display:none`, `data-has-cancel-button="false"`). Un `.first()`
+      // sin filtrar por visibilidad seleccionaba ese botón oculto: el click
+      // fallaba en silencio (capturado por el `.catch()`) y el modal nunca
+      // se cerraba. Se filtra por `:visible` para tomar siempre el botón
+      // real que el usuario vería y clickearía.
+      await alerta.locator('button.confirm:visible, button.cancel:visible').first().click().catch(() => {});
       await alerta.waitFor({ state: 'hidden', timeout: TIMEOUTS.PAYMENT_MODAL }).catch(() => {});
-      throw new Error(`El sistema rechazó el abono (${formaPago}, monto ${monto}): "${texto}"`);
+
+      if (!esExito) {
+        throw new Error(`El sistema rechazó el abono (${formaPago}, monto ${monto}): "${texto}"`);
+      }
+    } else if (resultado?.tipo === 'red') {
+      if (!resultado.ok) {
+        throw new Error(`El guardado del abono (${formaPago}, monto ${monto}) respondió con un error HTTP`);
+      }
+    } else {
+      throw new Error('El abono no se guardó: ni la petición de guardado ni ninguna alerta respondieron a tiempo');
     }
-    if (resultado !== 'ok') {
-      throw new Error('El abono no quedó registrado en el "Historial de Abonos" ni mostró ningún error');
+
+    // Independientemente de cuál señal ganó: la app puede mostrar además un
+    // SweetAlert de confirmación un instante después de que la red ya
+    // respondió — confirmado en vivo reproduciendo dos abonos seguidos en
+    // la misma sesión: el segundo intento de "Guardar" quedó reintentando
+    // cientos de veces contra "intercepts pointer events" porque el
+    // `.sweet-overlay` del SweetAlert del abono ANTERIOR seguía en el DOM
+    // sin cerrar. Se comprueba (sin bloquear si nunca aparece) y se cierra
+    // antes de devolver el control, para que el próximo abono de este mismo
+    // escenario no quede bloqueado por una alerta residual.
+    // Confirmado en vivo (observando la ejecución real) que este SweetAlert
+    // de confirmación puede tardar varios segundos en aparecer tras la
+    // respuesta de red — una espera corta de 3s a veces lo dejaba pasar sin
+    // cerrarlo, y su `.sweet-overlay` bloqueaba después el cierre de "Ver
+    // Orden". Se usa el mismo timeout real que el resto de la suite ya
+    // confía para la aparición de cualquier modal genuino.
+    const alertaResidual = this.page.locator('.sweet-alert.visible');
+    const apareceResidual = await alertaResidual.waitFor({ state: 'visible', timeout: TIMEOUTS.PAYMENT_MODAL }).then(() => true).catch(() => false);
+    if (apareceResidual) {
+      await alertaResidual.locator('button.confirm:visible, button.cancel:visible').first().click().catch(() => {});
+      await alertaResidual.waitFor({ state: 'hidden', timeout: TIMEOUTS.PAYMENT_MODAL }).catch(() => {});
     }
 
     return { cajaSeleccionada };
@@ -393,7 +543,14 @@ export class PosTaller {
       const iSaldoAnterior = indiceDe('saldo anterior');
       const iNuevoSaldo = indiceDe('nuevo saldo');
 
-      const filas = Array.from(tabla.querySelectorAll('tbody tr'));
+      // Cuando la orden no tiene ningún abono, la tabla renderiza una única
+      // fila placeholder de UN solo <td> ("No hay abonos registrados", con
+      // colspan) — confirmado en vivo. Esa fila cae en la columna "Fecha"
+      // (índice 0) y su texto no vacío pasaba el filtro final como si fuera
+      // un abono real (nuevoSaldo=0), corrompiendo saldoPrevio en quien
+      // llama. Se descarta aquí por tener menos <td> que columnas reales.
+      const filas = Array.from(tabla.querySelectorAll('tbody tr'))
+        .filter((tr) => tr.querySelectorAll('td').length > 1);
       return filas.map((tr) => {
         const c = Array.from(tr.querySelectorAll('td')).map((td) => (td.textContent || '').trim());
         return {
@@ -477,17 +634,24 @@ export class PosTaller {
     await expect(this.modalEmail, 'El modal "Enviar Orden por Correo" no apareció').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
   }
 
-  /** Llena el destinatario y presiona "Enviar" (modal de Email ya abierto). */
+  /**
+   * Llena el destinatario y confirma el envío (modal de Email ya abierto).
+   * Confirmado en vivo (instrumentando el DOM real antes/después): presionar
+   * Enter en el campo de correo agrega el tag Y dispara de inmediato
+   * `sendOrderByEmailMultiple()` — el modal se cierra solo, sin necesitar
+   * ningún click adicional en `.send_order_emails_btn` (que para ese
+   * instante ya dejó de existir, al haberse cerrado el modal). Un click
+   * adicional ahí sería redundante en el mejor caso y un doble envío en el
+   * peor.
+   */
   async enviarEmail(correo: string) {
     const input = this.modalEmail.locator(TL.EMAIL_INPUT);
     await input.fill(correo);
     await input.press('Enter');
-    await expect(this.modalEmail.locator(TL.EMAIL_BTN_ENVIAR)).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
-    await this.modalEmail.locator(TL.EMAIL_BTN_ENVIAR).click();
 
     await expect(
       this.modalEmail,
-      'El modal de Email no se cerró tras presionar "Enviar" (ninguna confirmación real llegó)'
+      'El modal de Email no se cerró tras presionar Enter (ninguna confirmación real llegó)'
     ).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
   }
 
@@ -629,37 +793,59 @@ export class PosTaller {
   }
 
   /**
-   * Presiona "Facturar seleccionadas" y espera a que el POS quede listo para
-   * facturar: la carrera cubre tanto el flujo de un solo carrito combinado
-   * (modal de pago #dialog_payment directo) como una confirmación previa
-   * (SweetAlert) — mismo criterio de robustez que el resto de flujos de
-   * varios resultados válidos de esta clase.
+   * Presiona "Facturar seleccionadas" y completa el asistente real
+   * "Facturación Masiva" que la app abre: modal (#dialog_repair_order_massive_invoice)
+   * con "Paso 1 de 2 - Resumen y cliente" → botón real
+   * #btn_massive_repair_to_step2 ("Continuar") → "Paso 2 de 2 - Configurar
+   * líneas de factura" → botón real #btn_massive_repair_generate_invoice
+   * ("Generar Factura"), que dispara un tercer modal de progreso
+   * (#dialog_progress_invoicing) — éste NO se cierra solo al llegar a 100%:
+   * exige un click explícito en su propio botón real #close-progress-modal
+   * ("Aceptar y cerrar") para desbloquear el resto de la página (confirmado
+   * en vivo: sin ese click, el backdrop del modal de progreso queda
+   * interceptando cualquier click posterior indefinidamente).
+   *
+   * IMPORTANTE — lo que este asistente SÍ hace y lo que NO hace (confirmado
+   * en vivo comparando el estado real de la orden, vía "Ver Orden", antes y
+   * después): "Completado 100% / Procesadas N/N" se refiere ÚNICAMENTE a
+   * cargar las líneas de las órdenes seleccionadas en el carrito del POS
+   * (`#table_buy_list`, confirmado que queda con filas reales tras cerrar
+   * este modal) — la orden NO queda facturada todavía en ese punto (su
+   * "factura"/"estado" en "Ver Orden" siguen exactamente iguales a como
+   * estaban antes). Facturar de verdad sigue exigiendo el mismo paso final
+   * que cualquier venta del POS: presionar "Facturar"
+   * (`pos.abrirModalDePago()`), pagar y confirmar — quien llama a este
+   * método DEBE completar ese paso final; no basta con que este método
+   * resuelva sin error.
    */
-  async facturarSeleccionadas(): Promise<'modalPago' | 'sweetAlert'> {
-    const modalPagoPromise = this.page.locator('#dialog_payment').waitFor({ state: 'visible', timeout: TIMEOUTS.PAYMENT_MODAL })
-      .then(() => 'modalPago' as const);
-    const sweetAlertPromise = this.page.locator('.sweet-alert.visible').waitFor({ state: 'visible', timeout: TIMEOUTS.PAYMENT_MODAL })
-      .then(() => 'sweetAlert' as const);
-    modalPagoPromise.catch(() => {});
-    sweetAlertPromise.catch(() => {});
-
+  async facturarSeleccionadas(): Promise<{ procesadas: number; total: number; errores: number }> {
     await this._abrirMenuAccionesMasivas();
     await this.page.evaluate(
       (sel) => (document.querySelector(sel) as HTMLElement)?.click(),
       TL.BTN_FACTURAR_SELECCIONADAS
     );
 
-    try {
-      return await Promise.any([modalPagoPromise, sweetAlertPromise]);
-    } catch {
-      const diag = await this.page.evaluate(() => ({
-        toasts: Array.from(document.querySelectorAll('.noty_bar, .toast-message')).map((t) => (t.textContent || '').trim()),
-        carritoFilas: document.querySelectorAll('#table_buy_list tr.main_row').length,
-        checkboxesMarcados: Array.from(document.querySelectorAll('.repair_order_massive_checkbox')).filter((c) => (c as HTMLInputElement).checked).map((c) => (c as HTMLInputElement).value),
-        contadorSeleccionadas: document.querySelector('[id*="massive_counter"], [id*="massive_selected"]')?.textContent?.trim() ?? null,
-      }));
-      console.log('[DIAG facturarSeleccionadas] Ni modal ni SweetAlert aparecieron:', JSON.stringify(diag));
-      throw new Error(`"Facturar seleccionadas" no abrió el modal de pago ni ningún SweetAlert. Diagnóstico: ${JSON.stringify(diag)}`);
-    }
+    const modalMasiva = this.page.locator(TL.DIALOG_FACTURACION_MASIVA);
+    await expect(modalMasiva, 'El asistente "Facturación Masiva" (Paso 1) no apareció tras "Facturar Seleccionadas"').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    const btnGenerar = modalMasiva.locator(TL.BTN_FACTURACION_MASIVA_GENERAR);
+    await modalMasiva.locator(TL.BTN_FACTURACION_MASIVA_CONTINUAR).click();
+    await expect(btnGenerar, 'El asistente "Facturación Masiva" no avanzó al Paso 2 ("Configurar líneas")').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await btnGenerar.click();
+
+    const progreso = this.page.locator(TL.DIALOG_PROGRESO_FACTURACION_MASIVA);
+    await expect(progreso, 'El modal de progreso de "Facturación Masiva" no apareció tras "Generar Factura"').toBeVisible({ timeout: TIMEOUTS.PRINT_POPUP });
+
+    const btnCerrar = progreso.locator(TL.BTN_PROGRESO_ACEPTAR_CERRAR);
+    await expect(btnCerrar, 'La "Facturación Masiva" no terminó de procesar las órdenes seleccionadas ("Aceptar y cerrar" nunca quedó disponible)').toBeVisible({ timeout: TIMEOUTS.PRINT_POPUP });
+
+    const procesadas = Number((await progreso.locator('#processed-count').textContent())?.trim()) || 0;
+    const total = Number((await progreso.locator('#total-count').textContent())?.trim()) || 0;
+    const errores = Number((await progreso.locator('#total-error').textContent())?.trim()) || 0;
+
+    await btnCerrar.click();
+    await expect(progreso, 'El modal de progreso de "Facturación Masiva" no se cerró tras "Aceptar y cerrar"').toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    return { procesadas, total, errores };
   }
 }

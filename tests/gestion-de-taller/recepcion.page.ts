@@ -16,10 +16,39 @@ export const RECEPCION_VEHICULAR_URL =
 
 export const TIMEOUTS = {
   TEST:     60_000,
+  // Test más largo: el flujo de "Configurar Tablero" implica varios ciclos
+  // guardar+refrescar y dos recargas completas del módulo para validar
+  // persistencia — confirmado en vivo que cada ciclo puede tomar bastante
+  // más que el resto de tests de este archivo.
+  TEST_CONFIG_TABLERO: 180_000,
+  // El test de búsqueda recorre 2 tabs (Tablero y Órdenes) x 4 pasos de
+  // búsqueda cada uno, y varios de esos pasos individuales ya pueden tomar
+  // hasta CARGA_LISTADO_COMPLETO (30s) bajo carga del ambiente compartido —
+  // el timeout general por defecto (TEST, 60s) no alcanza a cubrir ese peor
+  // caso acumulado y terminaba truncando un paso interno que todavía tenía
+  // margen propio.
+  TEST_BUSQUEDA: 180_000,
+  // El flujo de Orden sencilla recorre los ~13 pasos del wizard completo
+  // (cliente, vehículo, 4 tipos de ítems del carrito, partes, fotos, daños,
+  // observaciones, firma y generar) — muchos más pasos que cualquier otro
+  // test de este archivo.
+  TEST_ORDEN_SENCILLA: 180_000,
   NAVIGATE: 60_000,
   // Cada tab/búsqueda popula su contenido vía AJAX — se hace polling hasta
   // este límite antes de leer su estado, nunca una pausa fija.
   CARGA:    15_000,
+  // El modal "Configurar Tablero" muestra un toast de confirmación y se
+  // cierra solo tras guardar, pero no de inmediato (confirmado en vivo:
+  // puede tardar varios segundos en el ambiente compartido) — mayor que
+  // CARGA para no acoplar este caso puntual al límite general.
+  GUARDAR_CONFIG_TABLERO: 30_000,
+  // Cualquier operación del buscador de Tablero (buscar o limpiar) dispara
+  // varias peticiones AJAX encadenadas por columna de estado (confirmado en
+  // vivo) — bajo carga del ambiente compartido puede superar el límite
+  // general de CARGA; restaurar el listado SIN filtro es además la más
+  // pesada de todas, al recargar TODAS las tarjetas (varias decenas en este
+  // ambiente) en vez de solo el subconjunto filtrado.
+  CARGA_LISTADO_COMPLETO: 30_000,
 } as const;
 
 // ─── Tabs principales ───────────────────────────────────────────────────────
@@ -93,14 +122,22 @@ export const TABS_MODO_BASICO: TabRecepcion[] = [
 
 const L = {
   BUSCADOR:          '#repair_order_search',
-  // Dos clases distintas según la vista, confirmado en vivo:
+  // Tres variantes según la vista/modo, confirmado en vivo:
   // `.reception-order-number-badge` solo en la vista Lista de Órdenes;
-  // `.ervk-order-badge` tanto en Tablero como en la vista Caja de Órdenes
-  // (comparten el mismo componente de tarjeta "ervk"). `:visible` es
+  // `.ervk-order-badge` en Tablero y en la vista Caja de Órdenes cuando el
+  // modo de tarjeta del tablero es "Detallado" (comparten el mismo
+  // componente de tarjeta "ervk"); pero cuando ese modo es "Compacto" (ver
+  // Configurar Tablero) la tarjeta no renderiza `.ervk-order-badge` en
+  // absoluto — el número de orden vive en `.ervk-compact-order-chip
+  // .ervk-compact-chip-text` en su lugar. Sin esta tercera variante, toda
+  // búsqueda/lectura de órdenes en Tablero fallaba en cuanto el ambiente
+  // quedaba configurado en modo Compacto (el modo compacto es, de hecho, el
+  // que suele quedar activo por defecto en este ambiente). `:visible` es
   // necesario porque el contenedor de la vista Lista queda oculto (no
   // desmontado) al cambiar a Caja o a Tablero, y sus badges seguirían
   // coincidiendo por texto si no se filtran por visibilidad real.
-  BADGE_ORDEN:        '.reception-order-number-badge:visible, .ervk-order-badge:visible',
+  BADGE_ORDEN:
+    '.reception-order-number-badge:visible, .ervk-order-badge:visible, .ervk-compact-order-chip .ervk-compact-chip-text:visible',
   // Misma dualidad que BADGE_ORDEN, un nivel más arriba: la tarjeta completa
   // de la orden (incluye la placa del vehículo, no solo el número).
   TARJETA_ORDEN:       '.reception-order-card:visible, .ervk-kanban-card:visible',
@@ -112,9 +149,171 @@ const L = {
   // vivo: token propio en la lista de clases, nunca concatenado a otro) y a
   // los botones de vista Lista/Caja cuando quedan seleccionados.
   CLASE_TAB_ACTIVO:    'tab_color_action',
+  // Banner global de "Activa las notificaciones del navegador" (mismo
+  // elemento documentado en panel-control.page.ts y en rp-tienda-en-linea.page.ts).
+  // Confirmado en vivo: queda flotando sobre el header de Recepción Vehicular
+  // e intercepta clicks sobre el toggle de tema y los botones de vista
+  // Lista/Caja, causando timeouts en cascada. No tiene relación con ningún
+  // flujo de negocio del módulo.
+  NOTIF_DISMISS:      '#workshop-web-notification-permission-dismiss',
+  // Botón de opciones (⋮) de una orden — mismo botón/menú tanto en la vista
+  // Lista como en la vista Caja de Órdenes (confirmado en vivo: ambas vistas
+  // renderizan el mismo componente de tarjeta y exponen las mismas 15
+  // acciones del menú).
+  BTN_OPCIONES_ORDEN:   '.options-menu-button',
+  MENU_OPCIONES_ORDEN:  '.dropdown-content, .ro-card-dropdown',
+  // Botón "⋮" del encabezado (badge "Nuevo") que despliega, entre otras
+  // cosas, el enlace a "Configurar tablero". El id del propio botón
+  // (`dLabel####`) es generado dinámicamente por el framework — se usa la
+  // combinación de clases + `data-toggle="dropdown"`, estable entre cargas.
+  BTN_MAS_OPCIONES:     '.more-options-btn-highlight[data-toggle="dropdown"]',
+  LINK_CONFIGURAR_TABLERO: 'a[data-toggle="modal"][data-target="#ervkCustomizeModal"]',
+  MODAL_CONFIGURAR_TABLERO: '#ervkCustomizeModal',
+  BTN_GUARDAR_CONFIG_TABLERO: '#ervkSaveSettings',
+  // Botón "Refrescar" del propio tablero (no confundir con recargar la
+  // página): confirmado en vivo que el modo de tarjeta guardado en
+  // Configurar Tablero solo se refleja en las tarjetas ya renderizadas tras
+  // refrescar este caché, no al guardar.
+  BTN_REFRESCAR_TABLERO: '#btn_refresh_board_cache',
+
+  // ─── Crear Recepción / Nueva orden de reparación ────────────────────────
+  BTN_NUEVA_RECEPCION:  '.quick-reception-add-btn',
+  MODAL_NUEVA_RECEPCION: '#dialog_search_vehicle_by_plaque',
+  // Campo de placa DEL MODAL INICIAL — distinto de INPUT_PLACA_DETALLE (ver
+  // más abajo), que vive en el paso "Detalles del vehículo" del wizard.
+  INPUT_PLACA_MODAL:    '#vehicle_plaque',
+  // El checkbox real queda oculto tras el slider visual del toggle
+  // (confirmado en vivo) — el click debe ir sobre el <label> completo.
+  TOGGLE_SIN_PLACA:     'label.modern-toggle-label',
+  CHECKBOX_SIN_PLACA:   '#vehicle_has_plaque_check',
+  BTN_AGREGAR_VEHICULO_MODAL: '#vr_add_vehicle_btn',
+  BTN_BUSCAR_VEHICULO_MODAL:  '#btn_modal_search_vehicle',
+  CONTENEDOR_RESULTADOS_BUSQUEDA_VEHICULO: '#vehicle_search_by_plaque_content',
+  CONTENEDOR_CLIENTES_WIZARD: '#company_customer_content',
+  TARJETA_CLIENTE_WIZARD:     '.modern-customer-card',
+  // Contenedor del paso "Detalles del vehículo" — su visibilidad es la señal
+  // funcional de que ese paso del wizard terminó de cargar.
+  GRUPO_DETALLES_VEHICULO: '#vr_vehicle_battery_percent_group',
+  SELECT_MARCA:        '#vehicle_brand',
+  SELECT_MODELO:       '#vehicle_model',
+  SELECT_COMBUSTIBLE:  '#vehicle_fuel',
+  // Campo de placa DEL PASO "Detalles del vehículo" — separado del campo del
+  // modal inicial (INPUT_PLACA_MODAL). Confirmado en vivo: es obligatorio
+  // para guardar el vehículo SIEMPRE, incluso cuando el modal inicial se
+  // marcó "No tiene Placa / Matrícula" (ese interruptor solo afecta la
+  // validación del modal inicial, no la de este paso).
+  INPUT_PLACA_DETALLE: '#vehicle_licence_plate',
+
+  // ─── Seleccionar servicios (productos y servicios de la orden) ─────────────
+  // Tarjetas "Agregar producto"/"Agregar servicio": aparecen duplicadas entre
+  // la vista grilla y la vista lista del catálogo (ambas coexisten en el DOM,
+  // solo una visible a la vez) — de ahí el filtro `visible=true` al usarlas.
+  TARJETA_AGREGAR_PRODUCTO: 'text=Agregar producto',
+  TARJETA_AGREGAR_SERVICIO: 'text=Agregar servicio',
+  HEADING_TIPO_PRODUCTO: 'Producto Rápido',
+  INPUT_PRODUCTO_RAPIDO_NOMBRE: '#quick_product_name',
+  INPUT_PRODUCTO_RAPIDO_COSTO: '#quick_product_cost',
+  INPUT_PRODUCTO_RAPIDO_PRECIO: '#quick_product_price',
+  HEADING_TIPO_SERVICIO: 'Seleccione el tipo de servicio',
+  HEADING_SERVICIO_RAPIDO: 'Servicio Rápido',
+  INPUT_SERVICIO_RAPIDO_NOMBRE: '#dialog_quick_service_name',
+  INPUT_SERVICIO_RAPIDO_PRECIO: '#dialog_quick_service_price_without_iva',
+  // Total general del carrito de la orden — confirmado en vivo: mismo id
+  // "sin IVA" que las líneas individuales (`total_by_product_<clave>`)
+  // mientras el toggle "Mostrar precios con IVA" esté apagado (su estado por
+  // defecto), así que ambos son directamente comparables/sumables.
+  TOTAL_GENERAL_CARRITO: '#total',
+  TOTALES_POR_LINEA_CARRITO: '[id^="total_by_product_"]:visible',
+
+  // ─── Partes del vehículo ────────────────────────────────────────────────────
+  // Ícono de estado "Bueno" de una parte — el id numérico de cada parte es
+  // dinámico según el ambiente, por eso se selecciona por el atributo
+  // `onclick` (siempre `addAssetOrder(<id>,1)`) en vez de un id fijo.
+  ICONO_PARTE_BUENA: '[onclick^="addAssetOrder"][title="Bueno"]',
+
+  // ─── Marcación de daños / Firma del cliente (canvas de dibujo) ─────────────
+  CANVAS_DIBUJO_VISIBLE: 'canvas:visible',
+  BTN_GUARDAR_DANIO: 'Guardar nueva',
+  TEXTO_DANIO_GUARDADO: /Foto seleccionada.*Total:\s*\d+/,
+
+  // ─── Observaciones generales ────────────────────────────────────────────────
+  // ¡OJO! Confirmado en vivo (inspeccionando la red y releyendo la orden ya
+  // generada): estos dos campos del paso "Observaciones generales" del
+  // wizard de creación NO se guardan en el backend — el texto escrito aquí
+  // sobrevive mientras se navega entre pasos del mismo wizard (estado en
+  // memoria del lado del cliente), pero se pierde por completo apenas se
+  // sale de él. Ninguna petición de red se dispara al llenarlos ni al
+  // avanzar de paso. Los campos que sí persisten de verdad son
+  // `INPUT_OBSERVACION_SERVICIO_DETALLE`/`INPUT_OBSERVACION_CLIENTE_DETALLE`
+  // más abajo, en la vista de detalle de la orden YA GENERADA.
+  INPUT_OBSERVACION_SERVICIO: '#damage_repair',
+  INPUT_OBSERVACION_CLIENTE: '#damage_repair_message',
+
+  // ─── Finalizar (Generar orden) ─────────────────────────────────────────────
+  HEADING_CONFIRMAR_GENERAR: '¿Está seguro de generar la orden?',
+
+  // ─── Observaciones REALES (vista de detalle de la orden ya generada) ──────
+  // Mismos campos conceptualmente, ids distintos (sufijo "_detail"),
+  // confirmados en vivo como los que sí persisten: al perder el foco
+  // disparan `saveRepairOrderNotes` (200).
+  INPUT_OBSERVACION_SERVICIO_DETALLE: '#damage_repair_detail',
+  INPUT_OBSERVACION_CLIENTE_DETALLE: '#damage_repair_message_detail',
 } as const;
 
+// Marca de vehículo usada como valor por defecto en los tests de creación de
+// recepción/orden: confirmada en vivo con modelos reales asociados (a
+// diferencia de otras marcas de datos de prueba en este ambiente, que a
+// veces no tienen ningún modelo cargado y dejarían el combo de Modelo vacío).
+export const MARCA_VEHICULO_PRUEBA = 'ALFA ROMEO';
+
+// Producto y servicio "normales" (del catálogo real, no creados por quick
+// add) usados como valores por defecto en los tests de Orden — confirmados
+// en vivo como datos estables de este ambiente compartido, en la misma línea
+// que otras referencias fijas ya usadas en el resto de la suite (p. ej. la
+// placa "VSRF" o el cliente "CITA DE PRUEBA").
+export const PRODUCTO_CATALOGO_PRUEBA = 'A11 - PROT. BLING GLITTER ROSA';
+export const SERVICIO_CATALOGO_PRUEBA = 'Admisión LIV GA';
+
 export type VistaOrdenes = 'lista' | 'caja';
+export type ModoTarjetaTablero = 'compacto' | 'detallado';
+
+/**
+ * Error de JavaScript conocido y ajeno a cualquier flujo de negocio del
+ * módulo: confirmado en vivo por su stack trace, lo dispara el propio
+ * atributo `onerror` inline de la app (`HTMLImageElement.onerror`, línea fija
+ * de `vehicularQuickReception`) cuando la foto de un vehículo del set de
+ * datos de prueba no carga (404) — el propio handler de fallback de la app
+ * intenta un `appendChild` sobre un contenedor que en ese momento es `null`.
+ * No depende de qué tab/acción se esté probando, solo de si el set de datos
+ * de prueba tiene fotos de vehículo rotas, así que se excluye de las
+ * aserciones de "sin errores de JS" de este módulo para no acoplar cada test
+ * a la calidad de las fotos de los datos de prueba.
+ */
+const ERROR_JS_FOTO_VEHICULO_ROTA = "Cannot read properties of null (reading 'appendChild')";
+
+/**
+ * Segundo error de JS conocido y ajeno a cualquier flujo de negocio del
+ * módulo: el mismo descrito en el docstring de `ir()` más arriba —
+ * intermitente al activar el tab "Dashboard" cuando algunos scripts propios
+ * de la página (el plugin `steps`) todavía no terminan de cargar en el
+ * momento en que el módulo se auto-activa. Confirmado en vivo antes de que
+ * este archivo existiera; no es una regresión introducida por ningún test de
+ * este archivo.
+ */
+const ERROR_JS_DASHBOARD_STEPS = '$(...).steps is not a function';
+
+const ERRORES_JS_CONOCIDOS = [ERROR_JS_FOTO_VEHICULO_ROTA, ERROR_JS_DASHBOARD_STEPS];
+
+/** Filtra de una lista de errores de JS los ya identificados como ruido conocido y ajeno al módulo (ver `ERRORES_JS_CONOCIDOS`). */
+export function erroresJSRelevantes(errores: string[]): string[] {
+  return errores.filter((error) => !ERRORES_JS_CONOCIDOS.includes(error));
+}
+
+/** Convierte un monto mostrado en formato "es-CR" (punto de millar, coma decimal — p. ej. "$ 1.000,00") a un número. */
+function parseMonedaCR(texto: string): number {
+  const limpio = texto.replace(/[^\d.,-]/g, '').replace(/\./g, '').replace(',', '.');
+  return parseFloat(limpio) || 0;
+}
 
 // ─── Page Object ──────────────────────────────────────────────────────────────
 
@@ -143,6 +342,23 @@ export class RecepcionPage {
   async ir() {
     await this.page.goto(RECEPCION_VEHICULAR_URL, { waitUntil: 'domcontentloaded', timeout: TIMEOUTS.NAVIGATE });
     await this.page.waitForLoadState('networkidle', { timeout: TIMEOUTS.CARGA }).catch(() => {});
+    await this.cerrarNotificacionPermiso();
+  }
+
+  /**
+   * Cierra el banner global de "Activa las notificaciones del navegador" si
+   * aparece (mismo elemento que en panel-control.page.ts y
+   * rp-tienda-en-linea.page.ts). Confirmado en vivo: queda flotando sobre el
+   * header del módulo e intercepta los clicks sobre el toggle de tema y los
+   * botones de vista Lista/Caja — click vía `page.evaluate` (no
+   * `locator.click`) porque es precisamente ese mismo banner el que puede
+   * interceptar el click real; es un elemento opcional y ajeno a cualquier
+   * flujo de negocio, así que su ausencia nunca debe hacer fallar el test.
+   */
+  async cerrarNotificacionPermiso() {
+    await this.page.evaluate((selector) => {
+      document.querySelector<HTMLElement>(selector)?.click();
+    }, L.NOTIF_DISMISS);
   }
 
   // ─── Tabs ───────────────────────────────────────────────────────────────────
@@ -275,5 +491,603 @@ export class RecepcionPage {
     await this.page.locator(L.TOGGLE_TEMA).click();
 
     await esperarQuedaActivo(async () => (await this.modoOscuroActivo()) === !activoAntes);
+  }
+
+  // ─── Opciones de una orden (compartidas entre vista Lista y vista Caja) ─────
+
+  /** Abre el menú de opciones (⋮) de la primera orden visible y devuelve el menú ya desplegado. */
+  async abrirOpcionesPrimeraOrden(): Promise<Locator> {
+    const primeraTarjeta = this.page.locator(L.TARJETA_ORDEN).first();
+    await expect(primeraTarjeta, 'No hay ninguna orden visible para abrir su menú de opciones').toBeVisible({ timeout: TIMEOUTS.CARGA });
+
+    await primeraTarjeta.locator(L.BTN_OPCIONES_ORDEN).first().click();
+
+    const menu = this.page.locator(L.MENU_OPCIONES_ORDEN).first();
+    await expect(menu, 'El menú de opciones de la orden no se desplegó').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    return menu;
+  }
+
+  // ─── Configurar Tablero (modo de tarjeta: Detallado / Compacto) ─────────────
+
+  get modalConfigurarTablero(): Locator {
+    return this.page.locator(L.MODAL_CONFIGURAR_TABLERO);
+  }
+
+  /** Abre el modal "Configurar Tablero" desde el menú "⋮" del encabezado del módulo. */
+  async abrirConfigurarTablero() {
+    await this.page.locator(L.BTN_MAS_OPCIONES).click();
+
+    const link = this.page.locator(L.LINK_CONFIGURAR_TABLERO);
+    await expect(link, 'El enlace "Configurar tablero" no apareció en el menú "⋮"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await link.click();
+
+    await expect(this.modalConfigurarTablero, 'El modal "Configurar Tablero" no se abrió').toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  private opcionModoTarjeta(modo: ModoTarjetaTablero): Locator {
+    const valor = modo === 'compacto' ? 'compact' : 'detailed';
+    return this.modalConfigurarTablero.locator(`.ervk-card-mode-option[data-card-view-mode="${valor}"]`);
+  }
+
+  /** Modo de tarjeta actualmente marcado DENTRO del modal (no implica que ya esté guardado/aplicado). */
+  async modoTarjetaSeleccionadoEnModal(): Promise<ModoTarjetaTablero> {
+    const clases = (await this.opcionModoTarjeta('detallado').getAttribute('class')) ?? '';
+    return clases.split(/\s+/).includes('active') ? 'detallado' : 'compacto';
+  }
+
+  /** Selecciona un modo de tarjeta dentro del modal ya abierto (todavía sin guardar). */
+  async seleccionarModoTarjeta(modo: ModoTarjetaTablero) {
+    await this.opcionModoTarjeta(modo).click();
+    await esperarQuedaActivo(async () => (await this.modoTarjetaSeleccionadoEnModal()) === modo);
+  }
+
+  /**
+   * Guarda la configuración del tablero. Confirmado en vivo: al guardar
+   * aparece un toast ("Configuración guardada exitosamente") y el modal se
+   * cierra solo, pero no de inmediato — se hace polling directo sobre
+   * `isVisible()` (más estable en este modal que encadenar
+   * `expect(...).toBeHidden()`) en vez de una espera fija.
+   */
+  async guardarConfigTablero() {
+    await this.page.locator(L.BTN_GUARDAR_CONFIG_TABLERO).click();
+
+    await expect
+      .poll(() => this.modalConfigurarTablero.isVisible(), { timeout: TIMEOUTS.GUARDAR_CONFIG_TABLERO })
+      .toBe(false);
+  }
+
+  /**
+   * El cambio de modo de tarjeta no se refleja en las tarjetas ya
+   * renderizadas hasta refrescar el caché del propio tablero (confirmado en
+   * vivo: botón "Refrescar" del tablero) — no es un simple re-render en
+   * cliente al guardar.
+   */
+  async refrescarTablero() {
+    await this.page.locator(L.BTN_REFRESCAR_TABLERO).click();
+  }
+
+  /** Modo de tarjeta realmente aplicado en el tablero, leído de la primera tarjeta real (no del modal). */
+  async modoTarjetaActivoEnTablero(): Promise<ModoTarjetaTablero> {
+    const primera = this.page.locator(L.TARJETA_ORDEN).first();
+    await expect(primera, 'No hay ninguna tarjeta visible en el tablero para verificar el modo aplicado').toBeVisible({ timeout: TIMEOUTS.CARGA });
+
+    const clases = (await primera.getAttribute('class')) ?? '';
+    return clases.includes('ervk-kanban-card-compact') ? 'compacto' : 'detallado';
+  }
+
+  // ─── Crear Recepción / Nueva orden de reparación ────────────────────────────
+
+  get modalNuevaRecepcion(): Locator {
+    return this.page.locator(L.MODAL_NUEVA_RECEPCION);
+  }
+
+  /** Abre el modal inicial de "Placa del vehículo" desde el botón "+ Recepción" del encabezado. */
+  async abrirNuevaRecepcion() {
+    await this.page.locator(L.BTN_NUEVA_RECEPCION).click();
+    await expect(this.modalNuevaRecepcion, 'El modal de placa del vehículo no se abrió').toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /**
+   * Activa el interruptor "No tiene Placa / Matrícula" del modal inicial.
+   * Confirmado en vivo: solo afecta la validación de ESTE modal (permite
+   * continuar sin llenar `INPUT_PLACA_MODAL`) — el paso "Detalles del
+   * vehículo" del wizard sigue exigiendo su propio campo de placa por
+   * separado (ver `llenarPlacaDetalleVehiculo`).
+   */
+  async activarSinPlacaEnModal() {
+    await this.page.locator(L.TOGGLE_SIN_PLACA).click();
+    await esperarQuedaActivo(() => this.page.locator(L.CHECKBOX_SIN_PLACA).isChecked());
+  }
+
+  /**
+   * Escribe una placa en el modal inicial y confirma con "Agregar vehículo".
+   * Confirmado en vivo: este botón SIEMPRE trata la placa como la de un
+   * vehículo nuevo, sin importar si ya existe uno igual — para reutilizar un
+   * vehículo ya existente hay que usar `buscarYReutilizarVehiculoExistente`
+   * (botón "Buscar"), no este método. `placa` puede ir vacío junto con
+   * `activarSinPlacaEnModal()` para el flujo "sin placa".
+   */
+  async agregarVehiculoNuevo(placa: string) {
+    await this.page.locator(L.INPUT_PLACA_MODAL).fill(placa);
+    await this.page.locator(L.BTN_AGREGAR_VEHICULO_MODAL).click();
+  }
+
+  /**
+   * Busca un vehículo YA EXISTENTE por su placa en el modal inicial (botón
+   * "Buscar"). Confirmado en vivo: si el vehículo ya tiene una orden de
+   * trabajo abierta —el caso normal en este ambiente compartido, donde casi
+   * todos los vehículos de prueba ya tienen historial— el sistema muestra un
+   * diálogo de confirmación ("Vehículo con orden abierta") en vez de una
+   * lista de resultados; este método resuelve ambos casos.
+   *
+   * Reintenta la búsqueda (no solo la espera) hasta 3 veces si ninguno de
+   * los dos resultados aparece: confirmado en vivo que la misma placa, con
+   * la misma búsqueda, puede devolver una respuesta vacía de forma
+   * intermitente bajo carga del ambiente compartido — sin ser un error real
+   * de la aplicación (la búsqueda inmediatamente siguiente, idéntica, sí
+   * encuentra el vehículo).
+   *
+   * Devuelve `'wizard'` si el flujo queda esperando en el paso "Detalles del
+   * vehículo" (o antes, en "Seleccionar Cliente") para que quien llama lo
+   * complete, o `'completado'` si "Crear nueva orden" ya generó la orden de
+   * una vez y devolvió directamente al panel de Recepción. Confirmado en
+   * vivo: para un vehículo con VARIAS órdenes previas ya abiertas —el caso
+   * de la placa fija de prueba de este archivo tras ejecuciones repetidas—
+   * el sistema a veces resuelve la orden nueva de inmediato en vez de
+   * entrar al wizard, así que ambos desenlaces son válidos y no un error.
+   */
+  async buscarYReutilizarVehiculoExistente(placa: string): Promise<'wizard' | 'completado'> {
+    const dialogoOrdenAbierta = this.page.getByRole('heading', { name: 'Vehículo con orden abierta' });
+    const filaResultado = this.page
+      .locator(L.CONTENEDOR_RESULTADOS_BUSQUEDA_VEHICULO)
+      .locator('tr[onclick*="setVehiculeToRepairOrder"]')
+      .first();
+
+    const estadoBusqueda = async () => {
+      if (await dialogoOrdenAbierta.isVisible()) return 'dialogo';
+      if (await filaResultado.isVisible()) return 'fila';
+      return 'ninguno';
+    };
+
+    let resultado: string = 'ninguno';
+    for (let intento = 1; intento <= 3 && resultado === 'ninguno'; intento++) {
+      await this.page.locator(L.INPUT_PLACA_MODAL).fill(placa);
+      await this.page.locator(L.BTN_BUSCAR_VEHICULO_MODAL).click();
+      try {
+        await expect.poll(estadoBusqueda, { timeout: TIMEOUTS.CARGA / 2 }).not.toBe('ninguno');
+      } catch {
+        // se agota este intento; el bucle reintenta la búsqueda desde cero
+      }
+      resultado = await estadoBusqueda();
+    }
+    expect(resultado, `La búsqueda de la placa "${placa}" no encontró ningún vehículo tras 3 intentos`).not.toBe('ninguno');
+
+    // Usa el `resultado` ya determinado (no vuelve a preguntar
+    // `isVisible()`): un diálogo que estaba visible en el poll puede dejar
+    // de estarlo un instante después (p. ej. si se está cerrando), y
+    // rechequear aquí llevaría por error a la rama "fila" sin ningún
+    // elemento real que clickear.
+    if (resultado === 'dialogo') {
+      await this.page.getByRole('button', { name: 'Crear nueva orden' }).click();
+    } else {
+      await filaResultado.click();
+    }
+
+    // Tras resolver, el flujo puede caer directo en "Detalles del vehículo"
+    // (el vehículo ya traía cliente/estilo asociados), quedar en
+    // "Seleccionar Cliente" (falta ese paso), o la orden queda creada de una
+    // vez sin entrar al wizard — confirmado en vivo que este tercer caso
+    // puede dejar distintos residuos visuales según el vehículo (el modal
+    // inicial reiniciado, u otro estado), así que en vez de enumerarlos
+    // todos, se espera un tiempo razonable únicamente por el wizard y,
+    // si no aparece, se asume completado y se cierra cualquier modal que
+    // haya quedado abierto — la prueba de verdad ("la orden se generó")
+    // queda a cargo de quien llama, revisando el tab Órdenes.
+    const detalles = this.page.locator(L.GRUPO_DETALLES_VEHICULO);
+    const clienteWizard = this.page.locator(L.CONTENEDOR_CLIENTES_WIZARD).locator(L.TARJETA_CLIENTE_WIZARD).first();
+
+    const entroAlWizard = await expect
+      .poll(async () => (await detalles.isVisible()) || (await clienteWizard.isVisible()), { timeout: TIMEOUTS.CARGA })
+      .toBe(true)
+      .then(() => true)
+      .catch(() => false);
+
+    if (!entroAlWizard) {
+      if (await this.modalNuevaRecepcion.isVisible().catch(() => false)) {
+        await this.modalNuevaRecepcion.getByRole('button', { name: 'Cerrar' }).click().catch(() => {});
+        await expect(this.modalNuevaRecepcion).toBeHidden({ timeout: TIMEOUTS.CARGA }).catch(() => {});
+      }
+      return 'completado';
+    }
+
+    if (await clienteWizard.isVisible()) {
+      await this.seleccionarPrimerClienteWizard();
+      await this.avanzarWizard();
+      await this.esperarDetallesVehiculoVisible();
+    }
+    return 'wizard';
+  }
+
+  /**
+   * Selecciona el primer cliente disponible en el paso "Seleccionar
+   * Cliente" del wizard. Timeout ampliado (no TIMEOUTS.CARGA): confirmado en
+   * vivo que la grilla completa de clientes puede tardar más que el límite
+   * general en poblarse bajo carga del ambiente compartido.
+   */
+  async seleccionarPrimerClienteWizard() {
+    const tarjeta = this.page.locator(L.CONTENEDOR_CLIENTES_WIZARD).locator(L.TARJETA_CLIENTE_WIZARD).first();
+    await expect(tarjeta, 'No hay ningún cliente disponible para seleccionar en el wizard').toBeVisible({ timeout: TIMEOUTS.CARGA_LISTADO_COMPLETO });
+    await tarjeta.click();
+  }
+
+  /** Avanza al siguiente paso del wizard (botón "Siguiente" del pie del wizard). */
+  async avanzarWizard() {
+    await this.page.getByRole('button', { name: /Siguiente/ }).click();
+  }
+
+  /** Avanza varios pasos seguidos del wizard (para pasos intermedios que no requieren ninguna acción, p. ej. Inspección/Enderezado y Pintura/Abonos en una Orden sencilla). */
+  async avanzarWizardVeces(veces: number) {
+    for (let i = 0; i < veces; i++) await this.avanzarWizard();
+  }
+
+  /** Espera a que el paso "Detalles del vehículo" del wizard esté realmente cargado. */
+  async esperarDetallesVehiculoVisible() {
+    await expect(
+      this.page.locator(L.GRUPO_DETALLES_VEHICULO),
+      'El paso "Detalles del vehículo" no cargó'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  private chosenDeSelect(selectorId: string): Locator {
+    return this.page.locator(selectorId).locator('xpath=following-sibling::div[contains(@class,"chosen-container")][1]');
+  }
+
+  /** Selecciona una opción de un combo "Chosen" del wizard por su texto visible. */
+  async seleccionarOpcionChosen(selectorId: string, texto: string) {
+    const contenedor = this.chosenDeSelect(selectorId);
+    await contenedor.locator('a.chosen-single').click();
+    const resultados = contenedor.locator('.chosen-results li.active-result');
+    await expect(resultados.first(), `El combo "${selectorId}" no mostró ninguna opción`).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await resultados.filter({ hasText: texto }).first().click();
+  }
+
+  /** Selecciona la primera opción disponible de un combo "Chosen" del wizard — para campos donde no importa cuál, solo que exista uno. */
+  async seleccionarPrimeraOpcionChosen(selectorId: string) {
+    const contenedor = this.chosenDeSelect(selectorId);
+    await contenedor.locator('a.chosen-single').click();
+    const resultados = contenedor.locator('.chosen-results li.active-result');
+    await expect(resultados.first(), `El combo "${selectorId}" no mostró ninguna opción`).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await resultados.first().click();
+  }
+
+  /**
+   * Completa el mínimo de "Detalles del vehículo" necesario para poder
+   * guardar (confirmado en vivo): Marca + Modelo + Tipo de combustible.
+   * Transmisión, Número de unidad, colores, batería, etc. quedan con sus
+   * valores por defecto — no son obligatorios para guardar. Modelo depende
+   * de Marca (se puebla vía AJAX), por eso se espera a que tenga opciones
+   * antes de intentar seleccionarlo.
+   */
+  async completarDetallesVehiculoMinimo(marca: string = MARCA_VEHICULO_PRUEBA) {
+    await this.esperarDetallesVehiculoVisible();
+    await this.seleccionarOpcionChosen(L.SELECT_MARCA, marca);
+
+    await expect
+      .poll(
+        () => this.page.evaluate((sel) => (document.querySelector(sel) as HTMLSelectElement | null)?.options.length ?? 0, L.SELECT_MODELO),
+        { timeout: TIMEOUTS.CARGA }
+      )
+      .toBeGreaterThan(0);
+
+    await this.seleccionarPrimeraOpcionChosen(L.SELECT_MODELO);
+    await this.seleccionarPrimeraOpcionChosen(L.SELECT_COMBUSTIBLE);
+  }
+
+  /**
+   * Llena el campo de placa PROPIO del paso "Detalles del vehículo"
+   * (distinto del campo del modal inicial) — ver la nota en
+   * `L.INPUT_PLACA_DETALLE`. Sin llenarlo, "Siguiente" no dispara ninguna
+   * petición ni muestra ningún error (falla silenciosa confirmada en vivo
+   * inspeccionando la red): por eso `guardarDetallesVehiculo()` exige el
+   * toast real de éxito en vez de solo esperar el cambio de paso.
+   */
+  async llenarPlacaDetalleVehiculo(valor: string) {
+    await this.page.locator(L.INPUT_PLACA_DETALLE).fill(valor);
+  }
+
+  /**
+   * Guarda "Detalles del vehículo" (botón "Siguiente") y confirma el mensaje
+   * real de éxito de la app en vez de solo esperar el cambio de paso — así
+   * una falla silenciosa (campo obligatorio faltante) hace fallar el test
+   * con una causa clara en vez de quedarse esperando indefinidamente el
+   * siguiente paso.
+   */
+  async guardarDetallesVehiculo() {
+    await this.avanzarWizard();
+    await expect(
+      this.page.locator('.noty_bar', { hasText: /actualizado con éxito/ }),
+      'No apareció el toast de "Vehículo actualizado con éxito" — probablemente falta un campo obligatorio del paso "Detalles del vehículo"'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /** Sale del wizard de vuelta al panel de Recepción Vehicular. */
+  async regresarAOrdenesDesdeWizard() {
+    await this.page.getByRole('button', { name: 'Regresar a órdenes' }).click();
+    await expect(this.buscador, 'No se regresó correctamente al panel de recepción').toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  // ─── Seleccionar servicios (productos y servicios de la orden) ─────────────
+
+  /**
+   * Cambia entre las pestañas "Productos"/"Servicios" del paso "Seleccionar
+   * servicios". Sin `exact` (confirmado en vivo: el nombre accesible del
+   * botón "Servicios" trae un espacio inicial por el ícono que lo precede,
+   * lo que rompe una coincidencia exacta).
+   */
+  async cambiarPestanaCatalogo(pestana: 'Productos' | 'Servicios') {
+    await this.page.getByRole('button', { name: pestana }).click();
+  }
+
+  /**
+   * Agrega un producto real del catálogo (no uno creado por quick-add) por
+   * su nombre visible. Confirmado en vivo: el catálogo se renderiza a la vez
+   * en vista grilla y vista lista (ambas en el DOM, solo una visible) — por
+   * eso se filtra por `visible=true` en vez de asumir un único match.
+   */
+  async agregarProductoDelCatalogo(nombreExacto: string = PRODUCTO_CATALOGO_PRUEBA) {
+    await this.cambiarPestanaCatalogo('Productos');
+    const tarjeta = this.page.getByText(nombreExacto, { exact: true }).locator('visible=true').first();
+    await expect(tarjeta, `El producto "${nombreExacto}" no está disponible en el catálogo`).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await tarjeta.click();
+    await expect(
+      this.page.locator('.noty_bar', { hasText: 'Producto añadido' }),
+      'No apareció el toast de "Producto añadido a la orden"'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /** Agrega un servicio real del catálogo (no uno creado por quick-add) por un texto parcial de su nombre visible. */
+  async agregarServicioDelCatalogo(textoParcial: string = SERVICIO_CATALOGO_PRUEBA) {
+    await this.cambiarPestanaCatalogo('Servicios');
+    const tarjeta = this.page.locator('div,span').filter({ hasText: textoParcial }).locator('visible=true').last();
+    await expect(tarjeta, `Ningún servicio del catálogo coincide con "${textoParcial}"`).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await tarjeta.click();
+    await expect(
+      this.page.locator('.noty_bar', { hasText: 'Servicio añadido' }),
+      'No apareció el toast de "Servicio añadido a la orden"'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /**
+   * Crea y agrega un "Producto Rápido" (modal "¿Desea añadir un producto
+   * rápido?" → "Producto Rápido"). Distinto de `agregarProductoDelCatalogo`:
+   * este NO viene del catálogo, se define aquí mismo (nombre/costo/precio).
+   */
+  async agregarProductoRapido(datos: { nombre: string; costo: string; precio: string }) {
+    await this.cambiarPestanaCatalogo('Productos');
+    await this.page.locator(L.TARJETA_AGREGAR_PRODUCTO).locator('visible=true').first().click();
+    await this.page.getByRole('heading', { name: L.HEADING_TIPO_PRODUCTO, exact: true }).click();
+
+    await this.page.locator(L.INPUT_PRODUCTO_RAPIDO_NOMBRE).fill(datos.nombre);
+    await this.page.locator(L.INPUT_PRODUCTO_RAPIDO_COSTO).fill(datos.costo);
+    await this.page.locator(L.INPUT_PRODUCTO_RAPIDO_PRECIO).fill(datos.precio);
+    await this.page.getByRole('button', { name: 'Agregar', exact: true }).click();
+
+    await expect(
+      this.page.locator('.noty_bar', { hasText: 'Producto añadido' }),
+      'No apareció el toast de "Producto añadido a la orden" tras crear el producto rápido'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /**
+   * Crea y agrega un "Servicio Rápido" (modal "Seleccione el tipo de
+   * servicio" → "Servicio Rápido"). El botón de confirmación de este modal
+   * dice "Guardar", no "Agregar" (confirmado en vivo, distinto del de
+   * Producto Rápido).
+   */
+  async agregarServicioRapido(datos: { nombre: string; precio: string }) {
+    await this.cambiarPestanaCatalogo('Servicios');
+    await this.page.locator(L.TARJETA_AGREGAR_SERVICIO).locator('visible=true').first().click();
+    await expect(this.page.getByRole('heading', { name: L.HEADING_TIPO_SERVICIO })).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await this.page.getByRole('heading', { name: L.HEADING_SERVICIO_RAPIDO, exact: true }).click();
+
+    await this.page.locator(L.INPUT_SERVICIO_RAPIDO_NOMBRE).fill(datos.nombre);
+    await this.page.locator(L.INPUT_SERVICIO_RAPIDO_PRECIO).fill(datos.precio);
+    // Sin `exact` (mismo motivo que en `cambiarPestanaCatalogo`: el nombre
+    // accesible de este botón también trae un espacio inicial por su ícono).
+    await this.page.getByRole('button', { name: 'Guardar' }).click();
+
+    await expect(
+      this.page.locator('.noty_bar', { hasText: 'Servicio añadido' }),
+      'No apareció el toast de "Servicio añadido a la orden" tras crear el servicio rápido'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /** Total general mostrado del carrito de la orden (paso "Seleccionar servicios"), como número. */
+  async obtenerTotalGeneralCarrito(): Promise<number> {
+    const texto = await this.page.locator(L.TOTAL_GENERAL_CARRITO).innerText();
+    return parseMonedaCR(texto);
+  }
+
+  /** Totales individuales de cada línea (producto o servicio) actualmente en el carrito. */
+  async obtenerTotalesPorLineaCarrito(): Promise<number[]> {
+    const textos = await this.page.locator(L.TOTALES_POR_LINEA_CARRITO).allTextContents();
+    return textos.map(parseMonedaCR);
+  }
+
+  // ─── Partes del vehículo ────────────────────────────────────────────────────
+
+  /**
+   * Marca la primera parte disponible como "Bueno". El id numérico de cada
+   * parte es dinámico según el ambiente — se selecciona por el atributo
+   * `onclick` (`addAssetOrder`), no por un id fijo, y se confirma la marcación
+   * real verificando que el propio ícono clickeado gane la clase
+   * `status-asset-active` (confirmado en vivo: no hay toast para esta acción).
+   */
+  async marcarPrimeraParteComoBuena() {
+    const icono = this.page.locator(L.ICONO_PARTE_BUENA).first();
+    await expect(icono, 'No hay ninguna parte del vehículo disponible para marcar').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await icono.click();
+    await esperarQuedaActivo(async () => (await icono.getAttribute('class'))?.includes('status-asset-active') ?? false);
+  }
+
+  // ─── Seleccionar fotos ───────────────────────────────────────────────────────
+
+  /**
+   * Sube una fotografía en el paso "Seleccionar fotos". Confirmado en vivo:
+   * de los varios `<input type="file">` ocultos que coexisten en esta página
+   * (para otros flujos: importar imagen de daño, foto de estilo, chat
+   * interno, etc.), el de este paso es el único SIN id, y es además el
+   * último en el orden del DOM — de ahí `.last()` en vez de un selector por
+   * id.
+   */
+  async subirFotoRecepcion(rutaArchivo: string) {
+    await this.page.locator('input[type="file"]').last().setInputFiles(rutaArchivo);
+    await expect(
+      this.page.getByText(/Se guardaron\s*\d+\s*imágenes/),
+      'No se confirmó el guardado de la fotografía subida'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  // ─── Canvas de dibujo (compartido entre Marcación de daños y Firma) ────────
+
+  /**
+   * Dibuja un trazo simple sobre un `<canvas>` de dibujo libre. Confirmado en
+   * vivo: tanto el canvas de "Marcación de daños" como el de "Firma del
+   * cliente" NO responden a los eventos de mouse sintéticos de Playwright
+   * (`page.mouse`/`locator.hover` — el trazo simplemente no aparece, 0 píxeles
+   * dibujados verificado leyendo el propio canvas). Sí responden a
+   * `MouseEvent` nativos despachados directamente sobre el elemento, que es
+   * lo que hace este método.
+   */
+  private async dibujarEnCanvas(canvas: Locator) {
+    await canvas.evaluate((c: HTMLCanvasElement) => {
+      const rect = c.getBoundingClientRect();
+      function disparar(tipo: string, x: number, y: number) {
+        const evento = new MouseEvent(tipo, {
+          bubbles: true,
+          cancelable: true,
+          clientX: rect.left + x,
+          clientY: rect.top + y,
+          button: 0,
+          buttons: tipo === 'mouseup' ? 0 : 1,
+        });
+        c.dispatchEvent(evento);
+      }
+      disparar('mousedown', 30, 30);
+      for (let i = 1; i <= 20; i++) disparar('mousemove', 30 + i * 5, 30 + Math.sin(i) * 20);
+      disparar('mouseup', 130, 30);
+    });
+  }
+
+  // ─── Marcación de daños ──────────────────────────────────────────────────────
+
+  /**
+   * Dibuja una marcación de daño sobre el diagrama del vehículo y la guarda.
+   * Confirma la persistencia real leyendo el texto "Foto seleccionada: #N.
+   * Total: N." que la app muestra tras guardar (no hay un toast para esta
+   * acción).
+   */
+  async marcarDanioYGuardar() {
+    const canvas = this.page.locator(L.CANVAS_DIBUJO_VISIBLE).first();
+    await expect(canvas, 'El canvas de marcación de daños no está visible').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await this.dibujarEnCanvas(canvas);
+    await this.page.getByRole('button', { name: L.BTN_GUARDAR_DANIO }).click();
+    await expect(
+      this.page.getByText(L.TEXTO_DANIO_GUARDADO),
+      'La marcación de daño no quedó guardada (no apareció "Foto seleccionada... Total: N")'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  // ─── Observaciones generales ────────────────────────────────────────────────
+
+  /**
+   * Llena las dos observaciones del paso "Observaciones generales" del
+   * wizard de creación: para el asesor de servicio y para el cliente.
+   *
+   * ¡OJO! Esto NO guarda nada en el backend (ver la nota larga en
+   * `L.INPUT_OBSERVACION_SERVICIO`) — confirmado en vivo releyendo la orden
+   * ya generada, ambos campos aparecían vacíos. Se llena de todas formas
+   * porque es el paso real que un usuario recorre en el wizard, pero la
+   * validación de que "ambas se almacenen" debe hacerse con
+   * `llenarYValidarObservacionesReales()`, sobre la orden ya generada.
+   */
+  async llenarObservaciones(observacionServicio: string, observacionCliente: string) {
+    await this.page.locator(L.INPUT_OBSERVACION_SERVICIO).fill(observacionServicio);
+    await this.page.locator(L.INPUT_OBSERVACION_CLIENTE).fill(observacionCliente);
+  }
+
+  /**
+   * Abre la vista de detalle de la primera orden actualmente visible
+   * (pensado para usarse justo después de `buscarOrden()`, que ya deja
+   * filtrada una única orden). Es una vista distinta del wizard de
+   * creación —"ORDEN #N", con secciones de Fotos/Servicios/Productos/Partes/
+   * Observaciones— a la que se entra haciendo clic en el badge/número de la
+   * orden.
+   */
+  async abrirDetallePrimeraOrdenVisible() {
+    const badge = this.page.locator(L.BADGE_ORDEN).first();
+    await expect(badge, 'No hay ninguna orden visible para abrir su detalle').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await badge.click();
+    await expect(
+      this.page.locator(L.INPUT_OBSERVACION_SERVICIO_DETALLE),
+      'La vista de detalle de la orden no cargó (no apareció la sección de Observaciones)'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /**
+   * Llena las observaciones REALES de una orden ya generada, desde su vista
+   * de detalle, y confirma el guardado esperando la respuesta real del
+   * endpoint `saveRepairOrderNotes` que cada campo dispara al perder el foco
+   * — no un toast ni una espera fija (esta acción no muestra ningún toast).
+   */
+  async llenarYValidarObservacionesReales(observacionServicio: string, observacionCliente: string) {
+    const esperarGuardado = () =>
+      this.page.waitForResponse(
+        (r) => r.url().includes('saveRepairOrderNotes') && r.request().method() === 'POST' && r.status() === 200,
+        { timeout: TIMEOUTS.CARGA }
+      );
+
+    const campoServicio = this.page.locator(L.INPUT_OBSERVACION_SERVICIO_DETALLE);
+    await campoServicio.fill(observacionServicio);
+    const guardadoServicio = esperarGuardado();
+    await campoServicio.blur();
+    await guardadoServicio;
+
+    const campoCliente = this.page.locator(L.INPUT_OBSERVACION_CLIENTE_DETALLE);
+    await campoCliente.fill(observacionCliente);
+    const guardadoCliente = esperarGuardado();
+    await campoCliente.blur();
+    await guardadoCliente;
+  }
+
+  // ─── Firma del cliente ───────────────────────────────────────────────────────
+
+  /** Dibuja la firma del cliente sobre el canvas del paso "Firma del cliente". */
+  async firmarCliente() {
+    const canvas = this.page.locator(L.CANVAS_DIBUJO_VISIBLE).first();
+    await expect(canvas, 'El canvas de firma no está visible').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await this.dibujarEnCanvas(canvas);
+  }
+
+  // ─── Finalizar (Generar orden) ──────────────────────────────────────────────
+
+  /**
+   * Genera la orden desde el paso final ("Generar" → confirmar "¿Está seguro
+   * de generar la orden?" → "Generar orden"). Confirmado en vivo: esta acción
+   * no siempre muestra un toast de éxito ni redirige de inmediato — este
+   * método solo confirma que el diálogo de confirmación se cerró tras el
+   * clic; la verificación de que la orden realmente quedó generada (número,
+   * totales) debe hacerse consultando el tab Órdenes por separado.
+   */
+  async generarOrden() {
+    // Sin `exact`: mismo motivo que en los demás botones con ícono de este
+    // archivo. No hay riesgo de que coincida por error con "Generar orden"
+    // (el botón del diálogo de confirmación), porque ese botón todavía no
+    // existe en el DOM en este punto — solo aparece tras este clic.
+    await this.page.getByRole('button', { name: 'Generar' }).click();
+    const dialogoConfirmar = this.page.getByRole('heading', { name: L.HEADING_CONFIRMAR_GENERAR });
+    await expect(dialogoConfirmar, 'No apareció el diálogo de confirmación "¿Está seguro de generar la orden?"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await this.page.getByRole('button', { name: 'Generar orden' }).click();
+    await expect(dialogoConfirmar, 'El diálogo de confirmación no se cerró tras confirmar "Generar orden"').toBeHidden({ timeout: TIMEOUTS.CARGA });
   }
 }

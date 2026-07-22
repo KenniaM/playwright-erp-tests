@@ -1077,6 +1077,51 @@ export class PosCore {
 
 
   /**
+   * Variante de obtenerPrimerProductoNormalConCodigo() que además exige que
+   * el producto NO esté ya presente en el carrito (mismo motivo que
+   * obtenerPrimerProductoNoPresenteEnCarrito(): add_to_table() solo suma
+   * cantidad a la línea existente en vez de crear una nueva si el producto
+   * ya está en el carrito). Necesaria para agregar un "producto normal" con
+   * Vista Expandida activa (el buscador interno de esa vista filtra por
+   * código, no por nombre — ver agregarProductoPorCodigoEnVistaExpandida()),
+   * evitando repetir ambos filtros por separado.
+   */
+  async obtenerPrimerProductoNormalConCodigoNoPresenteEnCarrito(): Promise<{ producto: MetadatoProducto; codigo: string }> {
+    const MAX_PAGINACIONES = 20;
+    let indiceInicio = 0;
+    const textoCarrito = await this.obtenerTextoCarrito();
+
+    for (let paginacion = 0; paginacion <= MAX_PAGINACIONES; paginacion++) {
+      const metadatos = await this.obtenerMetadatosProductosVisibles();
+
+      for (let i = indiceInicio; i < metadatos.length; i++) {
+        const producto = metadatos[i];
+        if (producto.tipoItem !== 1 || producto.esFraccionado) continue;
+        if (this.nombreApareceEnCarrito(producto.nombre, textoCarrito)) continue;
+
+        const codigo = await this.obtenerCodigoProducto(producto.nombre).catch(() => '');
+        if (codigo) return { producto, codigo };
+      }
+
+      indiceInicio = metadatos.length;
+      const hayMas = await this._cargarMasProductosScrolleando(metadatos.length);
+      if (!hayMas) {
+        throw new Error(
+          `No se encontró ningún producto normal con código interno, ausente del carrito, tras revisar las ` +
+          `${metadatos.length} tarjetas de todo el catálogo visible (no hay más páginas que cargar). ` +
+          'Se requiere al menos un producto normal con código no vacío y no repetido en el ambiente de prueba.'
+        );
+      }
+    }
+
+    throw new Error(
+      `No se encontró ningún producto normal con código, ausente del carrito, tras ${MAX_PAGINACIONES} ` +
+      'cargas adicionales del catálogo (posible bucle: revisar manualmente).'
+    );
+  }
+
+
+  /**
    * Segundo producto normal, distinto del ya localizado por
    * `obtenerPrimerProductoNormal()` — para escenarios que necesitan dos
    * líneas de producto real y diferente en el carrito (p. ej. descuento
