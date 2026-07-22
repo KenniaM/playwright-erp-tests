@@ -359,11 +359,46 @@ export class PosProforma {
     await listado!.locator(L.LISTADO_PROFORMA_BUSCADOR).waitFor({ state: 'visible', timeout: TIMEOUTS.PAYMENT_MODAL });
 
     if (terminoBusqueda) {
-      await listado!.locator(L.LISTADO_PROFORMA_BUSCADOR).fill(terminoBusqueda);
-      await listado!.locator(L.LISTADO_PROFORMA_BTN_BUSCAR).click();
-      await listado!.waitForLoadState('networkidle').catch(() => {});
+      await this.buscarEnListadoProformas(listado!, terminoBusqueda);
     }
     return listado!;
+  }
+
+
+  /**
+   * Ejecuta una búsqueda en el listado de Proformas ya abierto
+   * (abrirListadoProformas()) — extraído de ahí para poder reutilizarlo con
+   * MÚLTIPLES términos sobre el mismo listado ya abierto (validar a fondo el
+   * buscador: por número, por cliente, texto parcial, término inexistente,
+   * limpiar) sin reabrir el popup en cada caso, que es más costoso y no
+   * aporta nada nuevo (mismo listado, mismo campo). Un término vacío ('')
+   * limpia la búsqueda: mismo campo y botón, el propio buscador trata un
+   * valor vacío como "sin filtro" (confirmado en vivo, mismo resultado que
+   * el estado inicial del listado recién abierto).
+   */
+  async buscarEnListadoProformas(listado: Page, termino: string): Promise<void> {
+    await listado.locator(L.LISTADO_PROFORMA_BUSCADOR).fill(termino);
+    await listado.locator(L.LISTADO_PROFORMA_BTN_BUSCAR).click();
+    await listado.waitForLoadState('networkidle').catch(() => {});
+  }
+
+
+  /**
+   * Lee el texto visible de cada tarjeta `.receip_item` del listado ya
+   * abierto — sin seleccionar ninguna (a diferencia de
+   * seleccionarPrimeraProformaDelListado(), que sí selecciona la primera y
+   * lee su detalle vía AJAX). Necesario para validar el buscador: cuántos
+   * resultados trae una búsqueda y si su contenido visible corresponde al
+   * término buscado, sin pagar el costo de cargar el detalle de cada uno.
+   */
+  async obtenerFilasListadoProformas(listado: Page): Promise<string[]> {
+    const filas = listado.locator(L.LISTADO_PROFORMA_FILA);
+    const total = await filas.count();
+    const textos: string[] = [];
+    for (let i = 0; i < total; i++) {
+      textos.push((await filas.nth(i).innerText()).trim());
+    }
+    return textos;
   }
 
 
@@ -454,9 +489,16 @@ export class PosProforma {
       taller: L.PROFORMA_TAB_SUBTAB_TALLER,
     }[tipo];
 
+    // Timeout explícito (antes ausente): mismo patrón/causa raíz ya
+    // confirmado en vivo en abrirMenuDeTarjeta()/obtenerPrimeraProformaEnTab()
+    // — evaluate() sin `timeout` usa el default de acción de Playwright (0 =
+    // sin límite en este proyecto), así que si el botón del sub-filtro tarda
+    // en adjuntarse tras visitarPestanaPos() este await queda colgado hasta
+    // el timeout del test COMPLETO en vez de fallar rápido.
     const yaActivo = await this.page.locator(boton).evaluate(
       (el, clase) => el.classList.contains(clase),
-      L.PROFORMA_TAB_SUBTAB_ACTIVA_CLASE
+      L.PROFORMA_TAB_SUBTAB_ACTIVA_CLASE,
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
     );
     if (yaActivo) return;
 
@@ -466,7 +508,12 @@ export class PosProforma {
     // corresponde a este click.
     await this.page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
 
-    await this.page.locator(boton).click();
+    // Timeout explícito (antes ausente, mismo patrón de causa raíz):
+    // confirmado en vivo que este click específico —sin límite— era el
+    // punto real donde "Vista Lista"/"Vista Expandida" (sub-filtro Taller)
+    // quedaban colgados 150s+ incluso después de acotar el evaluate() de
+    // arriba y el getAttribute() de obtenerPrimeraProformaEnTab().
+    await this.page.locator(boton).click({ timeout: TIMEOUTS.PAYMENT_MODAL });
     await expect(
       this.page.locator(boton),
       `El sub-filtro "${tipo}" no quedó activo tras el click`
@@ -483,6 +530,32 @@ export class PosProforma {
 
 
   /**
+   * Busca Proformas por CLIENTE dentro de la pestaña "Proforma /
+   * Cotizaciones" usando su buscador real (PROFORMA_TAB_BUSCADOR,
+   * `#product_search` — ver su comentario para la evidencia completa de por
+   * qué es el mismo input compartido). Mismo criterio ya confirmado en vivo
+   * y ya usado por buscarOrdenRuteoPorCliente() (pos-ruteo.page.ts): `fill()`
+   * por sí solo NO dispara ninguna petición (confirmado interceptando la
+   * red), hace falta Enter. Filtra sobre el sub-filtro de tipo actualmente
+   * activo (Normal/Consignación/Taller) — no cambia de sub-filtro por su
+   * cuenta. Un término vacío ('') limpia la búsqueda y devuelve el listado
+   * completo del sub-filtro activo. Devuelve la respuesta cruda del AJAX
+   * real para que quien llama pueda inspeccionar su contenido si lo
+   * necesita.
+   */
+  async buscarProformaEnTab(termino: string): Promise<Response> {
+    const buscador = this.page.locator(L.PROFORMA_TAB_BUSCADOR);
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_BUSCAR_PROFORMAS_TAB),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await buscador.fill(termino);
+    await buscador.press('Enter');
+    return respuestaPromise;
+  }
+
+
+  /**
    * Abre el menú de tres puntos de una tarjeta invocando `showOptionCard(id)`
    * directamente por JS, en vez de clickear `.dropbtn` — confirmado en vivo
    * que este menú es un dropdown clásico "mostrar en hover"
@@ -495,8 +568,18 @@ export class PosProforma {
    * previa de la propia tarjeta (data-proform-id), nunca asumido.
    */
   async abrirMenuDeTarjeta(tarjeta: Locator): Promise<string> {
-    const proformaId = (await tarjeta.locator(L.PROFORMA_TAB_ICONO_VISTA_PREVIA).getAttribute('data-proform-id')) ?? '';
-    expect(proformaId, 'No se pudo leer el id real de la tarjeta para abrir su menú de tres puntos').not.toBe('');
+    // Timeout explícito (antes ausente): getAttribute() sin `timeout` usa el
+    // default de acción de Playwright (0 = sin límite en este proyecto, sin
+    // actionTimeout configurado en playwright.config.ts), así que si
+    // `tarjeta` deja de matchear algún elemento (p. ej. localizada por texto
+    // de cliente que cambió — ver localizarTarjetaProformaPorId()) este
+    // await queda colgado hasta el timeout del test COMPLETO en vez de
+    // fallar rápido con un error diagnosticable — confirmado en vivo con dos
+    // corridas consecutivas que colgaron los 10 minutos completos
+    // (TIMEOUTS.TEST_CON_RECUPERACION) antes de que Playwright cerrara el
+    // browser por su cuenta.
+    const proformaId = (await tarjeta.locator(L.PROFORMA_TAB_ICONO_VISTA_PREVIA).getAttribute('data-proform-id', { timeout: TIMEOUTS.PAYMENT_MODAL })) ?? '';
+    expect(proformaId, 'No se pudo leer el id real de la tarjeta para abrir su menú de tres puntos (¿la tarjeta ya no existe con ese filtro?)').not.toBe('');
 
     await this.page.evaluate((id) => (window as any).showOptionCard(id), proformaId);
     await expect(
@@ -532,6 +615,26 @@ export class PosProforma {
 
 
   /**
+   * Localiza una tarjeta de Proforma por su id real (data-proform-id), no
+   * por texto de cliente — necesario para volver a operar sobre una tarjeta
+   * DESPUÉS de que su cliente mostrado cambió (p. ej. Convertir a Orden de
+   * Reparación: tras seleccionarClienteExistente()/updateCustomerToOrder
+   * asociar un cliente real a una Proforma creada con nombre libre, la
+   * tarjeta re-renderiza mostrando ese cliente real). Un locator construido
+   * con `.filter({ hasText: nombreOriginal })` deja de matchear cualquier
+   * elemento en ese momento — y, confirmado en vivo con dos corridas
+   * consecutivas, eso cuelga abrirMenuDeTarjeta() el timeout completo del
+   * test en vez de fallar rápido. Filtrar por id en su lugar es inmune a
+   * ese cambio de texto.
+   */
+  localizarTarjetaProformaPorId(proformaId: string): Locator {
+    return this.page.locator(L.PROFORMA_TAB_TARJETA).filter({
+      has: this.page.locator(`${L.PROFORMA_TAB_ICONO_VISTA_PREVIA}[data-proform-id="${proformaId}"]`),
+    });
+  }
+
+
+  /**
    * Visita la pestaña "Proforma / Cotizaciones", cambia al sub-filtro del
    * tipo indicado (cambiarSubTabProforma()) y devuelve la primera Proforma
    * disponible ahí (sin buscar por nombre) — usada por los escenarios que
@@ -554,11 +657,44 @@ export class PosProforma {
 
     const tarjeta = tarjetas.first();
     const iconoVistaPrevia = tarjeta.locator(L.PROFORMA_TAB_ICONO_VISTA_PREVIA);
-    const proformaId = (await iconoVistaPrevia.getAttribute('data-proform-id')) ?? '';
-    const nombreCliente = (await iconoVistaPrevia.getAttribute('data-proform-client')) ?? '';
+    // Timeouts explícitos (antes ausentes): mismo patrón/causa raíz ya
+    // confirmado en vivo en abrirMenuDeTarjeta() — getAttribute() sin
+    // `timeout` usa el default de acción de Playwright (0 = sin límite en
+    // este proyecto), así que si el ícono de la tarjeta "primera" tarda en
+    // adjuntarse (o la lista se re-renderiza justo después del count()
+    // anterior) este await queda colgado hasta el timeout del test COMPLETO
+    // en vez de fallar rápido — reproducido en vivo en aislamiento total
+    // (nada más corriendo) con "Agregar Ítem y Facturar"/"Vista Expandida"/
+    // "Vista Lista"/"Facturar a Crédito", todos consumidores de este método
+    // vía buscarOCrearProformaEnTab().
+    const proformaId = (await iconoVistaPrevia.getAttribute('data-proform-id', { timeout: TIMEOUTS.PAYMENT_MODAL })) ?? '';
+    const nombreCliente = (await iconoVistaPrevia.getAttribute('data-proform-client', { timeout: TIMEOUTS.PAYMENT_MODAL })) ?? '';
     expect(proformaId, 'No se pudo leer el id real de la primera Proforma de la pestaña (data-proform-id)').not.toBe('');
 
     return { tarjeta, nombreCliente, proformaId };
+  }
+
+
+  /**
+   * Lee id y cliente reales (mismos atributos confiables `data-proform-id`/
+   * `data-proform-client` que ya usa obtenerPrimeraProformaEnTab(), nunca el
+   * texto visible) de TODAS las tarjetas actualmente visibles en el
+   * sub-filtro activo de la pestaña "Proforma / Cotizaciones" — necesario
+   * para validar el buscador (buscarProformaEnTab()): cuántos resultados
+   * trae una búsqueda y si corresponden al término buscado, sin seleccionar
+   * ninguna tarjeta.
+   */
+  async obtenerTarjetasProformaEnTab(): Promise<{ proformaId: string; nombreCliente: string }[]> {
+    const tarjetas = this.page.locator(L.PROFORMA_TAB_TARJETA);
+    const total = await tarjetas.count();
+    const resultado: { proformaId: string; nombreCliente: string }[] = [];
+    for (let i = 0; i < total; i++) {
+      const iconoVistaPrevia = tarjetas.nth(i).locator(L.PROFORMA_TAB_ICONO_VISTA_PREVIA);
+      const proformaId = (await iconoVistaPrevia.getAttribute('data-proform-id', { timeout: TIMEOUTS.PAYMENT_MODAL })) ?? '';
+      const nombreCliente = (await iconoVistaPrevia.getAttribute('data-proform-client', { timeout: TIMEOUTS.PAYMENT_MODAL })) ?? '';
+      resultado.push({ proformaId, nombreCliente });
+    }
+    return resultado;
   }
 
 
@@ -946,11 +1082,31 @@ export class PosProforma {
    * completa el evento `change` real que valida la conversión (ver el
    * comentario de L.PROFORMA_TAB_PLACA_CHOSEN), así que nunca se hace de
    * esa forma.
+   *
+   * Corrección de automatización (causa raíz confirmada en vivo
+   * interceptando la red en 3 corridas consecutivas — ver el comentario de
+   * L.AJAX_ACTUALIZAR_PLACA_PROFORMA): el evento `change` del widget
+   * dispara un AJAX real (updateCustomerVehicleProform) que persiste la
+   * placa en el servidor. Sin esperar su respuesta aquí, quien llama podía
+   * reintentar la conversión antes de que el servidor terminara de
+   * guardarla — condición de carrera que reproducía el bloqueo
+   * ("...seleccione una placa!") en ~30% de las corridas pese a que el
+   * widget ya mostraba la placa correctamente seleccionada del lado del
+   * cliente.
    */
   async seleccionarPlacaClienteEnCarrito(): Promise<string> {
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_ACTUALIZAR_PLACA_PROFORMA),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+
     await this.core._seleccionarPrimeraOpcionChosen(L.PROFORMA_TAB_PLACA_CHOSEN);
     const placa = await this.core._obtenerTextoChosenSeleccionado(L.PROFORMA_TAB_PLACA_CHOSEN);
     expect(placa, 'La placa seleccionada no quedó reflejada en el selector').not.toBe('');
+
+    const respuesta = await respuestaPromise;
+    expect(respuesta.ok(), `updateCustomerVehicleProform no respondió OK (status ${respuesta.status()})`).toBe(true);
+
     return placa;
   }
 

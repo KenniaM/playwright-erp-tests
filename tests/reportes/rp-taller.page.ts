@@ -412,24 +412,48 @@ export class ReporteComisionesEPPage {
  * - Otros filtros: Mecánico (`#mechanic`), Tipo de fecha (`#type_of_date`:
  *   Creación/Facturación), Garantía (`#warrantly`: No/Sí), Marca (`#brand`),
  *   Estado (`#filter_status_select`: Todos/Finalizadas/Pendientes/
- *   Canceladas/Facturación masiva) — todos selects nativos — y buscador de
- *   texto libre (`#search`).
+ *   Canceladas/Facturación masiva) — todos selects "chosen" (`data-placeholder`
+ *   confirmado en vivo) alojados dentro del panel de "Filtros avanzados"
+ *   (`#orp_advanced_filters_row`), oculto por defecto — hay que expandirlo
+ *   con `#btn_toggle_advanced_filters` antes de que un usuario real pueda
+ *   verlos/usarlos (el botón alterna `aria-expanded` y su propio texto entre
+ *   "Mostrar"/"Ocultar filtros avanzados"). El buscador de texto libre
+ *   (`#search`) sí está siempre visible, fuera de ese panel.
+ * - `#company_id` es un `<input type="text">` de solo contexto (la compañía
+ *   activa), no un filtro real — no se crea ninguna prueba para él.
  * - "Buscar" (`#btn_search`) dispara AJAX real `get_table_view` (tabla) y
  *   `get_order_dashboard_analytics` (gráficos de resumen).
  * - 3 tarjetas de resumen con gráfico (`#orp_orders_orders_overview_grid`):
  *   por estado (`#orders_overview_status_chart`), por mecánico
  *   (`#orders_overview_mechanic_chart`) y de tendencia — confirmadas en vivo.
- * - Exportación real: dropdown de Excel (`.orp-btn-excel`) con 4 opciones
- *   reales: "Excel de órdenes", "Excel de órdenes y vehículos", "Excel de
- *   abonos" y "Excel de facturación masiva". Sin exportación a PDF.
+ * - Cada fila tiene un botón real "Ver detalles" (icono de ojo,
+ *   `onclick="get_vehicle_detail(id)"`) que abre un modal en la misma
+ *   página (`#dialog_vehicle_detail`) con la información completa de la
+ *   orden — confirmado en vivo, no navega a una pestaña nueva.
+ * - Exportación: dropdown de Excel (`.orp-btn-excel`) con 4 opciones reales:
+ *   "Excel de órdenes", "Excel de órdenes y vehículos" y "Excel de abonos"
+ *   descargan un archivo real. BUG confirmado en vivo con la petición de
+ *   red: "Excel de facturación masiva" (`download_report(4)` →
+ *   `download_order_report?...type_id=4`) responde 200 pero con
+ *   `content-type: application/json` (los datos crudos de las órdenes en
+ *   JSON) en vez de generar el archivo `.xlsx` — el navegador nunca dispara
+ *   una descarga real. Sin exportación a PDF.
  * - Tabla real (`.orp-orders-table`), columnas: Orden, Resumen, Cliente /
  *   Vehículo, S / P, Fechas, Financiero, Total, (acciones). Sin columnas
  *   ordenables, sin fila de totales/tfoot y sin paginación (confirmado en
  *   vivo) — no se crean pruebas ficticias para ninguna de las tres.
- * - BUG confirmado en vivo: al escribir un rango de fechas y hacer clic en
- *   "Buscar", el modo "Rango de fecha" del select `#resume` sí se mantiene,
- *   pero los propios campos `#start_date`/`#end_date` quedan vacíos (no
- *   revierten a un valor por defecto, se limpian por completo).
+ * - BUG confirmado en vivo, con evidencia de red y del propio código fuente
+ *   (`order_report.js`/`datePicker.js`): al seleccionar "Rango de fecha" y
+ *   llenar `#start_date`/`#end_date`, el modo del select `#resume` sí se
+ *   mantiene, pero los propios campos quedan vacíos tras "Buscar" — la
+ *   petición real enviada al servidor (`get_table_view`) confirmada con
+ *   `start_date=&end_date=` vacíos pese a que el campo mostraba la fecha
+ *   correctamente un instante antes. Causa raíz identificada: estos campos
+ *   nativos `<input type="date">` tienen ADEMÁS un widget bootstrap-datepicker
+ *   enganchado (el mismo de Compras), cuyo propio `Datepicker.hide()` fuerza
+ *   el valor del input a su estado interno (vacío, porque nunca se
+ *   interactúa con el widget en sí) al cerrarse — lo cual ocurre con
+ *   cualquier clic fuera de él, incluido el propio "Buscar".
  */
 export class ReporteOrdenesPage {
   constructor(private readonly page: Page) {}
@@ -449,14 +473,22 @@ export class ReporteOrdenesPage {
   private readonly tabla = () => this.page.locator('table.orp-orders-table');
   private readonly graficoEstado = () => this.page.locator('#orders_overview_status_chart');
   private readonly graficoMecanico = () => this.page.locator('#orders_overview_mechanic_chart');
+  private readonly panelFiltrosAvanzados = () => this.page.locator('#orp_advanced_filters_row');
+  private readonly modalDetalleOrden = () => this.page.locator('#dialog_vehicle_detail');
 
   async abrirReporteOrdenes() {
     await this.page.goto(URL_ORDENES, { waitUntil: 'domcontentloaded', timeout: TIMEOUTS.NAVIGATE });
     await cerrarBannerNotificaciones(this.page);
   }
 
+  /** Expande el panel de filtros avanzados (Mecánico/Tipo de fecha/Garantía/Marca/Estado) — sin esto, esos selects no son visibles/usables para un usuario real. */
   async mostrarFiltrosAvanzados() {
     await this.btnFiltrosAvanzados().click();
+    await expect(this.panelFiltrosAvanzados()).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  async filtrosAvanzadosExpandidos(): Promise<boolean> {
+    return (await this.btnFiltrosAvanzados().getAttribute('aria-expanded')) === 'true';
   }
 
   /** Selecciona un rango rápido (Hoy/Ayer/Últimos N días/Rango de fecha). Al elegir "Rango de fecha" se revelan los campos de fecha. */
@@ -528,13 +560,23 @@ export class ReporteOrdenesPage {
   }
 
   /** Abre el dropdown de exportación y descarga una de las 4 variantes reales de Excel. */
-  async descargarExcel(
-    variante: 'Excel de órdenes' | 'Excel de órdenes y vehículos' | 'Excel de abonos' | 'Excel de facturación masiva'
-  ): Promise<Download> {
+  async abrirDropdownExportar() {
     await this.btnExportarExcel().click();
+  }
+
+  async clicOpcionExportar(
+    variante: 'Excel de órdenes' | 'Excel de órdenes y vehículos' | 'Excel de abonos' | 'Excel de facturación masiva'
+  ) {
     const opcion = this.page.locator('.dropdown-menu:visible', { hasText: variante }).locator('a', { hasText: variante }).first();
-    const descargaPromise = this.page.waitForEvent('download', { timeout: TIMEOUTS.CARGA });
     await opcion.click();
+  }
+
+  async descargarExcel(
+    variante: 'Excel de órdenes' | 'Excel de órdenes y vehículos' | 'Excel de abonos'
+  ): Promise<Download> {
+    await this.abrirDropdownExportar();
+    const descargaPromise = this.page.waitForEvent('download', { timeout: TIMEOUTS.CARGA });
+    await this.clicOpcionExportar(variante);
     return descargaPromise;
   }
 
@@ -552,6 +594,17 @@ export class ReporteOrdenesPage {
 
   async graficosVisibles(): Promise<boolean> {
     return (await this.graficoEstado().isVisible()) && (await this.graficoMecanico().isVisible());
+  }
+
+  /** Clic en el botón "Ver detalles" (icono de ojo) de una fila — abre el modal real con la información completa de la orden. */
+  async abrirDetalleOrden(indice = 0) {
+    await this.tabla().locator('tbody tr').nth(indice).locator('button[onclick*="get_vehicle_detail"]').click();
+    await expect(this.modalDetalleOrden()).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  async cerrarDetalleOrden() {
+    await this.page.keyboard.press('Escape');
+    await expect(this.modalDetalleOrden()).not.toBeVisible();
   }
 
   async validarSinErrores() {
@@ -724,9 +777,9 @@ export class ReporteVehiculosPage {
  * - Sin buscador de texto libre (confirmado en vivo, no hay ningún `<input>`
  *   de búsqueda en esta pantalla).
  * - "Buscar" (`#btn_search_receip`) dispara AJAX real `getRepairOrderVehicle`.
- * - Con el rango por defecto no hay resultados en este ambiente de QA; con
- *   un rango amplio (2020-2026) sí aparecen filas reales (77 confirmadas en
- *   vivo).
+ * - Un rango amplio (2020-2026) devuelve filas reales (77 confirmadas en
+ *   vivo) — la cantidad con el rango por defecto varía según los datos del
+ *   momento en este ambiente de QA, no se asume un conteo fijo para él.
  * - BUG confirmado en vivo: "Descargar" (`#btn_download_report`,
  *   `onclick="download_report()"`) no está deshabilitado y el clic no
  *   produce ningún error, pero tampoco dispara ninguna descarga real, ni

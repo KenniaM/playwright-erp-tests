@@ -1472,7 +1472,12 @@ export class PosCore {
    * hay que recurrir a `estiloVistaTexto()`.
    */
   async vistaEstaActiva(boton: Locator): Promise<boolean> {
-    const clase = await boton.getAttribute('class');
+    // Timeout explícito (antes ausente): mismo patrón/causa raíz ya
+    // confirmado en vivo repetidas veces en esta suite — getAttribute() sin
+    // `timeout` usa el default de acción de Playwright (0 = sin límite en
+    // este proyecto), así que si el botón de vista tarda en adjuntarse este
+    // await queda colgado hasta el timeout del test COMPLETO.
+    const clase = await boton.getAttribute('class', { timeout: TIMEOUTS.PAYMENT_MODAL }).catch(() => null);
     return clase?.includes(L.VISTA_ACTIVE_CLASS) ?? false;
   }
 
@@ -1494,7 +1499,14 @@ export class PosCore {
 
   /** Indica si el tab dado (Productos/Servicios/End. Pintura) está activo (clase "btn_sale_selected"). */
   async tabEstaActivo(tab: Locator): Promise<boolean> {
-    const clase = await tab.getAttribute('class');
+    // Timeout explícito (antes ausente): mismo patrón/causa raíz ya
+    // confirmado en vivo repetidas veces en esta suite. Usado dentro de
+    // expect.poll() en varios escenarios (agregarCincoTiposDeItem(),
+    // agregarServicioDeEndPintura()) — si esta única invocación del
+    // predicado queda colgada esperando el elemento, expect.poll() nunca
+    // llega a evaluar un segundo intento ni a que su propio timeout la
+    // rescate, porque la promesa de la primera invocación nunca se resuelve.
+    const clase = await tab.getAttribute('class', { timeout: TIMEOUTS.PAYMENT_MODAL }).catch(() => null);
     return clase?.includes(L.TAB_ACTIVE_CLASS) ?? false;
   }
 
@@ -1534,7 +1546,16 @@ export class PosCore {
     const MAX_INTENTOS = 10;
     for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
       await this.cerrarModalNotificacionesSiAparece();
-      await toggle.click({ force: true });
+      // Timeout explícito (antes ausente): mismo patrón/causa raíz ya
+      // confirmado en vivo en otros puntos de la suite — click({force:true})
+      // sigue esperando (sin límite en este proyecto) a que el locator
+      // resuelva al menos un elemento antes de intentar el click, incluso
+      // con force. Si el FAB no está disponible en este estado concreto de
+      // la UI, un solo intento sin timeout consume el presupuesto COMPLETO
+      // del test (confirmado en vivo: el bucle nunca llegó a un segundo
+      // intento, agotando los 5 minutos en esta única línea) — anulando por
+      // completo el diseño de reintentos acotados de este bucle.
+      await toggle.click({ force: true, timeout: 3_000 }).catch(() => {});
 
       const expandido = await item.waitFor({ state: 'visible', timeout: 1_200 }).then(() => true).catch(() => false);
       if (expandido) {
@@ -2432,6 +2453,32 @@ export class PosCore {
     console.log(`[ingresarNombreCliente] Nombre aplicado: "${nombre}"`);
   }
 
+  /**
+   * Cancela el modo "Nombre del cliente" (CLIENTE_CONTENEDOR_NOMBRE_RAPIDO,
+   * #temporal_customer_name) y regresa el panel "Buscar Cliente" a su modo
+   * de búsqueda real (cancelQuickCustomerName(), ícono "×" — no confundir
+   * con CLIENTE_BTN_QUITAR/validateRemoveProformClient, que quita un
+   * cliente REAL ya asociado). Confirmado en vivo (Convertir a Orden de
+   * Reparación): una Proforma de Taller guardada solo con nombre libre
+   * (llenarNombreClienteProforma()) deja, al cargarse en el carrito
+   * (cargarProformaEnCarritoDesdeTab()), el panel en este modo — NO en el
+   * modo de búsqueda por defecto que seleccionarClienteExistente() asume.
+   * Llamar a seleccionarClienteExistente() directamente ahí deja
+   * CLIENTE_INPUT_BUSQUEDA oculto indefinidamente (nunca se vuelve
+   * visible), agotando su timeout sin ningún error explícito. No-op si el
+   * panel ya está en modo de búsqueda.
+   */
+  async cancelarNombreClienteRapidoSiActivo() {
+    const enModoNombreRapido = await this.page.locator(L.CLIENTE_CONTENEDOR_NOMBRE_RAPIDO).isVisible().catch(() => false);
+    if (!enModoNombreRapido) return;
+
+    await this.page.locator(L.CLIENTE_QUICK_NAME_BTN_CANCELAR).click();
+    await expect(
+      this.page.locator(L.CLIENTE_INPUT_BUSQUEDA),
+      'El panel "Buscar Cliente" no volvió al modo de búsqueda tras cancelar el nombre rápido'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
 
   // ─── Métodos privados ────────────────────────────────────────────────────────
 
@@ -3068,9 +3115,39 @@ export class PosCore {
   async obtenerPrimerProductoNoPresenteEnCarrito(tipoItem: 1 | 2 = 1): Promise<MetadatoProducto> {
     const textoCarrito = await this.obtenerTextoCarrito();
     return this.localizarPrimerProducto(
-      (m) => m.tipoItem === tipoItem && !m.esFraccionado && !textoCarrito.includes(m.nombre),
+      (m) => m.tipoItem === tipoItem && !m.esFraccionado && !this.nombreApareceEnCarrito(m.nombre, textoCarrito),
       tipoItem === 1 ? 'producto normal que todavía no esté en el carrito' : 'servicio que todavía no esté en el carrito'
     );
+  }
+
+
+  /**
+   * Indica si un producto (por su `nombre` del catálogo, ver
+   * obtenerMetadatosProductosVisibles()) ya aparece en el texto real del
+   * carrito. Corrección de automatización (causa raíz confirmada en vivo,
+   * instrumentación dedicada): `nombre` es el `textContent` completo de la
+   * tarjeta del grid, que puede incluir un código/SKU como prefijo (p. ej.
+   * "RT543-000002 A11 - PROT. BLING GLITTER ROSA"), pero el carrito
+   * (#table_buy_list) NO muestra ese código, solo el nombre visible ("A11 -
+   * PROT. BLING GLITTER ROSA"). Una comparación por substring exacto contra
+   * el nombre completo del catálogo nunca coincidía aunque el producto SÍ
+   * estuviera ya en el carrito, haciendo que
+   * obtenerPrimerProductoNoPresenteEnCarrito() (y sus variantes) "eligieran"
+   * un producto que en realidad ya estaba presente: add_to_table() solo le
+   * suma cantidad a la línea existente en vez de crear una nueva, y el
+   * expect.poll() que espera una clave nueva nunca se cumplía (reproducido
+   * en vivo con Proformas de Taller que ya traen líneas propias al
+   * cargarse). Se prueba también contra el nombre sin un posible código
+   * inicial (primer token separado por espacio) para cubrir ese formato.
+   * Público (antes privado): reutilizado también por escenarios que
+   * necesitan su propia búsqueda "no presente en el carrito" con exclusión
+   * adicional (p. ej. reintentar con el siguiente candidato si el primero
+   * no tiene código real) — evita duplicar esta misma comparación.
+   */
+  nombreApareceEnCarrito(nombre: string, textoCarrito: string): boolean {
+    if (textoCarrito.includes(nombre)) return true;
+    const sinCodigo = nombre.replace(/^\S+\s+/, '');
+    return sinCodigo !== nombre && textoCarrito.includes(sinCodigo);
   }
 
 
@@ -3092,7 +3169,7 @@ export class PosCore {
   async obtenerPrimerProductoFraccionadoNoPresenteEnCarrito(): Promise<MetadatoProducto> {
     const textoCarrito = await this.obtenerTextoCarrito();
     return this.localizarPrimerProducto(
-      (m) => m.esFraccionado && !textoCarrito.includes(m.nombre),
+      (m) => m.esFraccionado && !this.nombreApareceEnCarrito(m.nombre, textoCarrito),
       'producto Fraccionado que todavía no esté en el carrito'
     );
   }
@@ -3115,7 +3192,7 @@ export class PosCore {
   async obtenerPrimerProductoConIvaNoPresenteEnCarrito(): Promise<MetadatoProducto> {
     const textoCarrito = await this.obtenerTextoCarrito();
     return this.localizarPrimerProducto(
-      (m) => m.tipoItem === 1 && m.aplicaIva && !textoCarrito.includes(m.nombre),
+      (m) => m.tipoItem === 1 && m.aplicaIva && !this.nombreApareceEnCarrito(m.nombre, textoCarrito),
       'producto con IVA que todavía no esté en el carrito'
     );
   }

@@ -500,6 +500,15 @@ export const L = {
   CLIENTE_CONTENEDOR_NOMBRE_RAPIDO: '.content-edit-quick-customer-name',
   CLIENTE_INPUT_NOMBRE_RAPIDO: '#temporal_customer_name',
 
+  // Ícono "×" para cancelar el modo "Nombre del cliente" y regresar al modo
+  // de búsqueda (onclick="cancelQuickCustomerName()") — confirmado en vivo
+  // (Convertir a Orden de Reparación) que es el único camino real para
+  // volver a mostrar CLIENTE_INPUT_BUSQUEDA una vez que el panel quedó en
+  // modo "Nombre del cliente" (p. ej. al cargar al carrito una Proforma que
+  // se guardó solo con nombre libre) — ver el comentario de
+  // cancelarNombreClienteRapidoSiActivo().
+  CLIENTE_QUICK_NAME_BTN_CANCELAR: '.content-edit-quick-customer-name .fa-close',
+
   // ─── "Orden de Caja" (Enviar a caja) ───────────────────────────────────────
   // El botón NO está junto a "Facturar" como botón independiente — vive
   // dentro del menú desplegable que abre #demo-menu-top-right (botón
@@ -1121,6 +1130,17 @@ export const L = {
   PROFORMA_TAB_SUBTAB_ACTIVA_CLASE: 'btn_sale_selected',
   AJAX_BUSCAR_PROFORMAS_TAB: 'getPosProformSearch',
 
+  // Buscador real de la pestaña "Proforma / Cotizaciones" — confirmado en
+  // vivo (screenshot + inspección del DOM, NO una suposición): mismo input
+  // compartido `#product_search` que ya reutilizan "POS Facturación"
+  // (productos) y "Ruteo" (RUTEO_BUSCADOR, ver su comentario), posicionado
+  // arriba de los 3 sub-filtros (Normal/Consignación/Taller). Igual que en
+  // Ruteo, `fill()` por sí solo NO disparó ninguna petición de red
+  // (confirmado interceptando la red): hace falta Enter — ver el comentario
+  // de buscarProformaEnTab() para qué criterios de búsqueda quedaron
+  // confirmados en vivo para Proformas específicamente.
+  PROFORMA_TAB_BUSCADOR: '#product_search',
+
   PROFORMA_TAB_TARJETA:        '.pos_order_list_item_content',
   PROFORMA_TAB_DROPBTN:        '.dropbtn',
   PROFORMA_TAB_DROPDOWN_CONTENT: '.proform-dropdown-content',
@@ -1172,6 +1192,21 @@ export const L = {
   // quedaba "seleccionada" en apariencia pero el toast de bloqueo seguía
   // apareciendo igual.
   PROFORMA_TAB_PLACA_CHOSEN: '#customer_selected_plate_number_chosen',
+
+  // AJAX real disparado por el evento `change` del widget Chosen de arriba
+  // (updateCustomerVehicleProform) — persiste la placa en el servidor.
+  // Confirmado en vivo interceptando la red completa (3 corridas
+  // consecutivas, mismas peticiones en cada una): esta llamada SIEMPRE se
+  // dispara, nunca de forma intermitente — lo intermitente es si su
+  // respuesta ya llegó cuando el test reintenta la conversión justo
+  // después. Sin esperarla explícitamente, seleccionarPlacaClienteEnCarrito()
+  // solo confirmaba el estado del widget en el cliente (Chosen ya
+  // actualizado visualmente), no que el servidor ya hubiera terminado de
+  // persistir la placa — condición de carrera real que reproducía el
+  // bloqueo ("Por favor agregue un cliente a la proforma y seleccione una
+  // placa!") incluso con cliente y placa ya seleccionados, en ~30% de las
+  // corridas contra el ambiente compartido de QA.
+  AJAX_ACTUALIZAR_PLACA_PROFORMA: 'updateCustomerVehicleProform',
 
   // Modal de correo abierto DESDE esta pestaña (`send_invoice_email(id)`) —
   // confirmado en vivo que, pese a compartir el mismo propósito y la misma

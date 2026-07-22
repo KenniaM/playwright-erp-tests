@@ -519,6 +519,9 @@ export class PosPage {
   async ingresarNombreCliente(...args: Parameters<PosCore['ingresarNombreCliente']>) {
     return this.core.ingresarNombreCliente(...args);
   }
+  async cancelarNombreClienteRapidoSiActivo(...args: Parameters<PosCore['cancelarNombreClienteRapidoSiActivo']>) {
+    return this.core.cancelarNombreClienteRapidoSiActivo(...args);
+  }
   async _clickPrimeraOpcionDisponible(...args: Parameters<PosCore['_clickPrimeraOpcionDisponible']>) {
     return this.core._clickPrimeraOpcionDisponible(...args);
   }
@@ -864,6 +867,12 @@ export class PosPage {
   async abrirListadoProformas(...args: Parameters<PosProforma['abrirListadoProformas']>) {
     return this.proforma.abrirListadoProformas(...args);
   }
+  async buscarEnListadoProformas(...args: Parameters<PosProforma['buscarEnListadoProformas']>) {
+    return this.proforma.buscarEnListadoProformas(...args);
+  }
+  async obtenerFilasListadoProformas(...args: Parameters<PosProforma['obtenerFilasListadoProformas']>) {
+    return this.proforma.obtenerFilasListadoProformas(...args);
+  }
   async seleccionarPrimeraProformaDelListado(...args: Parameters<PosProforma['seleccionarPrimeraProformaDelListado']>) {
     return this.proforma.seleccionarPrimeraProformaDelListado(...args);
   }
@@ -897,6 +906,9 @@ export class PosPage {
   async abrirMenuTarjetaProformaEnTab(...args: Parameters<PosProforma['abrirMenuTarjetaProformaEnTab']>) {
     return this.proforma.abrirMenuTarjetaProformaEnTab(...args);
   }
+  localizarTarjetaProformaPorId(...args: Parameters<PosProforma['localizarTarjetaProformaPorId']>) {
+    return this.proforma.localizarTarjetaProformaPorId(...args);
+  }
   async cambiarSubTabProforma(...args: Parameters<PosProforma['cambiarSubTabProforma']>) {
     return this.proforma.cambiarSubTabProforma(...args);
   }
@@ -911,6 +923,12 @@ export class PosPage {
   }
   async obtenerPrimeraProformaEnTab(...args: Parameters<PosProforma['obtenerPrimeraProformaEnTab']>) {
     return this.proforma.obtenerPrimeraProformaEnTab(...args);
+  }
+  async buscarProformaEnTab(...args: Parameters<PosProforma['buscarProformaEnTab']>) {
+    return this.proforma.buscarProformaEnTab(...args);
+  }
+  async obtenerTarjetasProformaEnTab(...args: Parameters<PosProforma['obtenerTarjetasProformaEnTab']>) {
+    return this.proforma.obtenerTarjetasProformaEnTab(...args);
   }
   async descargarProformaDesdeModalWhatsApp(...args: Parameters<PosProforma['descargarProformaDesdeModalWhatsApp']>) {
     return this.proforma.descargarProformaDesdeModalWhatsApp(...args);
@@ -978,6 +996,9 @@ export class PosPage {
   }
   async obtenerClienteSeleccionado(...args: Parameters<PosCore['obtenerClienteSeleccionado']>) {
     return this.core.obtenerClienteSeleccionado(...args);
+  }
+  nombreApareceEnCarrito(...args: Parameters<PosCore['nombreApareceEnCarrito']>) {
+    return this.core.nombreApareceEnCarrito(...args);
   }
   async quitarClienteSeleccionado(...args: Parameters<PosCore['quitarClienteSeleccionado']>) {
     return this.core.quitarClienteSeleccionado(...args);

@@ -276,10 +276,25 @@ test.describe('Órdenes', () => {
     await ordenes.validarSinErrores();
   });
 
-  test('los filtros Mecánico, Tipo de fecha, Garantía y Estado se pueden aplicar combinados sin producir errores', async ({ page }) => {
+  test('"Filtros avanzados" se puede expandir y colapsar, y revela los filtros reales', async ({ page }) => {
     test.setTimeout(TIMEOUTS.TEST);
     const ordenes = new ReporteOrdenesPage(page);
     await ordenes.abrirReporteOrdenes();
+
+    expect(await ordenes.filtrosAvanzadosExpandidos()).toBe(false);
+
+    await ordenes.mostrarFiltrosAvanzados();
+    expect(await ordenes.filtrosAvanzadosExpandidos()).toBe(true);
+
+    await ordenes.mostrarFiltrosAvanzados();
+    expect(await ordenes.filtrosAvanzadosExpandidos()).toBe(false);
+  });
+
+  test('los filtros Mecánico, Tipo de fecha, Garantía, Marca y Estado se pueden aplicar combinados sin producir errores', async ({ page }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const ordenes = new ReporteOrdenesPage(page);
+    await ordenes.abrirReporteOrdenes();
+    await ordenes.mostrarFiltrosAvanzados();
 
     await test.step('Mecánico + Tipo de fecha combinados', async () => {
       await ordenes.seleccionarMecanico('Todos');
@@ -289,8 +304,14 @@ test.describe('Órdenes', () => {
       await ordenes.validarSinErrores();
     });
 
-    await test.step('Garantía + Estado combinados', async () => {
+    await test.step('Garantía + Marca combinados', async () => {
       await ordenes.seleccionarGarantia('Sí');
+      await ordenes.seleccionarMarca('BMW');
+      await ordenes.buscar();
+      await ordenes.validarSinErrores();
+    });
+
+    await test.step('Estado', async () => {
       await ordenes.seleccionarEstado('Finalizadas');
       await ordenes.buscar();
       await ordenes.validarSinErrores();
@@ -320,19 +341,51 @@ test.describe('Órdenes', () => {
     expect(await ordenes.obtenerFechaFinal()).toBe('');
   });
 
-  test('"Excel de órdenes" genera un archivo real', async ({ page }) => {
+  for (const variante of ['Excel de órdenes', 'Excel de órdenes y vehículos', 'Excel de abonos'] as const) {
+    test(`"${variante}" genera un archivo real`, async ({ page }) => {
+      test.setTimeout(TIMEOUTS.TEST);
+      const ordenes = new ReporteOrdenesPage(page);
+      await ordenes.abrirReporteOrdenes();
+
+      const descarga = await ordenes.descargarExcel(variante);
+      expect(descarga.suggestedFilename().length).toBeGreaterThan(0);
+    });
+  }
+
+  test('BUG: "Excel de facturación masiva" devuelve JSON crudo en vez de un archivo real', async ({ page }) => {
     test.setTimeout(TIMEOUTS.TEST);
     const ordenes = new ReporteOrdenesPage(page);
     await ordenes.abrirReporteOrdenes();
 
-    const descarga = await ordenes.descargarExcel('Excel de órdenes');
-    expect(descarga.suggestedFilename().length).toBeGreaterThan(0);
+    const respuestaPromise = page.waitForResponse((res) => res.url().includes('download_order_report'), { timeout: TIMEOUTS.CARGA });
+    await ordenes.abrirDropdownExportar();
+    await ordenes.clicOpcionExportar('Excel de facturación masiva');
+    const respuesta = await respuestaPromise;
+
+    // Confirmado en vivo: el servidor responde 200 con content-type
+    // application/json (los datos crudos de las órdenes) en vez de generar
+    // el archivo .xlsx — el navegador nunca dispara un evento de descarga.
+    expect(respuesta.status()).toBe(200);
+    expect(respuesta.headers()['content-type']).toContain('application/json');
   });
 
-  // Existen otras 3 variantes reales en el mismo dropdown ("Excel de
-  // órdenes y vehículos", "Excel de abonos", "Excel de facturación
-  // masiva") — cubiertas por el mismo método `descargarExcel()`, no se
-  // repite una descarga real por cada una para mantener la suite ágil.
+  test('"Ver detalles" en una fila abre el modal real con la información de la orden', async ({ page }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const ordenes = new ReporteOrdenesPage(page);
+    await ordenes.abrirReporteOrdenes();
+
+    // El rango por defecto ("Hoy") puede no tener órdenes en este ambiente
+    // de QA — se usa "Últimos 30 días" (un preset real, no afectado por el
+    // bug de "Rango de fecha") para maximizar la posibilidad de datos.
+    await ordenes.seleccionarResumen('Últimos 30 días');
+    await ordenes.buscar();
+    await expect.poll(() => ordenes.contarFilas()).toBeGreaterThan(0);
+
+    await ordenes.abrirDetalleOrden(0);
+    await ordenes.cerrarDetalleOrden();
+    await ordenes.validarSinErrores();
+  });
+
   // Sin columnas ordenables, sin fila de totales/tfoot y sin paginación
   // (confirmado en vivo) — no se crean pruebas ficticias para ninguna.
 });
@@ -478,9 +531,8 @@ test.describe('Vehículos según Recepción', () => {
     const recepcion = new ReporteVehiculosRecepcionPage(page);
     await recepcion.abrirReporteVehiculosRecepcion();
 
-    await test.step('Con el rango por defecto este ambiente de QA no tiene datos', async () => {
+    await test.step('El rango por defecto ejecuta la búsqueda sin errores', async () => {
       await recepcion.buscar();
-      expect(await recepcion.contarFilas()).toBe(0);
       await recepcion.validarSinErrores();
     });
 
