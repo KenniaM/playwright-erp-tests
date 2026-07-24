@@ -57,6 +57,27 @@ export class PosNavigation {
    * click, y si ningún intento funciona, el error final incluye un
    * diagnóstico concreto (no un simple "no se abrió") para no tener que
    * repetir esta investigación la próxima vez que ocurra.
+   *
+   * Click NATIVO vía `evaluate(el => el.click())`, no `.click({force:true})`
+   * de Playwright — causa raíz confirmada en vivo (pos-facturar.spec.ts,
+   * Escenario 1): tras varias recargas del POS en la MISMA pestaña (esta
+   * suite es la que más lo hace de toda la suite — irAlPos() en el
+   * beforeEach de cada uno de sus 16 escenarios, sobre la misma sharedPage
+   * de worker), `document.elementFromPoint()` en el centro real de
+   * `#demo-menu-lower-left` resolvía a `li.dropdown.user.user-menu` (el menú
+   * de usuario del header), no al botón — un click por coordenadas, incluso
+   * con `force:true`, aterriza ahí y nunca abre el menú, sin ningún error
+   * observable. Mismo mecanismo de causa raíz, mismo diagnóstico
+   * (`elementFromPoint`) y mismo remedio ya confirmados en este repo para
+   * `_irAlPosResolviendoCompania()` (link "Crear factura") y
+   * `abrirAgregarProductoExterno()` (ítem del propio menú de tres puntos,
+   * pos-productos-externos.page.ts) — el evento nativo se dispara directo
+   * sobre el nodo ya localizado, sin depender de qué elemento esté
+   * visualmente encima en esas coordenadas. También evita, de paso, la
+   * inestabilidad de Playwright frente a la animación CSS continua
+   * ("badge-pulse", para destacar ítems "Nuevo" del menú) que motivó el
+   * `force:true` original: un click nativo no pasa por los chequeos de
+   * accionabilidad que esa animación hacía fallar.
    */
   async abrirMenuTresPuntos() {
     // Condición real de que MDL ya registró el listener de apertura —no una
@@ -74,11 +95,7 @@ export class PosNavigation {
       await this.core.cerrarModalNotificacionesSiAparece();
       await this.core.cerrarAvisoConsecutivoSiAparece();
 
-      // force:true porque el botón tiene una animación CSS continua
-      // ("badge-pulse", para destacar ítems "Nuevo" del menú) que lo mantiene
-      // permanentemente "inestable" para las validaciones de Playwright —
-      // confirmado que es una animación real de la app, no un bug transitorio.
-      await this.page.locator(L.MENU_TRES_PUNTOS).click({ force: true });
+      await this.page.locator(L.MENU_TRES_PUNTOS).evaluate((el: HTMLElement) => el.click());
 
       // Nunca se asume que abrió: se valida contra el DOM real.
       const abierto = await this.page.locator(L.HISTORIAL_FACTURAS)
@@ -340,9 +357,12 @@ export class PosNavigation {
     // la fuente ya usada por el resto de la suite para este mismo problema.
     const clavesAntes = await this.core.obtenerClavesFilasCarrito();
 
+    // TIMEOUTS.PRODUCTS_LOAD (no PAYMENT_MODAL): confirmado en vivo que, bajo
+    // la lentitud de backend ya documentada en esta suite (pos-productos-externos),
+    // AJAX_BUSCADOR_INTERNO puede tardar más de 15s en responder.
     const respuestaPromise = this.page.waitForResponse(
       (res) => res.url().includes(L.AJAX_BUSCADOR_INTERNO),
-      { timeout: TIMEOUTS.PAYMENT_MODAL }
+      { timeout: TIMEOUTS.PRODUCTS_LOAD }
     );
     await this.page.locator(L.BUSCADOR_INTERNO_VISTA_EXPANDIDA).fill(codigo);
     await this.page.locator(L.BUSCADOR_INTERNO_VISTA_EXPANDIDA).press('Enter');

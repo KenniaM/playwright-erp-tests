@@ -1,5 +1,9 @@
 import { test, expect, Page } from '@playwright/test';
-import { PosPage, TIMEOUTS, CABYS_BUSQUEDA, CABYS_BUSQUEDA_SIN_IVA, PRECIO_PRODUCTO_RAPIDO, LineaCarrito } from './pos.page';
+import { PosPage, TIMEOUTS, CABYS_BUSQUEDA, CABYS_BUSQUEDA_SIN_IVA, PRECIO_PRODUCTO_RAPIDO, LineaCarrito, espiarErroresJS } from './pos.page';
+import {
+  PosCrearCliente, type DatosClienteSencillo, type DatosClientePrincipal,
+  type DatosClienteOpcionesAvanzadas, type DatosClienteUbicacion, type DatosVehiculoCompleto,
+} from './pos-crear-cliente.page';
 
 // Precios base para las pruebas de "Crear Producto" — arbitrarios pero
 // consistentes entre escenarios, igual que PRECIO_PRODUCTO_RAPIDO para
@@ -717,5 +721,405 @@ test('crear un Producto Fraccionado sin IVA desde el POS y validar que se agrega
 
   await test.step('Validar que el producto quedó realmente sin IVA, el nombre coincide y no hay errores', async () => {
     await validarProductoEnCarrito(pos, page, claveProducto, nombreProducto, false, true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Crear Cliente — investigado en vivo (ver el informe final de esta suite):
+// el modal real es #dialog_add_customer, abierto desde el dropdown "Nuevo
+// Cliente" del panel "Buscar Cliente" DENTRO del POS (nunca desde el módulo
+// completo /cust/customer del Dashboard — ese camino tiene un bug real de
+// navegación, documentado más abajo, ajeno a esta automatización).
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Fixture propia de scope 'worker' — mismo mecanismo ya adoptado en
+// pos-productos-externos.spec.ts (ver su propio comentario extenso): una
+// sola carga de Dashboard→POS por worker, sin test.describe.configure
+// ({mode:'serial'}) para no entrar en conflicto con fullyParallel. `base` es
+// el mismo `test` ya importado arriba (sin una segunda importación del
+// mismo módulo, que confundía la inferencia de tipos de .extend()) — solo
+// se le da otro nombre para no pisar el `test` simple que ya usan los
+// escenarios de "Crear Producto" de este mismo archivo.
+const base = test;
+
+type CrearClienteFixtures = {
+  sharedPage: Page;
+  pos: PosPage;
+  cc: PosCrearCliente;
+};
+
+const testCliente = base.extend<{}, CrearClienteFixtures>({
+  sharedPage: [async ({ browser }, use) => {
+    const page = await browser.newPage();
+    await use(page);
+    await page.close();
+  }, { scope: 'worker', timeout: TIMEOUTS.TEST }],
+
+  pos: [async ({ sharedPage }, use) => {
+    const pos = new PosPage(sharedPage);
+    await pos.cargarPosDesdeDashboard();
+    await pos.cerrarOverlaysConocidos();
+    await use(pos);
+  }, { scope: 'worker', timeout: TIMEOUTS.TEST }],
+
+  cc: [async ({ pos, sharedPage }, use) => {
+    await use(new PosCrearCliente(pos, sharedPage));
+  }, { scope: 'worker' }],
+});
+
+/** Ningún modal ni SweetAlert inesperado siga abierto — mismo criterio que pos-productos-externos.spec.ts. */
+async function validarSinModalesInesperadosCliente(page: Page) {
+  await expect(page.locator('.modal.in')).toHaveCount(0);
+  await expect(page.locator('.sweet-alert.visible')).toHaveCount(0);
+}
+
+/** Ninguna línea de error visible — mismo criterio que el resto de la suite. */
+async function validarSinMensajesDeErrorCliente(page: Page) {
+  await expect(page.locator('.noty_bar', { hasText: /error/i })).toHaveCount(0);
+}
+
+/**
+ * Cierra el modal "Agregar Cliente" con su botón real de cierre (#closing_modal)
+ * — necesario tras reabrir un cliente ya guardado (reabrirPrimerResultado())
+ * para no dejarlo abierto al final del escenario (validarSinModalesInesperadosCliente
+ * fallaría de otro modo).
+ */
+async function cerrarModalClienteSiAbierto(cc: PosCrearCliente, page: Page) {
+  if (await cc.modal.isVisible().catch(() => false)) {
+    await cc.modal.locator('#closing_modal').click();
+    await expect(cc.modal, 'El modal "Agregar Cliente" no se cerró').toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+}
+
+/**
+ * Busca el cliente recién creado y reabre su edición para validar que los
+ * datos persistieron — recarga el POS primero (pos.irAlPos()+esperarEstadoInicial())
+ * porque confirmado en vivo que, justo tras guardar, el panel "Buscar
+ * Cliente" puede no reflejar de inmediato el estado por defecto necesario
+ * para una nueva búsqueda (mismo criterio de "recargar para confirmar
+ * persistencia del lado del servidor" ya usado en pos-productos-externos.spec.ts).
+ */
+async function buscarYReabrirCliente(pos: PosPage, cc: PosCrearCliente, nombre: string) {
+  await pos.irAlPos();
+  await pos.esperarEstadoInicial();
+  // Confirmado en vivo (causa raíz real del cuelgue de búsqueda ya
+  // documentado en pos-importar-factura.spec.ts junto a
+  // #search_pos_customer): la venta en curso persiste del lado del
+  // servidor, así que crear un cliente desde el POS lo deja auto-asignado
+  // al carrito — incluso después de recargar con irAlPos(). Con un cliente
+  // real ya seleccionado, el panel "Buscar Cliente" nunca vuelve a mostrar
+  // el buscador. Se reutiliza quitarClienteSeleccionado() (mismo criterio
+  // ya usado en esa otra suite) antes de buscar.
+  if (await pos.hayClienteRealSeleccionado()) {
+    await pos.quitarClienteSeleccionado();
+  }
+  const cantidad = await cc.buscarClientesSinSeleccionar(nombre);
+  expect(cantidad, `El cliente "${nombre}" no apareció en la búsqueda tras guardarlo`).toBeGreaterThanOrEqual(1);
+  await cc.reabrirPrimerResultado();
+}
+
+testCliente.describe('Crear Cliente', () => {
+  testCliente.beforeEach(async ({ pos }) => {
+    testCliente.setTimeout(TIMEOUTS.TEST);
+    await pos.irAlPos();
+    await pos.esperarEstadoInicial();
+    if (await pos.modalAbrirCajaVisible()) {
+      await pos.cerrarModalAbrirCaja();
+    }
+    await pos.cerrarOverlaysConocidos();
+  });
+
+  testCliente('1. Crear cliente sencillo (Tipo de identificación, Identificación, Nombre, Correo electrónico)', async ({ pos, cc, sharedPage }) => {
+    testCliente.setTimeout(TIMEOUTS.TEST);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    const sufijo = Date.now();
+    const datos: DatosClienteSencillo = {
+      nombre: `QA Cliente Sencillo ${sufijo}`,
+      identificacion: `${sufijo}`.slice(-9),
+      email: `qa.cliente.sencillo.${sufijo}@example.com`,
+    };
+
+    let idCreado = '';
+    await test.step('Abrir "Agregar Cliente" y llenar únicamente los 4 campos básicos', async () => {
+      await cc.abrirAgregarCliente();
+      await cc.llenarClienteSencillo(datos);
+    });
+
+    await test.step('Guardar y validar el mensaje de creación exitosa', async () => {
+      const resultado = await cc.guardarCliente();
+      expect(resultado.respuesta.ok(), `${resultado.respuesta.url()} no respondió OK (status ${resultado.respuesta.status()})`).toBe(true);
+      expect(Number(resultado.id), `La respuesta de guardado no fue un id numérico válido: "${resultado.id}"`).toBeGreaterThan(0);
+      idCreado = resultado.id;
+    });
+
+    await test.step('Buscar el cliente y validar que los datos persistieron al reabrirlo', async () => {
+      await buscarYReabrirCliente(pos, cc, datos.nombre);
+      await expect(cc.modal.locator('#c_name'), 'El nombre no persistió').toHaveValue(datos.nombre.trim());
+      await expect(cc.modal.locator('#c_identifier'), 'La identificación no persistió').toHaveValue(datos.identificacion);
+      await expect(cc.modal.locator('#c_email'), 'El correo electrónico no persistió').toHaveValue(datos.email);
+      // Tipo de Identificación: se validó ya al guardar (Chosen con opción
+      // real seleccionada); tras reabrir, su trigger no debe seguir en el
+      // placeholder "Seleccione...".
+      await expect(
+        cc.modal.locator('#c_identification_type_chosen .chosen-single span'),
+        'El Tipo de Identificación no persistió (sigue en el placeholder)'
+      ).not.toHaveText('Seleccione...');
+      await cerrarModalClienteSiAbierto(cc, sharedPage);
+    });
+
+    await validarSinMensajesDeErrorCliente(sharedPage);
+    await validarSinModalesInesperadosCliente(sharedPage);
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+    console.log(`[Escenario 1] Cliente creado con id=${idCreado}`);
+  });
+
+
+  testCliente('2. Crear cliente completo (Principal + Opciones avanzadas + Ubicación)', async ({ pos, cc, sharedPage }) => {
+    testCliente.setTimeout(TIMEOUTS.TEST);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    const sufijo = Date.now();
+    const datosPrincipal: DatosClientePrincipal = {
+      nombre: `QA Cliente Completo ${sufijo}`,
+      identificacion: `${sufijo}`.slice(-9),
+      email: `qa.cliente.completo.${sufijo}@example.com`,
+      codigo: `COD-QA-${sufijo}`,
+      batch: `BATCH-QA-${sufijo}`,
+      direccion: 'Dirección de prueba generada por automatización QA, 500m norte del parque central.',
+      whatsapp: '88887777',
+      telefono: '22223333',
+    };
+    const datosAvanzados: DatosClienteOpcionesAvanzadas = { limiteCredito: '5000' };
+    const datosUbicacion: DatosClienteUbicacion = {
+      lugar: 'Oficina QA',
+      direccionEscrita: 'Frente al parque central, edificio azul',
+      // Confirmado en vivo: "Agregar dirección" es 100% cliente (nunca
+      // dispara AJAX propio) y parsea lat/lng directamente de esta URL —
+      // sin un par de coordenadas reales aquí, el botón no agrega ninguna
+      // fila y no muestra ningún error visible, pese a que el label del
+      // campo dice "(opcional)".
+      url: 'https://maps.google.com/?q=9.9281,-84.0907',
+    };
+
+    await test.step('Abrir "Agregar Cliente" y llenar todos los campos de "Principal"', async () => {
+      await cc.abrirAgregarCliente();
+      await cc.llenarPrincipalCompleto(datosPrincipal);
+    });
+
+    await test.step('Llenar todos los campos de "Opciones avanzadas"', async () => {
+      await cc.irATabOpcionesAvanzadas();
+      await cc.llenarOpcionesAvanzadasCompleto(datosAvanzados);
+    });
+
+    await test.step('Agregar una dirección completa en "Ubicación"', async () => {
+      await cc.irATabUbicacion();
+      await cc.agregarDireccion(datosUbicacion);
+    });
+
+    let idCreado = '';
+    await test.step('Guardar y validar el mensaje de creación exitosa', async () => {
+      const resultado = await cc.guardarCliente();
+      expect(resultado.respuesta.ok()).toBe(true);
+      expect(Number(resultado.id)).toBeGreaterThan(0);
+      idCreado = resultado.id;
+    });
+
+    await test.step('Buscar el cliente y validar que TODOS los datos persistieron al reabrirlo', async () => {
+      await buscarYReabrirCliente(pos, cc, datosPrincipal.nombre);
+
+      await expect(cc.modal.locator('#c_name')).toHaveValue(datosPrincipal.nombre.trim());
+      await expect(cc.modal.locator('#c_identifier')).toHaveValue(datosPrincipal.identificacion);
+      await expect(cc.modal.locator('#c_email')).toHaveValue(datosPrincipal.email);
+      await expect(cc.modal.locator('#c_code')).toHaveValue(datosPrincipal.codigo);
+      await expect(cc.modal.locator('#c_batch')).toHaveValue(datosPrincipal.batch);
+      await expect(cc.modal.locator('#c_address')).toHaveValue(datosPrincipal.direccion);
+
+      await cc.irATabOpcionesAvanzadas();
+      await expect(cc.modal.locator('#c_limit')).toHaveValue(datosAvanzados.limiteCredito);
+      await expect(cc.modal.locator('#ck_is_exempt')).toBeChecked();
+
+      await cc.irATabUbicacion();
+      await expect(
+        cc.modal.locator('#table_client_address'),
+        'La dirección agregada no aparece en "Direcciones Guardadas" tras reabrir el cliente'
+      ).toContainText(datosUbicacion.lugar);
+
+      await cerrarModalClienteSiAbierto(cc, sharedPage);
+    });
+
+    await validarSinMensajesDeErrorCliente(sharedPage);
+    await validarSinModalesInesperadosCliente(sharedPage);
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+    console.log(`[Escenario 2] Cliente creado con id=${idCreado}`);
+  });
+
+
+  testCliente('3. Crear cliente completo con actividades económicas (si el campo existe para esta compañía)', async ({ pos, cc, sharedPage }) => {
+    testCliente.setTimeout(TIMEOUTS.TEST);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    const sufijo = Date.now();
+    const datosPrincipal: DatosClientePrincipal = {
+      nombre: `QA Cliente Actividades ${sufijo}`,
+      identificacion: `${sufijo}`.slice(-9),
+      email: `qa.cliente.actividades.${sufijo}@example.com`,
+      codigo: `COD-QA-${sufijo}`,
+      batch: `BATCH-QA-${sufijo}`,
+      direccion: 'Dirección de prueba generada por automatización QA.',
+      whatsapp: '88886666',
+      telefono: '22224444',
+    };
+
+    let actividadPrincipalExiste = false;
+    await test.step('Abrir "Agregar Cliente", llenar "Principal" completo, e intentar Actividad Económica (omitir sin fallar si no existe)', async () => {
+      await cc.abrirAgregarCliente();
+      await cc.llenarPrincipalCompleto(datosPrincipal);
+      actividadPrincipalExiste = await cc.agregarActividadEconomicaPrincipalSiExiste();
+      console.log(`[Escenario 3] Actividad Económica principal: ${actividadPrincipalExiste ? 'tiene opciones reales, se seleccionó una' : 'sin opciones para esta compañía, se omitió'}`);
+    });
+
+    let filasActividadesSecundarias = 0;
+    if (actividadPrincipalExiste) {
+      await test.step('Agregar varias actividades económicas secundarias', async () => {
+        filasActividadesSecundarias = await cc.agregarFilaActividadEconomicaSecundaria();
+        filasActividadesSecundarias = await cc.agregarFilaActividadEconomicaSecundaria();
+        console.log(`[Escenario 3] Filas de actividad económica secundaria agregadas: ${filasActividadesSecundarias}`);
+      });
+    }
+
+    let idCreado = '';
+    await test.step('Guardar y validar el mensaje de creación exitosa', async () => {
+      const resultado = await cc.guardarCliente();
+      expect(resultado.respuesta.ok()).toBe(true);
+      expect(Number(resultado.id)).toBeGreaterThan(0);
+      idCreado = resultado.id;
+    });
+
+    await test.step('Buscar el cliente y validar que los datos persistieron al reabrirlo', async () => {
+      await buscarYReabrirCliente(pos, cc, datosPrincipal.nombre);
+      await expect(cc.modal.locator('#c_name')).toHaveValue(datosPrincipal.nombre.trim());
+      await expect(cc.modal.locator('#c_identifier')).toHaveValue(datosPrincipal.identificacion);
+      if (actividadPrincipalExiste) {
+        await expect(
+          cc.modal.locator('#c_principal_economic_activity_chosen .chosen-single span'),
+          'La Actividad Económica principal no persistió (sigue en el placeholder) a pesar de haber tenido opciones reales al guardar'
+        ).not.toHaveText('Seleccionar opción');
+      }
+      await cerrarModalClienteSiAbierto(cc, sharedPage);
+    });
+
+    await validarSinMensajesDeErrorCliente(sharedPage);
+    await validarSinModalesInesperadosCliente(sharedPage);
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+    console.log(`[Escenario 3] Cliente creado con id=${idCreado}`);
+  });
+
+
+  testCliente('4. Crear cliente completo con información de vehículo completa', async ({ pos, cc, sharedPage }) => {
+    testCliente.setTimeout(TIMEOUTS.TEST);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    const sufijo = Date.now();
+    const datosPrincipal: DatosClientePrincipal = {
+      nombre: `QA Cliente Vehiculo Completo ${sufijo}`,
+      identificacion: `${sufijo}`.slice(-9),
+      email: `qa.cliente.vehiculo.${sufijo}@example.com`,
+      codigo: `COD-QA-${sufijo}`,
+      batch: `BATCH-QA-${sufijo}`,
+      direccion: 'Dirección de prueba generada por automatización QA.',
+      whatsapp: '88885555',
+      telefono: '22225555',
+    };
+    const datosVehiculo: DatosVehiculoCompleto = {
+      placa: `QA-${sufijo}`.slice(-8),
+      numeroUnidad: `UNIT-${sufijo}`.slice(-10),
+      chasis: `CHASIS-${sufijo}`,
+    };
+
+    await test.step('Abrir "Agregar Cliente" y llenar todos los datos del cliente ("Principal")', async () => {
+      await cc.abrirAgregarCliente();
+      await cc.llenarPrincipalCompleto(datosPrincipal);
+    });
+
+    await test.step('Activar "Información de vehículo" y llenar TODOS los campos disponibles', async () => {
+      await cc.activarSeccionVehiculo();
+      await cc.llenarVehiculoCompleto(datosVehiculo);
+      await cc.agregarVehiculoALaTabla();
+    });
+
+    let idCreado = '';
+    await test.step('Guardar y validar el mensaje de creación exitosa', async () => {
+      const resultado = await cc.guardarCliente();
+      expect(resultado.respuesta.ok()).toBe(true);
+      expect(Number(resultado.id)).toBeGreaterThan(0);
+      idCreado = resultado.id;
+    });
+
+    await test.step('Buscar el cliente y validar que el vehículo quedó asociado correctamente al reabrirlo', async () => {
+      await buscarYReabrirCliente(pos, cc, datosPrincipal.nombre);
+      await expect(cc.modal.locator('#c_name')).toHaveValue(datosPrincipal.nombre.trim());
+
+      const filasVehiculo = cc.modal.locator('#table_client_vehicle tr');
+      await expect(filasVehiculo, 'El vehículo agregado no aparece en la tabla de vehículos tras reabrir el cliente').toHaveCount(1);
+      await expect(filasVehiculo.first(), 'La placa del vehículo no coincide').toContainText(datosVehiculo.placa);
+      await expect(filasVehiculo.first(), 'El número de chasis del vehículo no coincide').toContainText(datosVehiculo.chasis);
+
+      await cerrarModalClienteSiAbierto(cc, sharedPage);
+    });
+
+    await validarSinMensajesDeErrorCliente(sharedPage);
+    await validarSinModalesInesperadosCliente(sharedPage);
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+    console.log(`[Escenario 4] Cliente creado con id=${idCreado}`);
+  });
+
+
+  testCliente('5. Crear cliente sencillo con vehículo básico (Placa, Marca, Modelo, Año)', async ({ pos, cc, sharedPage }) => {
+    testCliente.setTimeout(TIMEOUTS.TEST);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    const sufijo = Date.now();
+    const datos: DatosClienteSencillo = {
+      nombre: `QA Cliente Vehiculo Basico ${sufijo}`,
+      identificacion: `${sufijo}`.slice(-9),
+      email: `qa.cliente.vehiculobasico.${sufijo}@example.com`,
+    };
+    const placa = `QA-${sufijo}`.slice(-8);
+
+    await test.step('Abrir "Agregar Cliente" y llenar el cliente sencillo', async () => {
+      await cc.abrirAgregarCliente();
+      await cc.llenarClienteSencillo(datos);
+    });
+
+    await test.step('Activar "Información de vehículo" y llenar únicamente Placa, Marca, Modelo y Año', async () => {
+      await cc.activarSeccionVehiculo();
+      await cc.llenarVehiculoBasico(placa);
+      await cc.agregarVehiculoALaTabla();
+    });
+
+    let idCreado = '';
+    await test.step('Guardar y validar el mensaje de creación exitosa', async () => {
+      const resultado = await cc.guardarCliente();
+      expect(resultado.respuesta.ok()).toBe(true);
+      expect(Number(resultado.id)).toBeGreaterThan(0);
+      idCreado = resultado.id;
+    });
+
+    await test.step('Buscar el cliente y validar que el vehículo básico quedó registrado al reabrirlo', async () => {
+      await buscarYReabrirCliente(pos, cc, datos.nombre);
+      await expect(cc.modal.locator('#c_name')).toHaveValue(datos.nombre.trim());
+
+      const filasVehiculo = cc.modal.locator('#table_client_vehicle tr');
+      await expect(filasVehiculo, 'El vehículo básico agregado no aparece en la tabla de vehículos tras reabrir el cliente').toHaveCount(1);
+      await expect(filasVehiculo.first(), 'La placa del vehículo no coincide').toContainText(placa);
+
+      await cerrarModalClienteSiAbierto(cc, sharedPage);
+    });
+
+    await validarSinMensajesDeErrorCliente(sharedPage);
+    await validarSinModalesInesperadosCliente(sharedPage);
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+    console.log(`[Escenario 5] Cliente creado con id=${idCreado}`);
   });
 });

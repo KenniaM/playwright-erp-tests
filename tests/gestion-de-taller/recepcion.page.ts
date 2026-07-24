@@ -33,6 +33,16 @@ export const TIMEOUTS = {
   // observaciones, firma y generar) — muchos más pasos que cualquier otro
   // test de este archivo.
   TEST_ORDEN_SENCILLA: 180_000,
+  // Orden completa: todo lo de Orden sencilla, más completar cada campo de
+  // Detalles del vehículo, Inspección con paquetes (incluyendo requiere
+  // reemplazo + los 3 tipos de producto + aprobado), Enderezado y Pintura, y
+  // Abonos — más pasos e interacciones que Orden sencilla.
+  TEST_ORDEN_COMPLETA: 300_000,
+  // "Configurar Pasos de la Recepción": activa/desactiva los 13 pasos para
+  // Administrador (26 toggles), guarda dos veces, y crea DOS recepciones
+  // completas (una por cada guardado) para verificar el efecto real en el
+  // wizard — más pasos acumulados que Orden completa.
+  TEST_CONFIGURAR_PASOS: 300_000,
   NAVIGATE: 60_000,
   // Cada tab/búsqueda popula su contenido vía AJAX — se hace polling hasta
   // este límite antes de leer su estado, nunca una pausa fija.
@@ -42,6 +52,12 @@ export const TIMEOUTS = {
   // puede tardar varios segundos en el ambiente compartido) — mayor que
   // CARGA para no acoplar este caso puntual al límite general.
   GUARDAR_CONFIG_TABLERO: 30_000,
+  // "Configurar Pasos de la Recepción"/"Ajustes Generales": confirmado en
+  // vivo que el cierre del modal tras "Guardar" puede tardar más de 30s bajo
+  // carga del ambiente compartido (con o sin el SweetAlert de confirmación
+  // de por medio, que además no aparece de forma consistente) — timeout
+  // propio en vez de acoplarlo a GUARDAR_CONFIG_TABLERO.
+  GUARDAR_MATRIZ_PERMISOS: 60_000,
   // Cualquier operación del buscador de Tablero (buscar o limpiar) dispara
   // varias peticiones AJAX encadenadas por columna de estado (confirmado en
   // vivo) — bajo carga del ambiente compartido puede superar el límite
@@ -49,6 +65,20 @@ export const TIMEOUTS = {
   // pesada de todas, al recargar TODAS las tarjetas (varias decenas en este
   // ambiente) en vez de solo el subconjunto filtrado.
   CARGA_LISTADO_COMPLETO: 30_000,
+  // Caso puntual más pesado que CARGA_LISTADO_COMPLETO: restaurar el listado
+  // de Tablero sin filtro recarga TODAS las columnas de estado a la vez
+  // (confirmado en vivo con la suite completa corriendo a ~12 min en el
+  // ambiente compartido, muy por encima de lo habitual) — un timeout propio
+  // evita acoplar este caso extremo al límite general que usan el resto de
+  // pasos de búsqueda, más livianos.
+  CARGA_LISTADO_RESTAURAR: 45_000,
+  // Sondeo cuyo propio callback hace una recarga COMPLETA de página en cada
+  // intento (p. ej. verificar que "Desactivar orden" ya se procesó del lado
+  // servidor): confirmado en vivo que el procesamiento no es instantáneo, y
+  // cada intento del sondeo ya es costoso por sí mismo (navegación real, no
+  // una simple relectura del DOM) — presupuesto propio y mayor para permitir
+  // varios intentos reales bajo carga del ambiente compartido.
+  POLL_CON_RECARGA_COMPLETA: 90_000,
 } as const;
 
 // ─── Tabs principales ───────────────────────────────────────────────────────
@@ -139,8 +169,12 @@ const L = {
   BADGE_ORDEN:
     '.reception-order-number-badge:visible, .ervk-order-badge:visible, .ervk-compact-order-chip .ervk-compact-chip-text:visible',
   // Misma dualidad que BADGE_ORDEN, un nivel más arriba: la tarjeta completa
-  // de la orden (incluye la placa del vehículo, no solo el número).
-  TARJETA_ORDEN:       '.reception-order-card:visible, .ervk-kanban-card:visible',
+  // de la orden (incluye la placa del vehículo, no solo el número). El tab
+  // Repuestos reutiliza el mismo componente de tarjeta pero con su propia
+  // clase (`.repair-order-card`, "repair" no "reception") — confirmado en
+  // vivo que también expone el mismo `.options-menu-button` que Tablero y
+  // Órdenes, así que se agrega aquí en vez de necesitar un selector aparte.
+  TARJETA_ORDEN:       '.reception-order-card:visible, .ervk-kanban-card:visible, .repair-order-card:visible',
   CONTENEDOR_ORDENES: '#company_repair_order_list',
   BTN_VISTA_LISTA:    '.view-repair-order-list',
   BTN_VISTA_CAJA:     '#btn_getRepairOrderViewBox',
@@ -176,6 +210,134 @@ const L = {
   // refrescar este caché, no al guardar.
   BTN_REFRESCAR_TABLERO: '#btn_refresh_board_cache',
 
+  // ─── Reporte de Órdenes ─────────────────────────────────────────────────────
+  // Navega en la MISMA pestaña (confirmado en vivo, no abre popup) a
+  // /reports/order_report — un módulo aparte, no un modal. Acotado a
+  // `#custom_page_header` (el contenedor real del menú "⋮", confirmado en
+  // vivo inspeccionando los ids ancestro): sin acotar, un `href` sin
+  // ancla exacta hace match también con el enlace idéntico del sidebar
+  // (siempre presente en el DOM aunque el sidebar esté colapsado) y con
+  // "Reporte de Inspección" (`/reports/order_report_inspection`, mismo
+  // prefijo de URL) — 4 coincidencias en total, violación de "strict mode".
+  LINK_REPORTE_ORDENES: '#custom_page_header a[href$="/reports/order_report"]',
+  HEADING_REPORTE_ORDENES: 'h1.gn-title',
+
+  // ─── Admin. WhatsApp ────────────────────────────────────────────────────────
+  LINK_ADMIN_WHATSAPP: '#custom_page_header a[onclick*="show_dialog_whatsapp_manager"]',
+  MODAL_ADMIN_WHATSAPP: '#dialog_whatsapp_manager',
+  INPUT_BUSCAR_WHATSAPP: '#input_dialog_whatsapp_manager',
+  BTN_BUSCAR_WHATSAPP: '#btn_search_dialog_whatsapp_manager',
+  BTN_AGREGAR_WHATSAPP: '#dialog_whatsapp_manager button[onclick="show_hide();"]',
+  FORM_WHATSAPP: '#edit_whatsapp_message',
+  INPUT_WHATSAPP_TECLADO: '#txt_shortcut',
+  INPUT_WHATSAPP_MENSAJE: '#txt_message',
+  BTN_GUARDAR_WHATSAPP: '#dialog_whatsapp_manager button[onclick="update_whatsapp_message();"]',
+  // `#next_form_customer_step` NO es un id único en esta app (confirmado en
+  // vivo: se repite sin querer en más de una decena de modales no
+  // relacionados). Tampoco basta con acotar por modal + `onclick="show_hide(1);"`:
+  // el botón "×" del encabezado y el "Cerrar" del listado comparten el mismo
+  // `onclick` — se acota además al contenedor real del footer en modo edición
+  // (`.whatsapp-manager-footer-edit`), donde "Cancelar" es el único con ese
+  // `onclick`.
+  BTN_CANCELAR_WHATSAPP: '#dialog_whatsapp_manager .whatsapp-manager-footer-edit button[onclick="show_hide(1);"]',
+  TABLA_WHATSAPP: '#table_whatsapp_message',
+
+  // ─── Configurar Pasos de la Recepción (por rol) ─────────────────────────────
+  // Confirmado en vivo: la función real (`showDialogStepReceptionVehicle()`)
+  // solo hace `closeDropdownMenu(); loadMatrix();` — a diferencia del modal de
+  // "crear producto nuevo" (que sí sufre la carrera de jQuery Steps
+  // documentada en `crearProductoNuevoCatalogo`), este modal no usa ese
+  // plugin y abre de forma consistente sin necesitar reintento.
+  LINK_CONFIGURAR_PASOS: '#custom_page_header [onclick*="showDialogStepReceptionVehicle"]',
+  MODAL_CONFIGURAR_PASOS: '#srv-modal-backdrop',
+  INPUT_BUSCAR_PASO: '#srv-search-input',
+  BTN_BUSCAR_PASO: '#srv-search-submit',
+  INPUT_BUSCAR_ROL_PASO: '#srv-role-search-input',
+  BTN_BUSCAR_ROL_PASO: '#srv-role-search-submit',
+  BTN_CANCELAR_PASOS: '#srv-cancel',
+  BTN_GUARDAR_PASOS: '#srv-save',
+  // Rol "Administrador": confirmado en vivo dos veces en esta sesión
+  // (Configurar Pasos y Ajustes Generales) que su `data-role-id` es "1".
+  ROLE_ID_ADMINISTRADOR: '1',
+
+  // ─── Configurar Flujo de Trabajo → Ajustes Generales ────────────────────────
+  // Confirmado en vivo: "Configurar Flujo de Trabajo" NO abre un modal
+  // directamente — entra a un "modo edición" superpuesto sobre el propio
+  // tablero (`#awr-edit-banner` + lápices `.awr-stage-pencil` por etapa), y
+  // recién al hacer clic en el lápiz de una etapa se abre el modal real
+  // (`#awr-modal-backdrop`, el mismo contenedor reutilizado que "Configurar
+  // Pasos" NO usa — cada feature tiene su propio backdrop pese al prefijo
+  // compartido "awr"). Hay que salir del modo edición (`#awr-disable-edit-mode`)
+  // para que los tabs normales del módulo (Tablero/Órdenes/Repuestos) vuelvan
+  // a responder — confirmado en vivo que quedan bloqueados mientras el modo
+  // edición sigue activo.
+  LINK_CONFIGURAR_FLUJO_TRABAJO: '#custom_page_header [onclick*="showDialogAdjustWorkflow"]',
+  BANNER_MODO_EDICION_FLUJO: '#awr-edit-banner',
+  BTN_SALIR_MODO_EDICION_FLUJO: '#awr-disable-edit-mode',
+  BTN_EDITAR_AJUSTES_GENERALES: 'button.awr-stage-pencil[data-stage-slug="workflow_general_settings"]',
+  MODAL_AJUSTES_GENERALES: '#awr-modal-backdrop',
+  INPUT_BUSCAR_PERMISO: '#awr-search-input',
+  BTN_BUSCAR_PERMISO: '#awr-search-submit',
+  INPUT_BUSCAR_ROL_PERMISO: '#awr-role-search-input',
+  BTN_BUSCAR_ROL_PERMISO: '#awr-role-search-submit',
+  BTN_CANCELAR_AJUSTES_GENERALES: '#awr-modal-cancel',
+  BTN_GUARDAR_AJUSTES_GENERALES: '#awr-modal-save',
+  // "Mostrar compartir orden": confirmado en vivo como un permiso real y
+  // observable (controla si la sección "Compartir orden" aparece en el menú
+  // "⋮" de una orden) — se usa como paso seguro y verificable para el
+  // recorrido activar/desactivar/guardar de esta sección, igual que "Abonos"
+  // en "Configurar Pasos de la Recepción".
+  SETTING_SLUG_COMPARTIR_ORDEN: 'workflow_show_share_order',
+
+  // ─── Compartir / Opciones avanzadas / Documentos / Abonos de una orden ─────
+  // Las 3 secciones colapsables del menú "⋮" de una orden son <details> reales
+  // — algunas veces quedan abiertas de una interacción previa y un clic en su
+  // <summary> las CIERRA en vez de abrirlas (toggle), así que se fuerza
+  // `.open = true` por JS en vez de hacer clic, para que sea determinístico.
+  LINK_COMPARTIR_CORREO: 'a[onclick*="openSendOrderEmailModal"]',
+  MODAL_COMPARTIR_CORREO: '#dialog_send_order_email',
+  INPUT_CORREOS_COMPARTIR: '#order_email_tags',
+  BTN_ENVIAR_COMPARTIR_CORREO: '.send_order_emails_btn',
+  // Acotado por texto (no solo `data-dismiss="modal"`): la "×" del
+  // encabezado comparte el mismo atributo con el botón real "Cancelar".
+  BTN_CANCELAR_COMPARTIR_CORREO: '#dialog_send_order_email button[data-dismiss="modal"].btn-secondary',
+  // Confirmado en vivo: el link de WhatsApp real usa dos nombres de función
+  // distintos según el punto del menú desde el que se genere (mismo destino
+  // funcional) — se cubren ambos.
+  LINK_COMPARTIR_WHATSAPP:
+    'a[onclick*="confirmSendRepairOrderWhatsapp"], a[onclick*="confirm_send_repair_order_by_whatsapp_message"]',
+  LINK_DESCARGAR_QR: 'a[href*="getOrderQrById"]',
+  LINK_VER_ORDEN_ONLINE: 'a[href*="get_repair_order_by_hash_key"]',
+  // Confirmado en vivo: la llamada real vive en el `href="javascript:void(...)"`
+  // del enlace, NO en un atributo `onclick` — a diferencia de la mayoría de
+  // los demás enlaces de este mismo menú.
+  LINK_DESACTIVAR_ORDEN: 'a[href*="confirmDeleteRepairOrder"]',
+  LINK_ELIMINAR_ORDEN: 'a[href*="deleteRepairOrderdefinitive"]',
+  LINK_PDF_GENERAL: 'a[href*="downloadPdfCreatedOrder"][href*="impression_type=0"]',
+  LINK_PDF_DESCRIPTIVO: 'a[href*="downloadPdfCreatedOrder"][href*="impression_type=1"]',
+  LINK_IMPRIMIR_ORDEN: 'a[onclick*="printVehicularReception"]',
+  // A diferencia de los demás enlaces de "Documentos", este vive en el
+  // `href="javascript:void(...)"` (mismo patrón que Desactivar/Eliminar),
+  // no en un `onclick` — confirmado en vivo.
+  LINK_PDF_PROFORMA: 'a[href*="generateProformOrderPDF"]',
+  LINK_REPORTE_INSPECCION: 'a[onclick*="generateVehicleInspectionPDF"]',
+  LINK_REPORTE_INSPECCION_AVANZADO: 'a[onclick*="generateVehicleInspectionAdvancedPDF"]',
+  // Mismo patrón href="javascript:void(...)" ya confirmado repetidas veces en
+  // este menú (Desactivar/Eliminar/Proforma) — no un `onclick`.
+  LINK_ABONOS_AGREGAR_DESDE_MENU: 'a[href*="show_add_repair_order_payment"]',
+  LINK_ABONOS_IMPRIMIR: 'a[href*="print_repair_order_payments"]',
+  // Modal real de "Agregar Abono" abierto desde el menú "⋮" — confirmado en
+  // vivo que es un flujo/modal totalmente distinto al paso "Abonos" del
+  // wizard de creación (ids propios, prefijo "rop_"/"darop-").
+  MODAL_ABONO_MENU: '#dialog_add_repair_order_payment',
+  SALDO_ACTUAL_ABONO_MENU: '#rop_current_total',
+  SELECT_CAJA_ABONO_MENU: '#rop_apply_to_cash_id',
+  SELECT_FORMA_PAGO_ABONO_MENU: '#select_rop_payed_with',
+  INPUT_MONTO_ABONO_MENU: '#input_ro_payment_amount',
+  INPUT_SALDO_RESTANTE_ABONO_MENU: '#rop_payment_change',
+  TEXTAREA_OBSERVACIONES_ABONO_MENU: '#rop_txta_observations',
+  BTN_GUARDAR_ABONO_MENU: '#btn_add_repair_order_payment',
+
   // ─── Crear Recepción / Nueva orden de reparación ────────────────────────
   BTN_NUEVA_RECEPCION:  '.quick-reception-add-btn',
   MODAL_NUEVA_RECEPCION: '#dialog_search_vehicle_by_plaque',
@@ -203,6 +365,45 @@ const L = {
   // marcó "No tiene Placa / Matrícula" (ese interruptor solo afecta la
   // validación del modal inicial, no la de este paso).
   INPUT_PLACA_DETALLE: '#vehicle_licence_plate',
+  SELECT_ANIO:          '#vehicle_year',
+  SELECT_TIPO_VEHICULO: '#reception_vehicle_type',
+  SELECT_TRANSMISION:   '#vehicle_transmission',
+  INPUT_NUMERO_UNIDAD:  '#vehicle_unit_number',
+  INPUT_KILOMETRAJE:    '#vehicular_kilometer',
+  INPUT_PORCENTAJE_BATERIA: '#p_vehicle_battery_percent',
+  TOGGLE_SON_MILLAS:    '#vehicle_is_miles_check',
+  // Secciones colapsables "Carrocería"/"Aseguradora" del paso "Detalles del
+  // vehículo" — Bootstrap collapse. "Carrocería" tiene un único match por
+  // texto exacto; "Aseguradora" no (el mismo texto aparece repetido en varios
+  // templates ocultos de la página), así que esa usa su `data-target` propio.
+  TOGGLE_SECCION_ASEGURADORA: '[data-target="#vehicleInsurance"]',
+  INPUT_NUMERO_CHASIS:  '#vehicle_chassis',
+  INPUT_NUMERO_MOTOR:   '#vehicle_motor',
+  INPUT_TIPO_ACEITE:    '#vehicle_oil_type',
+  INPUT_FILTRO_ACEITE:  '#vehicle_oil_filter',
+  INPUT_FLOTILLA:       '#vehicle_flee',
+  SELECT_ASEGURADORA:   '#insurance_policy_id',
+  SELECT_CONTACTO_ASEGURADORA: '#insurance_policy_contact_id',
+  INPUT_POLIZA:         '#insurance_policy',
+  INPUT_NOMBRE_ASEGURADO: '#insurance_person',
+  INPUT_NUMERO_AVISO:   '#notice_number',
+
+  // ─── Enderezado y Pintura ───────────────────────────────────────────────────
+  // Mismo widget conceptual que en POS (`pos.locators.ts`: Vehículo → Parte →
+  // Pieza → Servicio → Precio), pero con ids propios en este módulo —
+  // confirmado en vivo que NO son los mismos ids que en POS.
+  SELECT_TIPO_VEHICULO_PINTURA: '#type_car_select',
+  MODAL_PRECIOS_PINTURA: '#modal_prices_body',
+  // Excluye por selector la tarjeta "Agregar precio a este servicio" (crea un
+  // precio nuevo, no selecciona uno existente) — esa tarjeta es fija en la
+  // interfaz, su rótulo no lo es.
+  OPCION_PRECIO_PINTURA: '[id^="div_price_"]:not(#div_price_new)',
+
+  // ─── Abonos ─────────────────────────────────────────────────────────────────
+  INPUT_MONTO_ABONO:   '#initial-payment-repair-order',
+  SELECT_FORMA_PAGO_ABONO: '#select_payed_with_ro',
+  SELECT_CAJA_ABONO:   '#apply_to_cash_id',
+  BTN_GUARDAR_ABONO:   '#btn_save_repair_order_payment',
 
   // ─── Seleccionar servicios (productos y servicios de la orden) ─────────────
   // Tarjetas "Agregar producto"/"Agregar servicio": aparecen duplicadas entre
@@ -218,6 +419,23 @@ const L = {
   HEADING_SERVICIO_RAPIDO: 'Servicio Rápido',
   INPUT_SERVICIO_RAPIDO_NOMBRE: '#dialog_quick_service_name',
   INPUT_SERVICIO_RAPIDO_PRECIO: '#dialog_quick_service_price_without_iva',
+  // "Producto"/"Servicio Normal" (no rápido) del mismo modal de elección —
+  // crea una entrada de catálogo real de dos pasos, no un ítem temporal.
+  HEADING_PRODUCTO_NORMAL: 'Producto',
+  HEADING_SERVICIO_NORMAL: 'Servicio Normal',
+  MODAL_PRODUCTO_NUEVO: '#dialog_add_quick_product',
+  INPUT_PRODUCTO_NUEVO_NOMBRE: '#product_name_app',
+  INPUT_PRODUCTO_NUEVO_COSTO: '#product_cost_app',
+  INPUT_PRODUCTO_NUEVO_PRECIO: '#product_price_app',
+  MODAL_SERVICIO_NUEVO: '#dialog_add_quick_service_update_form',
+  INPUT_SERVICIO_NUEVO_GRUPO: '#dialog_service_name',
+  INPUT_SERVICIO_NUEVO_NOMBRE: '#dialog-service-update-subname',
+  INPUT_SERVICIO_NUEVO_PRECIO: '#dial_price_without_iva_0',
+  BTN_SERVICIO_NUEVO_AGREGAR_SUBLINEA: '#btn_add_new_price',
+  BTN_SERVICIO_NUEVO_GUARDAR: '#btn_save_dialog_service_update',
+  // Toggle "Mostrar precios con IVA" del carrito (afecta la vista de todas
+  // las líneas a la vez, no una individual).
+  TOGGLE_MOSTRAR_PRECIOS_CON_IVA: '#ro_show_price_with_iva',
   // Total general del carrito de la orden — confirmado en vivo: mismo id
   // "sin IVA" que las líneas individuales (`total_by_product_<clave>`)
   // mientras el toggle "Mostrar precios con IVA" esté apagado (su estado por
@@ -273,6 +491,18 @@ export const MARCA_VEHICULO_PRUEBA = 'ALFA ROMEO';
 // placa "VSRF" o el cliente "CITA DE PRUEBA").
 export const PRODUCTO_CATALOGO_PRUEBA = 'A11 - PROT. BLING GLITTER ROSA';
 export const SERVICIO_CATALOGO_PRUEBA = 'Admisión LIV GA';
+
+// Servicio del catálogo con un paquete de inspección real asociado —
+// confirmado en vivo en /WorkshopServices/inspectionPackagemanagement
+// (paquete "INSPECCION", 1 elemento con puntaje). No aparece en el listado
+// por defecto del catálogo del wizard, por eso `agregarServicioDelCatalogo`
+// siempre busca por texto antes de seleccionar.
+export const SERVICIO_CON_PAQUETE_INSPECCION = 'validar serviico';
+
+// Tipo de vehículo real con Parte/Pieza/Servicio/Precio configurados en
+// "Enderezado y Pintura" — confirmado en vivo (otros tipos pueden no tener
+// ninguna parte asociada y dejarían el panel de Piezas vacío).
+export const TIPO_VEHICULO_PINTURA_PRUEBA = 'Hatchback';
 
 export type VistaOrdenes = 'lista' | 'caja';
 export type ModoTarjetaTablero = 'compacto' | 'detallado';
@@ -495,7 +725,17 @@ export class RecepcionPage {
 
   // ─── Opciones de una orden (compartidas entre vista Lista y vista Caja) ─────
 
-  /** Abre el menú de opciones (⋮) de la primera orden visible y devuelve el menú ya desplegado. */
+  /**
+   * Abre el menú de opciones (⋮) de la primera orden visible y devuelve el
+   * menú ya desplegado, con TODAS sus secciones colapsables ("Compartir
+   * orden", "Opciones avanzadas", "Documentos") forzadas a abrirse.
+   *
+   * Esas secciones son `<details>` reales — un clic en su `<summary>` hace
+   * TOGGLE (abre/cierra) en vez de solo abrir, así que una sección ya
+   * abierta por una interacción previa en el mismo menú puede cerrarse por
+   * accidente con un segundo clic. Se fuerza `.open = true` por JS en todas
+   * a la vez, determinístico e independiente de su estado previo.
+   */
   async abrirOpcionesPrimeraOrden(): Promise<Locator> {
     const primeraTarjeta = this.page.locator(L.TARJETA_ORDEN).first();
     await expect(primeraTarjeta, 'No hay ninguna orden visible para abrir su menú de opciones').toBeVisible({ timeout: TIMEOUTS.CARGA });
@@ -504,7 +744,234 @@ export class RecepcionPage {
 
     const menu = this.page.locator(L.MENU_OPCIONES_ORDEN).first();
     await expect(menu, 'El menú de opciones de la orden no se desplegó').toBeVisible({ timeout: TIMEOUTS.CARGA });
+
+    await this.page.evaluate(() => {
+      document.querySelectorAll('.ro-card-dropdown details, .dropdown-content details').forEach((d) => {
+        (d as HTMLDetailsElement).open = true;
+      });
+    });
+
     return menu;
+  }
+
+  // ─── Compartir orden (correo y WhatsApp) ────────────────────────────────────
+
+  get modalCompartirCorreo(): Locator {
+    return this.page.locator(L.MODAL_COMPARTIR_CORREO);
+  }
+
+  /** Abre "Compartir orden > Enviar por correo" desde el menú "⋮" ya desplegado (ver `abrirOpcionesPrimeraOrden()`). */
+  async abrirCompartirPorCorreo(menu: Locator) {
+    const link = menu.locator(L.LINK_COMPARTIR_CORREO);
+    await expect(link, 'El enlace "Enviar por correo" no apareció en "Compartir orden"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await link.click();
+
+    await expect(this.modalCompartirCorreo, 'El modal "Enviar Orden por Correo" no se abrió').toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /** Correos ya cargados como "tags" en el campo "Enviar a:" del modal ya abierto. */
+  async obtenerCorreosCompartir(): Promise<string[]> {
+    return this.modalCompartirCorreo.locator('.selectize-input .item').allTextContents();
+  }
+
+  /**
+   * Envía la orden por correo con los destinatarios ya cargados. Confirmado
+   * en vivo: dispara `POST vehicularReception/sendOrderByEmail`, cierra el
+   * modal solo y muestra el toast real "Correo enviado con éxito".
+   */
+  async enviarCompartirPorCorreo() {
+    const respuestaEnvio = this.page.waitForResponse(
+      (r) => r.url().includes('sendOrderByEmail') && r.request().method() === 'POST',
+      { timeout: TIMEOUTS.CARGA }
+    );
+    await this.page.locator(L.BTN_ENVIAR_COMPARTIR_CORREO).click();
+    await respuestaEnvio;
+
+    await expect(
+      this.page.locator('.noty_bar', { hasText: 'Correo enviado con éxito' }),
+      'No apareció el toast de "Correo enviado con éxito"'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await expect(this.modalCompartirCorreo, 'El modal de compartir por correo no se cerró tras enviar').toBeHidden({
+      timeout: TIMEOUTS.CARGA,
+    });
+  }
+
+  /** Cancela el modal de compartir por correo sin enviar. */
+  async cancelarCompartirPorCorreo() {
+    await this.page.locator(L.BTN_CANCELAR_COMPARTIR_CORREO).click();
+    await expect(this.modalCompartirCorreo, 'El modal de compartir por correo no se cerró tras cancelar').toBeHidden({
+      timeout: TIMEOUTS.CARGA,
+    });
+  }
+
+  /**
+   * Enlace "Compartir por WhatsApp" del menú "⋮" ya desplegado. Confirmado en
+   * vivo: su presencia depende de que el cliente autoseleccionado tenga un
+   * teléfono válido registrado — un dato real y mutable del ambiente
+   * compartido, no algo que la propia orden garantice siempre.
+   */
+  linkCompartirWhatsapp(menu: Locator): Locator {
+    return menu.locator(L.LINK_COMPARTIR_WHATSAPP);
+  }
+
+  // ─── Opciones avanzadas de una orden (QR, ver online, desactivar, eliminar) ─
+
+  /**
+   * Descarga el QR del vehículo desde el menú "⋮" ya desplegado. Confirmado
+   * en vivo: es un `<a download="...">` real (no un modal ni una petición
+   * AJAX), así que se captura con el evento `download` nativo de Playwright.
+   */
+  async descargarQrVehiculo(menu: Locator) {
+    const link = menu.locator(L.LINK_DESCARGAR_QR);
+    await expect(link, 'El enlace "Descargar QR de vehículo" no apareció en "Opciones avanzadas"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+
+    const [descarga] = await Promise.all([this.page.waitForEvent('download', { timeout: TIMEOUTS.CARGA }), link.click()]);
+    return descarga;
+  }
+
+  /**
+   * Abre "Ver orden online" desde el menú "⋮" ya desplegado. Confirmado en
+   * vivo: `target="_blank"` real, abre una pestaña nueva del navegador.
+   */
+  async abrirVerOrdenOnline(menu: Locator) {
+    const link = menu.locator(L.LINK_VER_ORDEN_ONLINE);
+    await expect(link, 'El enlace "Ver orden online" no apareció en "Opciones avanzadas"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+
+    const [nuevaPagina] = await Promise.all([this.page.context().waitForEvent('page', { timeout: TIMEOUTS.CARGA }), link.click()]);
+    await nuevaPagina.waitForLoadState('domcontentloaded', { timeout: TIMEOUTS.NAVIGATE });
+    return nuevaPagina;
+  }
+
+  /**
+   * Desactiva la orden desde el menú "⋮" ya desplegado. Dispara un SweetAlert
+   * de confirmación real ("¿Está seguro de desactivar la orden? La orden
+   * será desactivada.", botones "Cancelar"/"Desactivar") y, cuando la acción
+   * SÍ se ejecuta, la orden deja de aparecer en la búsqueda normal por
+   * placa/número (no queda "inactiva pero visible", desaparece del listado).
+   *
+   * BUG CONFIRMADO EN VIVO (investigación exhaustiva, 6+ corridas distintas,
+   * incluso aislando esta acción en su propia orden desechable sin ninguna
+   * otra interacción antes): el clic en "Desactivar" del SweetAlert cierra el
+   * diálogo con normalidad, pero NO dispara ninguna petición de red real la
+   * mayoría de las veces (confirmado con captura completa de red durante
+   * toda la interacción) — la orden sigue existiendo indefinidamente. Mismo
+   * patrón de bug que `eliminarOrden()`. El spec que usa este método (ver
+   * el test `test.fail(...)` dedicado en recepcion-basico.spec.ts) documenta
+   * el hallazgo manteniendo la aserción real en vez de debilitarla.
+   */
+  async desactivarOrden(menu: Locator) {
+    const link = menu.locator(L.LINK_DESACTIVAR_ORDEN);
+    await expect(link, 'El enlace "Desactivar orden" no apareció en "Opciones avanzadas"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await link.click();
+
+    const confirmar = this.page.locator('.sweet-alert').last().getByRole('button', { name: 'Desactivar', exact: true });
+    await expect(confirmar, 'No apareció la confirmación de "Desactivar orden"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await confirmar.click();
+
+    // Se espera a que el propio SweetAlert de confirmación se cierre antes de
+    // continuar: confirmado en vivo que, sin esta espera, una búsqueda
+    // inmediatamente posterior (incluso tras recargar la página) todavía
+    // encuentra la orden — el procesamiento de "Desactivar" no es instantáneo.
+    await expect(this.page.locator('.sweet-alert:visible')).toHaveCount(0, { timeout: TIMEOUTS.CARGA });
+  }
+
+  /**
+   * Elimina definitivamente la orden desde el menú "⋮" ya desplegado.
+   *
+   * BUG CONFIRMADO EN VIVO (sesión de investigación exhaustiva, 5 corridas
+   * distintas): el enlace "Eliminar orden" (`href="javascript:void(
+   * deleteRepairOrderdefinitive(id, companyId))"`) no produce NINGÚN efecto
+   * observable — no aparece SweetAlert, ni `confirm()` nativo, ni toast, ni
+   * ninguna petición de red, y la orden sigue existiendo en el listado tras
+   * el clic. Se descartó un problema del propio clic de Playwright: llamar
+   * la función global `deleteRepairOrderdefinitive(id, companyId)`
+   * directamente por `page.evaluate()`, con los IDs reales extraídos del
+   * propio `href`, produce el mismo resultado (nada). También se descartó
+   * que dependiera de que la orden estuviera ya "Desactivada" antes de
+   * "Eliminar": tras desactivar una orden de prueba, esta deja de ser
+   * encontrable por cualquier búsqueda normal (no existe ningún filtro de
+   * estado "Inactivas" en la pantalla de Órdenes), así que ni siquiera hay
+   * forma de llegar de nuevo a su menú "⋮" para intentar "Eliminar" sobre
+   * ella. Conclusión: "Eliminar orden" está roto o inalcanzable en este
+   * ambiente — no es un problema de esta automatización. Este método hace el
+   * clic real (documentando el flujo esperado) y el spec que lo usa
+   * mantiene la aserción real de que la orden debería desaparecer, en vez de
+   * debilitarla para forzar un verde falso (ver CLAUDE_CONTEXT.md).
+   */
+  async eliminarOrden(menu: Locator) {
+    const link = menu.locator(L.LINK_ELIMINAR_ORDEN);
+    await expect(link, 'El enlace "Eliminar orden" no apareció en "Opciones avanzadas"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await link.click();
+  }
+
+  // ─── Documentos de una orden ────────────────────────────────────────────────
+
+  /**
+   * Descarga "PDF General" desde el menú "⋮" ya desplegado. Confirmado en
+   * vivo: es un `href` normal SIN `download` ni `target="_blank"`, pero el
+   * servidor responde con `Content-Disposition` de descarga — Playwright lo
+   * captura igual como evento `download` real, sin navegar la pestaña actual.
+   */
+  async descargarPdfGeneral(menu: Locator) {
+    const link = menu.locator(L.LINK_PDF_GENERAL);
+    await expect(link, 'El enlace "Crear PDF General" no apareció en "Documentos"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    const [descarga] = await Promise.all([this.page.waitForEvent('download', { timeout: TIMEOUTS.CARGA }), link.click()]);
+    return descarga;
+  }
+
+  /** Descarga "PDF Descriptivo" — mismo patrón que "PDF General". */
+  async descargarPdfDescriptivo(menu: Locator) {
+    const link = menu.locator(L.LINK_PDF_DESCRIPTIVO);
+    await expect(link, 'El enlace "Crear PDF Descriptivo" no apareció en "Documentos"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    const [descarga] = await Promise.all([this.page.waitForEvent('download', { timeout: TIMEOUTS.CARGA }), link.click()]);
+    return descarga;
+  }
+
+  /** Descarga "PDF Proforma" — mismo patrón (confirmado en vivo: también dispara un `download` real). */
+  async descargarPdfProforma(menu: Locator) {
+    const link = menu.locator(L.LINK_PDF_PROFORMA);
+    await expect(link, 'El enlace "Crear PDF Proforma" no apareció en "Documentos"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    const [descarga] = await Promise.all([this.page.waitForEvent('download', { timeout: TIMEOUTS.CARGA }), link.click()]);
+    return descarga;
+  }
+
+  /**
+   * Activa "Imprimir Orden" desde el menú "⋮" ya desplegado. Confirmado en
+   * vivo: abre una pestaña nueva (vacía/`about:blank` en el instante del
+   * clic, se llena e imprime vía `window.print()` del propio navegador) en
+   * vez de disparar una descarga — se captura como página nueva, no como
+   * `download`.
+   */
+  async abrirImprimirOrden(menu: Locator) {
+    const link = menu.locator(L.LINK_IMPRIMIR_ORDEN);
+    await expect(link, 'El enlace "Imprimir" no apareció en "Documentos"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    const [nuevaPagina] = await Promise.all([this.page.context().waitForEvent('page', { timeout: TIMEOUTS.CARGA }), link.click()]);
+    return nuevaPagina;
+  }
+
+  /**
+   * Genera "PDF Reporte de Inspección" desde el menú "⋮" ya desplegado.
+   * Confirmado en vivo: su `onclick` está protegido por
+   * `if (typeof generateVehicleInspectionPDF === 'function')` — la función
+   * solo existe cuando la orden realmente tiene un paquete de inspección
+   * asociado (confirmado en vivo: en una orden SIN inspección, el clic no
+   * produce ningún efecto — ni descarga, ni pestaña nueva, ni error). Por
+   * eso este método requiere que la orden usada para probarlo haya pasado
+   * por el paso "Inspección" con un servicio con paquete asociado.
+   */
+  async descargarReporteInspeccion(menu: Locator) {
+    const link = menu.locator(L.LINK_REPORTE_INSPECCION);
+    await expect(link, 'El enlace "PDF Reporte de Inspección" no apareció en "Documentos"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    const [descarga] = await Promise.all([this.page.waitForEvent('download', { timeout: TIMEOUTS.CARGA }), link.click()]);
+    return descarga;
+  }
+
+  /** Genera "PDF Reporte de Inspección Avanzado" — mismo patrón y misma dependencia de datos reales de inspección. */
+  async descargarReporteInspeccionAvanzado(menu: Locator) {
+    const link = menu.locator(L.LINK_REPORTE_INSPECCION_AVANZADO);
+    await expect(link, 'El enlace "Reporte de Inspección Avanzado" no apareció en "Documentos"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    const [descarga] = await Promise.all([this.page.waitForEvent('download', { timeout: TIMEOUTS.CARGA }), link.click()]);
+    return descarga;
   }
 
   // ─── Configurar Tablero (modo de tarjeta: Detallado / Compacto) ─────────────
@@ -573,6 +1040,349 @@ export class RecepcionPage {
 
     const clases = (await primera.getAttribute('class')) ?? '';
     return clases.includes('ervk-kanban-card-compact') ? 'compacto' : 'detallado';
+  }
+
+  // ─── Reporte de Órdenes ───────────────────────────────────────────────────
+
+  /**
+   * Abre "Reporte de Órdenes" desde el menú "⋮" del encabezado. Confirmado en
+   * vivo: es un enlace `href` normal (no `data-toggle="modal"` ni
+   * `target="_blank"`) — navega en la MISMA pestaña a `/reports/order_report`,
+   * un módulo aparte, no un modal.
+   */
+  async abrirReporteOrdenes() {
+    await this.page.locator(L.BTN_MAS_OPCIONES).click();
+
+    const link = this.page.locator(L.LINK_REPORTE_ORDENES);
+    await expect(link, 'El enlace "Reporte de órdenes" no apareció en el menú "⋮"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await link.click();
+
+    await this.page.waitForURL(/\/reports\/order_report/, { timeout: TIMEOUTS.NAVIGATE });
+  }
+
+  /** Encabezado principal del Reporte de Órdenes ya cargado (confirmado en vivo: `<h1 class="gn-title">`). */
+  get encabezadoReporteOrdenes(): Locator {
+    return this.page.locator(L.HEADING_REPORTE_ORDENES, { hasText: 'Reporte de órdenes' });
+  }
+
+  // ─── Administración de WhatsApp ─────────────────────────────────────────────
+
+  get modalAdminWhatsapp(): Locator {
+    return this.page.locator(L.MODAL_ADMIN_WHATSAPP);
+  }
+
+  /** Abre el modal "Admin. Whatsapp" desde el menú "⋮" del encabezado. */
+  async abrirAdminWhatsapp() {
+    await this.page.locator(L.BTN_MAS_OPCIONES).click();
+
+    const link = this.page.locator(L.LINK_ADMIN_WHATSAPP);
+    await expect(link, 'El enlace "Admin. Whatsapp" no apareció en el menú "⋮"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await link.click();
+
+    await expect(this.modalAdminWhatsapp, 'El modal "Admin. Whatsapp" no se abrió').toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /** Busca un mensaje predefinido por su teclado/texto (input + botón "Buscar" del modal ya abierto). */
+  async buscarMensajeWhatsapp(termino: string) {
+    await this.page.locator(L.INPUT_BUSCAR_WHATSAPP).fill(termino);
+    await this.page.locator(L.BTN_BUSCAR_WHATSAPP).click();
+  }
+
+  /** Números de teclado/mensajes actualmente listados en la tabla del modal (ya abierto). */
+  async obtenerFilasWhatsapp(): Promise<string[]> {
+    return this.page.locator(`${L.TABLA_WHATSAPP} tr`).allTextContents();
+  }
+
+  /**
+   * Abre el formulario "Agregar" del modal de Admin. Whatsapp (botón
+   * "Agregar" de la barra de herramientas) — reutiliza el mismo formulario
+   * que "Editar", confirmado en vivo (mismo contenedor `#edit_whatsapp_message`,
+   * mismos campos `#txt_shortcut`/`#txt_message`).
+   */
+  async abrirFormularioAgregarWhatsapp() {
+    await this.page.locator(L.BTN_AGREGAR_WHATSAPP).click();
+    await expect(
+      this.page.locator(L.FORM_WHATSAPP),
+      'El formulario de agregar/editar mensaje de Whatsapp no apareció'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /** Llena teclado + mensaje en el formulario de Whatsapp ya abierto. */
+  async llenarFormularioWhatsapp(datos: { teclado: string; mensaje: string }) {
+    await this.page.locator(L.INPUT_WHATSAPP_TECLADO).fill(datos.teclado);
+    await this.page.locator(L.INPUT_WHATSAPP_MENSAJE).fill(datos.mensaje);
+  }
+
+  /** Guarda el formulario de Whatsapp ya abierto (botón "Guardar" → `update_whatsapp_message()`). */
+  async guardarFormularioWhatsapp() {
+    await this.page.locator(L.BTN_GUARDAR_WHATSAPP).click();
+  }
+
+  /** Cancela el formulario de Whatsapp ya abierto sin guardar (botón "Cancelar" → vuelve al listado). */
+  async cancelarFormularioWhatsapp() {
+    await this.page.locator(L.BTN_CANCELAR_WHATSAPP).click();
+    await expect(
+      this.page.locator(L.FORM_WHATSAPP),
+      'El formulario de Whatsapp no se cerró tras cancelar'
+    ).toBeHidden({ timeout: TIMEOUTS.CARGA });
+  }
+
+  // ─── Configurar Pasos de la Recepción (por rol) ─────────────────────────────
+
+  get modalConfigurarPasos(): Locator {
+    return this.page.locator(L.MODAL_CONFIGURAR_PASOS);
+  }
+
+  /** Abre "Configurar Pasos de la Recepción" desde el menú "⋮" del encabezado. */
+  async abrirConfigurarPasosRecepcion() {
+    await this.page.locator(L.BTN_MAS_OPCIONES).click();
+
+    const link = this.page.locator(L.LINK_CONFIGURAR_PASOS);
+    await expect(link, 'El enlace "Configurar Pasos de la Recepción" no apareció en el menú "⋮"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await link.click();
+
+    await expect(this.modalConfigurarPasos, 'El modal "Configurar Pasos de la Recepción" no se abrió').toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /** Fila de la matriz para un paso específico, por su nombre visible (ej. "Abonos", "Enderezado y Pintura"). */
+  private filaPasoRecepcion(nombrePaso: string): Locator {
+    return this.modalConfigurarPasos.locator('tr').filter({ hasText: nombrePaso });
+  }
+
+  /** Checkbox (interruptor) del paso `nombrePaso` para el rol Administrador (`data-role-id="1"`, confirmado en vivo). */
+  checkboxPasoAdministrador(nombrePaso: string): Locator {
+    return this.filaPasoRecepcion(nombrePaso).locator(`input.srv-switch-input[data-role-id="${L.ROLE_ID_ADMINISTRADOR}"]`);
+  }
+
+  /** Nombres de todos los pasos actualmente listados en la matriz (respeta el filtro de búsqueda activo, si hay uno). */
+  async obtenerNombresPasosMatriz(): Promise<string[]> {
+    return this.modalConfigurarPasos.locator('.srv-step-name').allTextContents();
+  }
+
+  /** Busca un paso por nombre/descripción dentro de la matriz ya abierta. */
+  async buscarPasoEnMatriz(termino: string) {
+    await this.page.locator(L.INPUT_BUSCAR_PASO).fill(termino);
+    await this.page.locator(L.BTN_BUSCAR_PASO).click();
+  }
+
+  /** Busca un rol por nombre dentro de la matriz ya abierta (filtra las columnas visibles). */
+  async buscarRolEnMatriz(termino: string) {
+    await this.page.locator(L.INPUT_BUSCAR_ROL_PASO).fill(termino);
+    await this.page.locator(L.BTN_BUSCAR_ROL_PASO).click();
+  }
+
+  /**
+   * Deja el paso `nombrePaso` en el estado `activo` pedido para Administrador
+   * (activa/desactiva solo si hace falta). Confirmado en vivo: el `<input
+   * type="checkbox">` real queda visualmente oculto detrás del interruptor
+   * (`.srv-slider`, el switch estilizado) — Playwright lo considera "no
+   * visible" para hacer click directamente sobre él (aunque sí se puede leer
+   * su estado con `isChecked()`), así que el clic se hace sobre su `<label
+   * class="srv-switch">` contenedor, que sí es el elemento realmente
+   * interactivo en pantalla.
+   */
+  async establecerPasoAdministrador(nombrePaso: string, activo: boolean) {
+    const checkbox = this.checkboxPasoAdministrador(nombrePaso);
+    if ((await checkbox.isChecked()) !== activo) {
+      await checkbox.locator('xpath=..').click();
+    }
+    await expect(checkbox).toBeChecked({ checked: activo });
+  }
+
+  /**
+   * Guarda la configuración de pasos. Confirmado en vivo: "Guardar" dispara
+   * la petición real `save_repair_order_step_matrix_by_role_web` y, a veces
+   * (no de forma consistente entre corridas), un SweetAlert de confirmación
+   * ("Configuración actualizada correctamente") con un `.sweet-overlay` que
+   * tapa el modal.
+   *
+   * También confirmado en vivo, en varias fallas reales distintas: (1)
+   * esperar a que el modal "se cierre solo" no es confiable — quedó visible
+   * más de 60s pese a que el guardado ya había respondido 200 sin ningún
+   * SweetAlert pendiente; y (2) el propio clic en "Guardar" puede no llegar
+   * a disparar la petición en absoluto bajo carga real del ambiente
+   * compartido. Confirmado también que un `.click()` sin `timeout` propio
+   * puede quedarse esperando hasta el timeout global del test entero en vez
+   * de fallar rápido y dejar reintentar — por eso cada intento de clic usa un
+   * timeout corto y acotado, permitiendo varios intentos reales dentro del
+   * mismo presupuesto total, hasta confirmar la petición real por red. El
+   * cierre del modal se fuerza con su botón "×" (`#srv-close`) si no se
+   * cierra solo.
+   */
+  async guardarConfigPasos() {
+    const esRespuestaGuardado = (r: import('@playwright/test').Response) =>
+      r.url().includes('save_repair_order_step_matrix_by_role_web') && r.request().method() === 'POST';
+
+    let guardado = false;
+    for (let intento = 1; intento <= 6 && !guardado; intento++) {
+      const respuestaGuardado = this.page.waitForResponse(esRespuestaGuardado, { timeout: TIMEOUTS.CARGA }).then(
+        () => true,
+        () => false
+      );
+      await this.page
+        .locator(L.BTN_GUARDAR_PASOS)
+        .click({ timeout: TIMEOUTS.CARGA })
+        .catch(() => {});
+      guardado = await respuestaGuardado;
+    }
+    expect(guardado, 'El clic en "Guardar" nunca disparó la petición real de guardado tras varios intentos').toBe(true);
+
+    const alertaOk = this.page.locator('.sweet-alert').last().getByRole('button', { name: 'OK' });
+    const aparecioAlerta = await alertaOk
+      .waitFor({ state: 'visible', timeout: TIMEOUTS.CARGA })
+      .then(() => true)
+      .catch(() => false);
+    if (aparecioAlerta) await alertaOk.click();
+
+    if (await this.modalConfigurarPasos.isVisible()) {
+      await this.page.locator('#srv-close').click();
+    }
+    await expect(this.modalConfigurarPasos, 'El modal de Configurar Pasos no se cerró tras guardar').toBeHidden({
+      timeout: TIMEOUTS.CARGA,
+    });
+  }
+
+  /** Cancela sin guardar los cambios hechos en la matriz. */
+  async cancelarConfigPasos() {
+    await this.page.locator(L.BTN_CANCELAR_PASOS).click();
+    await expect(this.modalConfigurarPasos, 'El modal de Configurar Pasos no se cerró tras cancelar').toBeHidden({ timeout: TIMEOUTS.CARGA });
+  }
+
+  // ─── Configurar Flujo de Trabajo → Ajustes Generales ────────────────────────
+
+  get modalAjustesGenerales(): Locator {
+    return this.page.locator(L.MODAL_AJUSTES_GENERALES);
+  }
+
+  /**
+   * Entra al "modo edición" de "Configurar Flujo de Trabajo" desde el menú
+   * "⋮" del encabezado — no abre un modal todavía, solo activa el banner y
+   * los lápices por etapa sobre el propio tablero.
+   */
+  async abrirConfigurarFlujoTrabajo() {
+    await this.page.locator(L.BTN_MAS_OPCIONES).click();
+
+    const link = this.page.locator(L.LINK_CONFIGURAR_FLUJO_TRABAJO);
+    await expect(link, 'El enlace "Configurar Flujo de Trabajo" no apareció en el menú "⋮"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await link.click();
+
+    await expect(
+      this.page.locator(L.BANNER_MODO_EDICION_FLUJO),
+      'El modo edición de "Configurar Flujo de Trabajo" no se activó'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /** Abre "Ajustes Generales" (lápiz de esa etapa) ya en modo edición de "Configurar Flujo de Trabajo". */
+  async abrirAjustesGenerales() {
+    const pencil = this.page.locator(L.BTN_EDITAR_AJUSTES_GENERALES);
+    await expect(pencil, 'El lápiz de "Ajustes Generales" no está visible en modo edición').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await pencil.click();
+
+    await expect(this.modalAjustesGenerales, 'El modal "Ajustes Generales" no se abrió').toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /**
+   * Sale del modo edición de "Configurar Flujo de Trabajo". Confirmado en
+   * vivo: mientras el modo edición sigue activo, los tabs normales del
+   * módulo (Tablero/Órdenes/Repuestos) quedan bloqueados — hay que salir
+   * explícitamente antes de continuar con cualquier otro flujo del módulo.
+   */
+  async salirModoEdicionFlujoTrabajo() {
+    await this.page.locator(L.BTN_SALIR_MODO_EDICION_FLUJO).click();
+    await expect(
+      this.page.locator(L.BANNER_MODO_EDICION_FLUJO),
+      'El modo edición de "Configurar Flujo de Trabajo" no se desactivó'
+    ).toBeHidden({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /** Checkbox (interruptor) del permiso `settingSlug` para el rol Administrador, dentro de "Ajustes Generales" ya abierto. */
+  checkboxPermisoAdministrador(settingSlug: string): Locator {
+    return this.modalAjustesGenerales.locator(
+      `input.awr-role-switch-input[data-setting-slug="${settingSlug}"][data-role-id="${L.ROLE_ID_ADMINISTRADOR}"]`
+    );
+  }
+
+  /** Nombres de todos los permisos actualmente listados (respeta el filtro de búsqueda activo, si hay uno). */
+  async obtenerNombresPermisosMatriz(): Promise<string[]> {
+    return this.modalAjustesGenerales.locator('.awr-grid-cell-sticky strong').allTextContents();
+  }
+
+  /** `data-setting-slug` de todos los permisos listados para Administrador, en el mismo orden que `obtenerNombresPermisosMatriz()`. */
+  async obtenerSlugsPermisosMatriz(): Promise<string[]> {
+    return this.modalAjustesGenerales
+      .locator(`input.awr-role-switch-input[data-role-id="${L.ROLE_ID_ADMINISTRADOR}"]`)
+      .evaluateAll((els) => els.map((el) => el.getAttribute('data-setting-slug') ?? ''));
+  }
+
+  /** Busca un permiso por nombre/descripción dentro de "Ajustes Generales" ya abierto. */
+  async buscarPermisoEnMatriz(termino: string) {
+    await this.page.locator(L.INPUT_BUSCAR_PERMISO).fill(termino);
+    await this.page.locator(L.BTN_BUSCAR_PERMISO).click();
+  }
+
+  /** Busca un rol por nombre dentro de "Ajustes Generales" ya abierto. */
+  async buscarRolEnMatrizPermisos(termino: string) {
+    await this.page.locator(L.INPUT_BUSCAR_ROL_PERMISO).fill(termino);
+    await this.page.locator(L.BTN_BUSCAR_ROL_PERMISO).click();
+  }
+
+  /** Deja el permiso `settingSlug` en el estado `activo` pedido para Administrador (mismo patrón de switch oculto que "Configurar Pasos"). */
+  async establecerPermisoAdministrador(settingSlug: string, activo: boolean) {
+    const checkbox = this.checkboxPermisoAdministrador(settingSlug);
+    if ((await checkbox.isChecked()) !== activo) {
+      await checkbox.locator('xpath=..').click();
+    }
+    await expect(checkbox).toBeChecked({ checked: activo });
+  }
+
+  /**
+   * Guarda "Ajustes Generales". Confirmado en vivo: dispara la petición real
+   * `new-workflow-reception/adjust-workflow/stage-save` y, al igual que
+   * "Configurar Pasos" (mismo patrón, no exclusivo de esa sección como se
+   * asumió en un intento anterior), también puede mostrar un SweetAlert de
+   * confirmación con `.sweet-overlay` — si no se cierra, bloquea cualquier
+   * clic posterior en la página (confirmado en vivo: impidió reabrir el
+   * lápiz de "Ajustes Generales" en el intento siguiente). Mismo patrón de
+   * reintento acotado del clic que `guardarConfigPasos()`, atado a la
+   * respuesta real de red en vez de asumir que el primer clic siempre llega.
+   */
+  async guardarAjustesGenerales() {
+    const esRespuestaGuardado = (r: import('@playwright/test').Response) =>
+      r.url().includes('adjust-workflow/stage-save') && r.request().method() === 'POST';
+
+    let guardado = false;
+    for (let intento = 1; intento <= 6 && !guardado; intento++) {
+      const respuestaGuardado = this.page.waitForResponse(esRespuestaGuardado, { timeout: TIMEOUTS.CARGA }).then(
+        () => true,
+        () => false
+      );
+      await this.page
+        .locator(L.BTN_GUARDAR_AJUSTES_GENERALES)
+        .click({ timeout: TIMEOUTS.CARGA })
+        .catch(() => {});
+      guardado = await respuestaGuardado;
+    }
+    expect(guardado, 'El clic en "Guardar" de Ajustes Generales nunca disparó la petición real tras varios intentos').toBe(true);
+
+    const alertaOk = this.page.locator('.sweet-alert').last().getByRole('button', { name: 'OK' });
+    const aparecioAlerta = await alertaOk
+      .waitFor({ state: 'visible', timeout: TIMEOUTS.CARGA })
+      .then(() => true)
+      .catch(() => false);
+    if (aparecioAlerta) await alertaOk.click();
+
+    if (await this.modalAjustesGenerales.isVisible()) {
+      await this.page.locator('#awr-modal-close').click();
+    }
+    await expect(this.modalAjustesGenerales, 'El modal de Ajustes Generales no se cerró tras guardar').toBeHidden({
+      timeout: TIMEOUTS.CARGA,
+    });
+  }
+
+  /** Cancela sin guardar los cambios hechos en "Ajustes Generales". */
+  async cancelarAjustesGenerales() {
+    await this.page.locator(L.BTN_CANCELAR_AJUSTES_GENERALES).click();
+    await expect(this.modalAjustesGenerales, 'El modal de Ajustes Generales no se cerró tras cancelar').toBeHidden({ timeout: TIMEOUTS.CARGA });
   }
 
   // ─── Crear Recepción / Nueva orden de reparación ────────────────────────────
@@ -742,22 +1552,128 @@ export class RecepcionPage {
     return this.page.locator(selectorId).locator('xpath=following-sibling::div[contains(@class,"chosen-container")][1]');
   }
 
+  /**
+   * Fuerza a Chosen a recalcular el ancho/posición de su contenedor
+   * disparando su propio evento `chosen:updated`. Causa raíz confirmada en
+   * vivo (inspeccionando `getBoundingClientRect()`): cuando el `<select>`
+   * vive en un paso del wizard que estaba oculto (`display:none`) en el
+   * momento en que Chosen se inicializó, su contenedor queda con un ancho
+   * medido incorrectamente (~25px en vez de ~267px) y su `.chosen-drop` se
+   * renderiza desplazado miles de píxeles fuera del viewport — Playwright
+   * ve el `<li>` como "visible y estable" pero el click reintenta
+   * indefinidamente por "element is outside of the viewport". Disparar
+   * `chosen:updated` (la propia API pública del plugin) una vez el paso ya
+   * es visible corrige la medición sin necesidad de ningún workaround de
+   * scroll.
+   */
+  private async refrescarChosen(selectorId: string) {
+    // No basta con disparar `chosen:updated` una sola vez inmediatamente
+    // después de cambiar de paso del wizard: confirmado en vivo que, justo
+    // tras el cambio de paso, el contenedor de Chosen puede seguir
+    // reportando ancho 0 (el panel aún no terminó de mostrarse) — disparar
+    // el evento en ese instante no tiene ningún efecto. Se reintenta el
+    // disparo en cada sondeo hasta que el contenedor realmente tenga un
+    // ancho razonable (>50px descarta tanto el 0 de "panel aún oculto" como
+    // el ~25px corrupto documentado antes de medir con el panel oculto).
+    await expect
+      .poll(
+        () =>
+          this.page.evaluate((sel) => {
+            const jq = (window as unknown as { jQuery?: (s: string) => { trigger: (e: string) => void } }).jQuery;
+            jq?.(sel).trigger('chosen:updated');
+            const contenedor = document.querySelector(sel)?.nextElementSibling as HTMLElement | null;
+            return contenedor?.getBoundingClientRect().width ?? 0;
+          }, selectorId),
+        { timeout: TIMEOUTS.CARGA }
+      )
+      .toBeGreaterThan(50);
+  }
+
+  /**
+   * Abre el combo y espera a que su panel de resultados (`.chosen-results
+   * li.active-result`) esté realmente listo. Para combos cuyas opciones
+   * nativas se pueblan tarde vía AJAX (ej. Modelo, que depende de Marca):
+   * confirmado en vivo que el `<select>` nativo puede ya tener
+   * `options.length > 0` mientras Chosen todavía no reconstruyó su panel a
+   * partir de esas opciones nuevas — son dos sincronizaciones
+   * independientes del plugin, y el panel solo refleja el estado real una
+   * vez abierto. Si al abrir no aparece ningún resultado, se cierra
+   * (Escape) y se reintenta un número acotado de veces en vez de fallar de
+   * inmediato o esperar a ciegas.
+   */
+  private async abrirChosenConResultados(selectorId: string): Promise<Locator> {
+    const contenedor = this.chosenDeSelect(selectorId);
+    const resultados = contenedor.locator('.chosen-results li.active-result');
+
+    for (let intento = 1; intento <= 3; intento++) {
+      await this.refrescarChosen(selectorId);
+      await contenedor.locator('a.chosen-single').click();
+
+      const aparecieron = await resultados
+        .first()
+        .waitFor({ state: 'visible', timeout: TIMEOUTS.CARGA })
+        .then(() => true)
+        .catch(() => false);
+      if (aparecieron) return resultados;
+
+      if (intento < 3) await this.page.keyboard.press('Escape');
+    }
+
+    await expect(resultados.first(), `El combo "${selectorId}" no mostró ninguna opción`).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    return resultados;
+  }
+
   /** Selecciona una opción de un combo "Chosen" del wizard por su texto visible. */
   async seleccionarOpcionChosen(selectorId: string, texto: string) {
-    const contenedor = this.chosenDeSelect(selectorId);
-    await contenedor.locator('a.chosen-single').click();
-    const resultados = contenedor.locator('.chosen-results li.active-result');
-    await expect(resultados.first(), `El combo "${selectorId}" no mostró ninguna opción`).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    const resultados = await this.abrirChosenConResultados(selectorId);
     await resultados.filter({ hasText: texto }).first().click();
   }
 
-  /** Selecciona la primera opción disponible de un combo "Chosen" del wizard — para campos donde no importa cuál, solo que exista uno. */
+  /**
+   * Selecciona la primera opción REAL disponible de un combo "Chosen" del
+   * wizard — para campos donde no importa cuál, solo que exista uno.
+   * Descarta explícitamente una opción de tipo placeholder si aparece como
+   * el primer `.active-result`: confirmado en vivo que varios combos de este
+   * módulo ("Tipo de Vehículo" en Enderezado y Pintura, "Forma de pago" y
+   * "Aplicar a caja" en Abonos) SÍ incluyen su placeholder como un
+   * `.active-result` más (a diferencia de Marca/Modelo/Combustible, donde el
+   * primer resultado ya es una opción real) — sin este filtro, `.first()`
+   * seleccionaba el placeholder y el campo quedaba vacío en silencio.
+   *
+   * El placeholder se identifica por el `value=""` de la opción original en
+   * el `<select>` nativo (el estándar HTML para opciones placeholder), no
+   * por su texto — un intento anterior de detectarlo por texto
+   * ("Seleccione...") no cubría placeholders con otra redacción ("Forma de
+   * pago", "Caja"), y ambos combos de Abonos quedaban sin seleccionar.
+   */
   async seleccionarPrimeraOpcionChosen(selectorId: string) {
-    const contenedor = this.chosenDeSelect(selectorId);
-    await contenedor.locator('a.chosen-single').click();
-    const resultados = contenedor.locator('.chosen-results li.active-result');
-    await expect(resultados.first(), `El combo "${selectorId}" no mostró ninguna opción`).toBeVisible({ timeout: TIMEOUTS.CARGA });
-    await resultados.first().click();
+    const resultados = await this.abrirChosenConResultados(selectorId);
+
+    // Se hace matchear por TEXTO (no por índice) contra la lista de
+    // `.active-result`: Chosen puede omitir opciones deshabilitadas/ocultas
+    // del `<select>` nativo al construir su lista, así que un índice del
+    // select no garantiza corresponder al mismo índice en `.active-result`.
+    const textoOpcionReal = await this.page.evaluate((sel) => {
+      const opciones = Array.from((document.querySelector(sel) as HTMLSelectElement | null)?.options ?? []);
+      return opciones.find((o) => o.value.trim() !== '')?.text.trim() ?? null;
+    }, selectorId);
+
+    const opcion = textoOpcionReal ? resultados.filter({ hasText: textoOpcionReal }).first() : resultados.first();
+
+    // Si la opción identificada como "real" ya está marcada como
+    // seleccionada, es en realidad el placeholder (confirmado en vivo para
+    // "Contacto de aseguradora": para aseguradoras sin contactos configurados,
+    // el placeholder es la ÚNICA opción y no tiene `value=""`, así que el
+    // heurístico por valor la toma como "real" por error) — no hay ninguna
+    // opción distinta para elegir, así que se cierra el combo sin clic en vez
+    // de reintentar indefinidamente un clic sobre un elemento ya activo.
+    const yaSeleccionada = await opcion.evaluate((el) => el.classList.contains('result-selected'));
+    if (yaSeleccionada) {
+      await this.page.keyboard.press('Escape');
+      return;
+    }
+
+    await opcion.click();
   }
 
   /**
@@ -781,6 +1697,50 @@ export class RecepcionPage {
 
     await this.seleccionarPrimeraOpcionChosen(L.SELECT_MODELO);
     await this.seleccionarPrimeraOpcionChosen(L.SELECT_COMBUSTIBLE);
+  }
+
+  /**
+   * Completa TODOS los campos disponibles de "Detalles del vehículo" (para
+   * Orden completa/avanzada) — Marca, Modelo, Año, Tipo de vehículo,
+   * Combustible, Transmisión, Número de unidad, Kilometraje, ¿Son millas?, y
+   * las dos secciones colapsables "Carrocería" y "Aseguradora" completas.
+   *
+   * Excluye a propósito los widgets "Nivel del combustible"/"Nivel de
+   * temperatura": son un gauge circular arrastrable sin ningún `<input>`
+   * nativo asociado (confirmado en vivo, sin `canvas`/`svg` tampoco — es un
+   * widget de arrastre puro por CSS/JS) y no están entre los campos
+   * explícitamente nombrados por la tarea; interactuar con un arrastre
+   * circular de forma fiable no se justifica frente a su valor cosmético.
+   */
+  async completarDetallesVehiculoCompleto(marca: string = MARCA_VEHICULO_PRUEBA) {
+    await this.completarDetallesVehiculoMinimo(marca);
+
+    await this.seleccionarPrimeraOpcionChosen(L.SELECT_ANIO);
+    await this.seleccionarPrimeraOpcionChosen(L.SELECT_TIPO_VEHICULO);
+    await this.seleccionarPrimeraOpcionChosen(L.SELECT_TRANSMISION);
+
+    await this.page.locator(L.INPUT_NUMERO_UNIDAD).fill('UNIDAD-QA');
+    await this.page.locator(L.INPUT_KILOMETRAJE).fill('12345');
+    await this.page.locator(L.INPUT_PORCENTAJE_BATERIA).fill('80');
+    // El checkbox real queda oculto tras su slider visual (mismo patrón que
+    // TOGGLE_SIN_PLACA) — el click debe ir sobre su <label>, no el input.
+    await this.page.locator(L.TOGGLE_SON_MILLAS).locator('xpath=ancestor::label[1]').click();
+
+    // Carrocería
+    await this.page.getByText('Carrocería', { exact: true }).click();
+    await this.page.locator(L.INPUT_NUMERO_CHASIS).fill('CHASIS-QA');
+    await this.page.locator(L.INPUT_NUMERO_MOTOR).fill('MOTOR-QA');
+    await this.page.locator(L.INPUT_TIPO_ACEITE).fill('Sintético');
+    await this.page.locator(L.INPUT_FILTRO_ACEITE).fill('Filtro QA');
+    await this.page.locator(L.INPUT_FLOTILLA).fill('Flotilla QA');
+
+    // Aseguradora
+    await this.page.locator(L.TOGGLE_SECCION_ASEGURADORA).click();
+    await this.seleccionarPrimeraOpcionChosen(L.SELECT_ASEGURADORA);
+    await this.seleccionarPrimeraOpcionChosen(L.SELECT_CONTACTO_ASEGURADORA);
+    await this.page.locator(L.INPUT_POLIZA).fill('POLIZA-QA');
+    await this.page.locator(L.INPUT_NOMBRE_ASEGURADO).fill('Asegurado QA');
+    await this.page.locator(L.INPUT_NUMERO_AVISO).fill('AVISO-QA');
   }
 
   /**
@@ -840,19 +1800,30 @@ export class RecepcionPage {
     await expect(tarjeta, `El producto "${nombreExacto}" no está disponible en el catálogo`).toBeVisible({ timeout: TIMEOUTS.CARGA });
     await tarjeta.click();
     await expect(
-      this.page.locator('.noty_bar', { hasText: 'Producto añadido' }),
+      this.page.locator('.noty_bar', { hasText: 'Producto añadido' }).last(),
       'No apareció el toast de "Producto añadido a la orden"'
     ).toBeVisible({ timeout: TIMEOUTS.CARGA });
   }
 
-  /** Agrega un servicio real del catálogo (no uno creado por quick-add) por un texto parcial de su nombre visible. */
+  /**
+   * Agrega un servicio real del catálogo (no uno creado por quick-add) por
+   * un texto parcial de su nombre visible. Busca primero por ese texto
+   * (confirmado en vivo: el catálogo por defecto no lista todos los
+   * servicios reales del ambiente, así que un servicio específico —p. ej.
+   * uno con un paquete de inspección asociado— puede no estar entre las
+   * tarjetas iniciales sin buscarlo explícitamente).
+   */
   async agregarServicioDelCatalogo(textoParcial: string = SERVICIO_CATALOGO_PRUEBA) {
     await this.cambiarPestanaCatalogo('Servicios');
+    await this.page.locator('#search_vehicle_service_left').fill(textoParcial);
+    // Sin `exact`: mismo motivo que los demás botones con ícono de este
+    // archivo (nombre accesible con espacio inicial).
+    await this.page.getByRole('button', { name: 'Buscar' }).locator('visible=true').first().click();
     const tarjeta = this.page.locator('div,span').filter({ hasText: textoParcial }).locator('visible=true').last();
     await expect(tarjeta, `Ningún servicio del catálogo coincide con "${textoParcial}"`).toBeVisible({ timeout: TIMEOUTS.CARGA });
     await tarjeta.click();
     await expect(
-      this.page.locator('.noty_bar', { hasText: 'Servicio añadido' }),
+      this.page.locator('.noty_bar', { hasText: 'Servicio añadido' }).last(),
       'No apareció el toast de "Servicio añadido a la orden"'
     ).toBeVisible({ timeout: TIMEOUTS.CARGA });
   }
@@ -873,7 +1844,7 @@ export class RecepcionPage {
     await this.page.getByRole('button', { name: 'Agregar', exact: true }).click();
 
     await expect(
-      this.page.locator('.noty_bar', { hasText: 'Producto añadido' }),
+      this.page.locator('.noty_bar', { hasText: 'Producto añadido' }).last(),
       'No apareció el toast de "Producto añadido a la orden" tras crear el producto rápido'
     ).toBeVisible({ timeout: TIMEOUTS.CARGA });
   }
@@ -897,7 +1868,7 @@ export class RecepcionPage {
     await this.page.getByRole('button', { name: 'Guardar' }).click();
 
     await expect(
-      this.page.locator('.noty_bar', { hasText: 'Servicio añadido' }),
+      this.page.locator('.noty_bar', { hasText: 'Servicio añadido' }).last(),
       'No apareció el toast de "Servicio añadido a la orden" tras crear el servicio rápido'
     ).toBeVisible({ timeout: TIMEOUTS.CARGA });
   }
@@ -912,6 +1883,640 @@ export class RecepcionPage {
   async obtenerTotalesPorLineaCarrito(): Promise<number[]> {
     const textos = await this.page.locator(L.TOTALES_POR_LINEA_CARRITO).allTextContents();
     return textos.map(parseMonedaCR);
+  }
+
+  /**
+   * Ids dinámicos (`{productoId}_{numeroLinea}`, ej. "37089_1") de todas las
+   * líneas actualmente en el carrito, en el orden en que aparecen — para
+   * ubicar un ítem específico sobre el que operar (mecánico/garantía/
+   * eliminar), ya que estos ids se generan en el servidor y no se conocen
+   * de antemano.
+   */
+  async obtenerIdsItemsCarrito(): Promise<string[]> {
+    const ids = await this.page.locator('[id^="table_product_name_"]').evaluateAll((els) => els.map((el) => el.id.replace('table_product_name_', '')));
+    return ids;
+  }
+
+  /**
+   * Crea un producto NUEVO real de catálogo (no un "Producto Rápido" ni un
+   * ítem temporal) desde el wizard de "Producto y servicios": modal de dos
+   * pasos ("Inf. General" → "Costos"). Confirmado en vivo: crearlo NO lo
+   * agrega a la orden actual — solo lo deja disponible en el catálogo para
+   * buscarlo y agregarlo después con `agregarProductoDelCatalogo(nombre)`
+   * (el propio modal lo advierte con un tooltip: "este no se agregará de
+   * manera inmediata a su lista de servicios seleccionados").
+   */
+  async crearProductoNuevoCatalogo(datos: { nombre: string; costo: string; precio: string }) {
+    const modal = this.page.locator(L.MODAL_PRODUCTO_NUEVO);
+    const btnSiguiente = modal.locator('.actions a', { hasText: 'Siguiente' });
+
+    // Reintenta abrir el modal si el wizard interno no llegó a inicializarse:
+    // confirmado en vivo (consola del navegador) que este modal dispara
+    // ocasionalmente `TypeError: $(...).steps is not a function` — una
+    // carrera real de la propia app entre inyectar el HTML del modal vía
+    // AJAX y que el plugin jQuery Steps ya esté cargado. Cuando eso pasa,
+    // el botón "Siguiente" nunca se arma. Cerrar y reabrir el modal le da
+    // al plugin una nueva oportunidad de estar listo. 3 intentos (no 2):
+    // confirmado en la corrida base de esta sesión que 2 intentos pueden no
+    // bastar bajo carga del ambiente compartido — sigue siendo un límite
+    // acotado y determinístico, no una espera ciega.
+    let listo = false;
+    for (let intento = 1; intento <= 3 && !listo; intento++) {
+      await this.cambiarPestanaCatalogo('Productos');
+      await this.page.locator(L.TARJETA_AGREGAR_PRODUCTO).locator('visible=true').first().click();
+      await this.page.getByRole('heading', { name: L.HEADING_PRODUCTO_NORMAL, exact: true }).click();
+      await expect(modal, 'No apareció el modal de crear producto nuevo').toBeVisible({ timeout: TIMEOUTS.CARGA });
+      await this.page.locator(L.INPUT_PRODUCTO_NUEVO_NOMBRE).fill(datos.nombre);
+
+      listo = await btnSiguiente
+        .waitFor({ state: 'visible', timeout: TIMEOUTS.CARGA })
+        .then(() => true)
+        .catch(() => false);
+      if (!listo) {
+        if (intento === 3) throw new Error('El wizard interno de crear producto nunca inicializó el botón "Siguiente"');
+        // El botón "Cancelar" también lo arma el plugin jQuery Steps — si
+        // falló su inicialización, "Cancelar" tampoco existe. Se usa el
+        // botón "×" genérico del modal (siempre presente, ajeno al plugin)
+        // para cerrarlo en ese caso.
+        await modal.locator('.close').first().click({ timeout: TIMEOUTS.CARGA });
+        await expect(modal, 'El modal de crear producto nuevo no se cerró tras cancelar').toBeHidden({ timeout: TIMEOUTS.CARGA });
+      }
+    }
+    // El botón "Siguiente" de este wizard interno vive en un widget de
+    // paginación aparte (`<a>` dentro de `.actions`, no un `<button>`) — hay
+    // que acotar la búsqueda al modal: el wizard EXTERNO de la recepción
+    // también tiene su propio botón "Siguiente", bloqueado por el overlay
+    // del modal pero igual alcanzable por un `getByRole` sin acotar.
+    await btnSiguiente.click();
+
+    await this.page.locator(L.INPUT_PRODUCTO_NUEVO_COSTO).fill(datos.costo);
+    await this.page.locator(L.INPUT_PRODUCTO_NUEVO_PRECIO).fill(datos.precio);
+    await modal.locator('.actions a', { hasText: /^(Guardar|Finalizar)$/ }).first().click();
+
+    await expect(
+      this.page.locator('.noty_bar', { hasText: 'agregado correctamente' }).last(),
+      'No apareció el toast de producto creado correctamente'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await expect(modal, 'El modal de crear producto nuevo no se cerró').toBeHidden({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /**
+   * Crea un servicio NUEVO real de catálogo ("Servicio Normal", no rápido)
+   * desde el wizard. A diferencia del producto nuevo, este modal es de un
+   * solo paso pero exige un flujo de dos clics: llenar los datos de la
+   * sublínea del servicio y presionar "Agregar servicio" (registra esa
+   * sublínea en el grupo) ANTES de "Guardar" — si se omite ese clic,
+   * "Guardar" falla con el toast "¡No hay ningún servicio que guardar!" sin
+   * cerrar el modal. Igual que el producto nuevo, esto NO agrega el
+   * servicio a la orden actual, solo lo deja disponible en el catálogo.
+   */
+  async crearServicioNuevoCatalogo(datos: { nombre: string; precio: string }) {
+    await this.cambiarPestanaCatalogo('Servicios');
+    await this.page.locator(L.TARJETA_AGREGAR_SERVICIO).locator('visible=true').first().click();
+    await expect(this.page.getByRole('heading', { name: L.HEADING_TIPO_SERVICIO })).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await this.page.getByRole('heading', { name: L.HEADING_SERVICIO_NORMAL, exact: true }).click();
+
+    const modal = this.page.locator(L.MODAL_SERVICIO_NUEVO);
+    await expect(modal, 'No apareció el modal de crear servicio nuevo').toBeVisible({ timeout: TIMEOUTS.CARGA });
+
+    await this.page.locator(L.INPUT_SERVICIO_NUEVO_GRUPO).fill(datos.nombre);
+    await this.page.locator(L.INPUT_SERVICIO_NUEVO_NOMBRE).fill(datos.nombre);
+    // pressSequentially (no fill): confirmado en vivo que este campo de
+    // precio recalcula su valor final mediante `onkeyup="calculatePrice(0)"`
+    // — `fill()` solo dispara `input`/`change`, nunca `keyup`, así que el
+    // servicio se guardaba con precio $0 aunque el campo mostrara el valor
+    // correcto justo antes de guardar.
+    await this.page.locator(L.INPUT_SERVICIO_NUEVO_PRECIO).pressSequentially(datos.precio);
+    await this.page.locator(L.BTN_SERVICIO_NUEVO_AGREGAR_SUBLINEA).click();
+    await this.page.locator(L.BTN_SERVICIO_NUEVO_GUARDAR).click();
+
+    await expect(modal, 'El modal de crear servicio nuevo no se cerró').toBeHidden({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /**
+   * Asigna el primer mecánico disponible a un ítem del carrito (producto o
+   * servicio), identificado por su id dinámico `{productoId}_{numeroLinea}`
+   * (ej. "37089_1", visible en `#table_product_name_{id}`). Abre el menú de
+   * opciones (⋮) del ítem, entra a "Asignar mecánico" y confirma con el
+   * botón "Asignar" del primer mecánico de la lista.
+   */
+  async asignarMecanicoAlPrimerItem(itemId: string) {
+    const [productoId] = itemId.split('_');
+    await this.page.locator(`#table_product_name_${itemId}`).locator('.dropdown-toggle').click();
+    await this.page.locator(`a[onclick*="callSetNewMechanicService(${productoId},"]`).first().click();
+
+    const modal = this.page.locator('#dialog_add_mechanic_service').first();
+    await expect(modal, 'No apareció el modal de "Asignar mecánico"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    const primerMecanico = this.page.locator('.mechanic-list .assign-btn').first();
+    await expect(primerMecanico, 'No hay ningún mecánico disponible para asignar').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await primerMecanico.click();
+
+    await expect(
+      this.page.locator('.noty_bar', { hasText: 'Mecánico Asignado' }).last(),
+      'No apareció el toast de "Mecánico Asignado"'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+
+    // El modal no se cierra solo tras asignar (a diferencia de otros modales
+    // de este módulo) — sin cerrarlo, su overlay bloquea cualquier clic
+    // posterior en el resto de la página.
+    await modal.locator('.close').first().click();
+    await expect(modal, 'El modal de "Asignar mecánico" no se cerró').toBeHidden({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /**
+   * Aplica la garantía a un ítem del carrito: confirmado en vivo que esto
+   * pone su precio en $0 de inmediato (checkbox del menú de opciones ⋮, no
+   * requiere confirmación aparte). El total general del carrito baja en la
+   * misma proporción.
+   */
+  async aplicarGarantiaAlItem(itemId: string) {
+    await this.page.locator(`#table_product_name_${itemId}`).locator('.dropdown-toggle').click();
+    await this.page.locator(`#apply_warranty_item_${itemId}`).check({ force: true });
+    await expect
+      .poll(async () => (await this.page.locator(`#total_by_product_${itemId}`).first().textContent())?.trim(), {
+        message: 'El precio del ítem no bajó a 0 tras aplicar la garantía',
+        timeout: TIMEOUTS.CARGA,
+      })
+      .toMatch(/^0([.,]0+)?$/);
+    // Marcar el checkbox (a diferencia de un clic en un link del menú) no
+    // cierra el dropdown de Bootstrap solo — este depende de un clic FUERA
+    // del propio dropdown para cerrarse (confirmado en vivo: `Escape` no
+    // tiene ningún efecto) — sin cerrarlo, se queda flotando sobre otros
+    // ítems y bloquea clics posteriores en ellos.
+    await this.page.locator('.item-stats-header').click();
+  }
+
+  /**
+   * Elimina un ítem del carrito. Confirmado en vivo: "Eliminar" del menú ⋮
+   * dispara un SweetAlert de confirmación ("¿Está seguro de eliminar el
+   * producto?" → botón "Eliminar") — sin confirmarlo, el ítem NO se elimina
+   * ni el total se recalcula (queda como si nada hubiera pasado, sin error).
+   */
+  async eliminarItemDelCarrito(itemId: string) {
+    const fila = this.page.locator(`#table_product_name_${itemId}`);
+    // Reintenta todo el flujo si el ítem no desaparece: confirmado en vivo
+    // (varias corridas idénticas, unas veces falla y otras no) que esto es
+    // la misma inestabilidad ambiental crónica de esta máquina compartida,
+    // no un fallo determinístico — el mismo código elimina el ítem
+    // correctamente la mayoría de las veces.
+    for (let intento = 1; intento <= 2; intento++) {
+      await fila.locator('.dropdown-toggle').click();
+      await this.page.locator(`a[onclick*="remove_from_list('${itemId}')"]`).first().click();
+      // Se acota el botón "Eliminar" al popup de SweetAlert realmente
+      // visible (`.last()`): confirmado en vivo que un `getByRole` sin
+      // acotar puede resolver a un botón "Eliminar" de un diálogo
+      // distinto/residual en la misma página, que no hace nada.
+      await this.page.locator('.sweet-alert').last().getByRole('button', { name: 'Eliminar', exact: true }).click();
+
+      const eliminado = await fila
+        .waitFor({ state: 'detached', timeout: TIMEOUTS.CARGA })
+        .then(() => true)
+        .catch(() => false);
+      if (eliminado) return;
+      if (intento === 2) throw new Error(`El ítem ${itemId} seguía en el carrito tras confirmar "Eliminar" (2 intentos)`);
+    }
+  }
+
+  /**
+   * Activa/desactiva "Mostrar precios con IVA" del carrito. Alterna qué
+   * conjunto de elementos de precio queda visible (`*_without_iva` vs
+   * `*_with_iva`, ambos presentes siempre en el DOM para cada línea) — se
+   * usa `expect.poll` en vez de una espera fija porque confirmado en vivo el
+   * cambio de visibilidad no es instantáneo.
+   */
+  async alternarMostrarPreciosConIva() {
+    const elementoConIva = this.page.locator('.total_by_product_with_iva').first();
+    const estabaVisibleAntes = await elementoConIva.isVisible();
+    await this.page.locator(L.TOGGLE_MOSTRAR_PRECIOS_CON_IVA).locator('xpath=ancestor::label[1]').click();
+    await expect
+      .poll(() => elementoConIva.isVisible(), {
+        message: 'El toggle "Mostrar precios con IVA" no cambió la vista del carrito',
+        timeout: TIMEOUTS.CARGA,
+      })
+      .toBe(!estabaVisibleAntes);
+  }
+
+  /**
+   * Sube una fotografía "Antes" o "Después" para un servicio específico, en
+   * el paso "Fotografías" del wizard (sección propia por servicio, distinta
+   * de las fotos generales de la recepción). El input real de Dropzone.js
+   * NO es descendiente del contenedor visible del servicio (Dropzone lo
+   * cuelga aparte, confirmado en vivo con varios candidatos sin `id` cuyo
+   * padre directo es `<body>`) — se ubica de forma confiable marcando
+   * `elemento.dropzone.hiddenFileInput` con un atributo temporal vía JS, en
+   * vez de adivinar su posición en el DOM.
+   */
+  async subirFotoServicio(idServicio: string, etapa: 'antes' | 'despues', rutaArchivo: string) {
+    const dropzoneId = `dropzone_ro_service_item_${etapa === 'antes' ? 'before' : 'after'}_photos_${idServicio}`;
+    const marcador = `data-test-target-${idServicio}-${etapa}`;
+    await this.page.evaluate(
+      ({ elId, attr }) => {
+        const el = document.getElementById(elId) as (HTMLElement & { dropzone?: { hiddenFileInput: HTMLInputElement } }) | null;
+        if (!el?.dropzone) throw new Error(`No se encontró la instancia de Dropzone en #${elId}`);
+        el.dropzone.hiddenFileInput.setAttribute(attr, 'yes');
+      },
+      { elId: dropzoneId, attr: marcador }
+    );
+    await this.page.locator(`input[${marcador}="yes"]`).setInputFiles(rutaArchivo);
+    await expect(
+      this.page.locator(`#content_ro_service_item_photos_list_${idServicio}_1 img`).first(),
+      `No se reflejó la foto subida para el servicio ${idServicio} (${etapa})`
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  // ─── Inspección (paquetes) ──────────────────────────────────────────────────
+
+  /**
+   * Completa el primer componente de inspección disponible (llena su campo
+   * de nota/puntaje) y confirma que los puntos otorgados del paquete se
+   * actualizan en tiempo real — así se valida que el paquete no solo
+   * "aparece", sino que queda realmente asociado a la orden. Solo aplica
+   * cuando el servicio agregado a la orden tiene un paquete de inspección
+   * configurado (ver `SERVICIO_CON_PAQUETE_INSPECCION`); si no hay ningún
+   * paquete, este método falla con un mensaje explícito en vez de un
+   * timeout genérico.
+   */
+  async completarPrimerComponenteInspeccion() {
+    const campoNota = this.page.locator('[id^="inspection-score-"]').first();
+    await expect(campoNota, 'No hay ningún paquete de inspección con componentes para completar').toBeVisible({ timeout: TIMEOUTS.CARGA });
+
+    const otorgadosAntes = await this.page.getByText(/Otorgados:/).textContent();
+
+    await campoNota.fill('5');
+    await campoNota.blur();
+
+    await expect
+      .poll(async () => this.page.getByText(/Otorgados:/).textContent(), { timeout: TIMEOUTS.CARGA })
+      .not.toBe(otorgadosAntes);
+  }
+
+  /**
+   * En el primer componente de inspección disponible: activa "Requiere
+   * reemplazo", agrega un producto normal (búsqueda del catálogo), un
+   * producto rápido y un producto externo, y finalmente activa "Aprobado".
+   * Devuelve el id dinámico del componente usado (para que el caller pueda
+   * inspeccionar/limpiar si lo necesita).
+   *
+   * Varios detalles confirmados en vivo, ninguno documentado en la UI:
+   * - "Aprobado" empieza deshabilitado y solo se habilita después de activar
+   *   "Requiere reemplazo" (no se puede aprobar un componente que no
+   *   necesita reemplazo).
+   * - El bloque de productos del componente (búsqueda/rápido/externo) vive
+   *   colapsado en una fila aparte; hay que hacer clic en su encabezado
+   *   para expandirlo antes de que el input de búsqueda quede interactuable.
+   * - El botón "Buscar" de la búsqueda normal de productos queda tapado por
+   *   los botones "P. Rápido"/"P. Externo" (se solapan en este layout) — se
+   *   dispara la búsqueda con Enter en el input en vez de clic en el botón.
+   * - El modal "Agregar producto externo" NO valida ni muestra ningún error
+   *   visible si falta algo: simplemente no hace nada al hacer clic en
+   *   "Guardar". Confirmado por eliminación qué lo bloqueaba: el combo
+   *   "Proveedor" (un Chosen sin id fijo, ligado a un `data-temp-id`
+   *   dinámico) debe tener una opción real seleccionada (no su placeholder,
+   *   mismo patrón ya conocido de otros combos Chosen de este módulo) Y el
+   *   toggle "Aplica IVA" (activado por defecto) debe desactivarse — con
+   *   IVA activo, el modal exige los combos de Tipo/Tarifa de impuesto
+   *   (ocultos hasta que se necesitan) aunque no se muestre ningún mensaje
+   *   de que son obligatorios.
+   * - "Requiere reemplazo" y los 3 productos (normal/rápido/externo) SÍ
+   *   quedan guardados de verdad: confirmado reabriendo la orden ya generada
+   *   por "Paso 1: Editar orden" (única vista donde se ve el estado real
+   *   persistido) — los 3 productos y el toggle de reemplazo siguen ahí.
+   * - "Aprobado" NO queda guardado: reabriendo la misma orden, el checkbox
+   *   vuelve a aparecer sin marcar. Confirmado también por red: el clic en
+   *   "Continuar" del modal de confirmación no dispara ninguna petición al
+   *   servidor — es un cambio puramente visual que se pierde. Parece ser una
+   *   limitación/bug real de la aplicación (no de este test): no se encontró
+   *   ninguna acción adicional en la UI que efectivamente lo guarde. El test
+   *   igual completa el clic en "Continuar" porque es el paso real que
+   *   recorre un usuario, pero no se debe asumir que "Aprobado" persiste.
+   */
+  async activarReemplazoYAgregarProductos(): Promise<string> {
+    const campoNota = this.page.locator('[id^="inspection-score-"]').first();
+    await expect(campoNota, 'No hay ningún componente de inspección disponible para reemplazo/productos').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    const idComponente = (await campoNota.getAttribute('id'))!.replace('inspection-score-', '');
+
+    // 1. Requiere reemplazo
+    const toggleReemplazo = this.page.locator(`#replacement_${idComponente}`);
+    await toggleReemplazo.locator('xpath=ancestor::label[1]').click();
+    await expect(toggleReemplazo, 'El toggle "Requiere reemplazo" no quedó activado').toBeChecked();
+
+    // Expandir el bloque de productos del componente (colapsado por defecto)
+    await this.page.locator(`#product-header-${idComponente}`).click();
+    const inputBusqueda = this.page.locator(`#product-search-input-${idComponente}`);
+    await expect(inputBusqueda, 'El bloque de productos del componente no se expandió').toBeVisible({ timeout: TIMEOUTS.CARGA });
+
+    const listaProductosComponente = this.page.locator(`#product-list-${idComponente}`);
+    const nombreProductoRapido = 'Producto Rápido Inspección QA';
+
+    // 2. Producto normal (búsqueda del catálogo)
+    await inputBusqueda.fill(PRODUCTO_CATALOGO_PRUEBA.split(' ')[0]);
+    await inputBusqueda.press('Enter');
+    const resultadosNormal = this.page.locator(`#product-search-results-${idComponente} .package-inspection-product-result-item`);
+    await expect(resultadosNormal.first(), 'La búsqueda de producto normal no devolvió resultados').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await resultadosNormal.first().click();
+    // Valida que el producto agregado queda realmente reflejado en la lista
+    // de productos del paquete de la orden, no solo que "el click funcionó".
+    await expect(
+      listaProductosComponente.getByText(PRODUCTO_CATALOGO_PRUEBA.split(' ')[0]),
+      'El producto normal no quedó reflejado en la lista de productos del componente'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+
+    // 3. Producto rápido (mismo modal global que `agregarProductoRapido`, abierto directo sin el paso previo del catálogo)
+    await this.page.locator(`#quick-product-btn-${idComponente}`).click();
+    const modalRapido = this.page.locator('#dialog_quick_product');
+    await expect(modalRapido, 'No apareció el modal de "Producto Rápido"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await this.page.locator(L.INPUT_PRODUCTO_RAPIDO_NOMBRE).fill(nombreProductoRapido);
+    await this.page.locator(L.INPUT_PRODUCTO_RAPIDO_COSTO).fill('10');
+    await this.page.locator(L.INPUT_PRODUCTO_RAPIDO_PRECIO).fill('20');
+    await modalRapido.getByRole('button', { name: 'Agregar' }).click();
+    await expect(modalRapido, 'El modal de "Producto Rápido" no se cerró tras agregar').toBeHidden({ timeout: TIMEOUTS.CARGA });
+    await expect(
+      listaProductosComponente.getByText(nombreProductoRapido),
+      'El producto rápido no quedó reflejado en la lista de productos del componente'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+
+    // 4. Producto externo
+    await this.page.locator(`#external-product-btn-${idComponente}`).click();
+    const modalExterno = this.page.locator('#dialog_add_external_product_to_component');
+    await expect(modalExterno, 'No apareció el modal de "Agregar producto externo"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+
+    // Búsqueda con reintento: confirmado en vivo que a veces la primera
+    // búsqueda no devuelve resultados (catálogo de productos externos con
+    // datos compartidos/mutables) aunque el mismo término sí encuentra algo
+    // al reintentar — se reintenta la búsqueda en cada sondeo en vez de
+    // asumir un único intento.
+    const resultadoExterno = this.page.locator('#external_product_list .external-product-item').first();
+    await expect
+      .poll(
+        async () => {
+          await this.page.locator('#external_product_search_input').fill('a');
+          await this.page.locator('#external_product_search_input').press('Enter');
+          return resultadoExterno.isVisible();
+        },
+        { message: 'La búsqueda de producto externo no devolvió resultados', timeout: TIMEOUTS.CARGA }
+      )
+      .toBe(true);
+    // Se captura el nombre real del resultado (no se asume uno fijo: el
+    // catálogo de productos externos es dato compartido/mutable) para poder
+    // validar después que quedó reflejado en la lista del componente.
+    const nombreProductoExterno = (await resultadoExterno.locator('.external-product-item-header').textContent())?.trim() ?? '';
+    await resultadoExterno.click();
+
+    await this.page.locator('#added_external_products_list .product-cost').first().fill('50');
+
+    // Proveedor: saltar el placeholder "Seleccionar Proveedor..." (mismo patrón que otros combos Chosen)
+    const contenedorProveedor = this.page
+      .locator('.product-provider')
+      .locator('xpath=following-sibling::div[contains(@class,"chosen-container")][1]');
+    await contenedorProveedor.locator('a.chosen-single').click();
+    const opcionesProveedor = contenedorProveedor.locator('.chosen-results li.active-result');
+    await expect(opcionesProveedor.first(), 'El combo "Proveedor" no mostró ninguna opción').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await opcionesProveedor.nth(1).click();
+
+    // "Aplica IVA" viene activado por defecto y bloquea el guardado (ver nota del método)
+    await this.page.locator('.product-apply-iva').locator('xpath=ancestor::label[1]').click();
+
+    await this.page.locator('#btn_save_external_products').click();
+    await expect(modalExterno, 'El modal de "Agregar producto externo" no se cerró tras Guardar').toBeHidden({ timeout: TIMEOUTS.CARGA });
+    // toBeAttached (no toBeVisible): confirmado en vivo que guardar el
+    // producto externo dispara un refresco del panel de productos del
+    // componente que lo deja colapsado de nuevo (mismo panel que se expandió
+    // al inicio con el clic en el encabezado) — el producto queda en el DOM,
+    // solo deja de estar visible.
+    await expect(
+      listaProductosComponente.getByText(nombreProductoExterno),
+      'El producto externo no quedó reflejado en la lista de productos del componente'
+    ).toBeAttached({ timeout: TIMEOUTS.CARGA });
+
+    // 5. Aprobado (solo queda habilitado tras activar "Requiere reemplazo")
+    const toggleAprobado = this.page.locator(`#approved_${idComponente}`);
+    await expect(toggleAprobado, 'El toggle "Aprobado" quedó deshabilitado').toBeEnabled({ timeout: TIMEOUTS.CARGA });
+    await toggleAprobado.locator('xpath=ancestor::label[1]').click();
+    // Activar "Aprobado" dispara un SweetAlert de confirmación ("Confirmar
+    // estado de aprobación" → botón "Continuar") — sin confirmarlo, su
+    // overlay se queda bloqueando toda interacción posterior con la página
+    // (confirmado en vivo: el siguiente clic en "Siguiente" fallaba por
+    // "sweet-overlay intercepts pointer events").
+    await this.page.getByRole('button', { name: 'Continuar' }).click();
+    await expect(this.page.locator('.sweet-overlay'), 'El overlay de confirmación de "Aprobado" no se cerró').toBeHidden({ timeout: TIMEOUTS.CARGA });
+    // Esto solo confirma el estado visual inmediato del checkbox, NO que
+    // haya quedado guardado en el servidor — ver la nota grande al inicio
+    // del método: "Aprobado" no dispara ninguna petición de red al
+    // confirmar, y reabriendo la orden ya generada el checkbox vuelve a
+    // aparecer sin marcar. Comportamiento confirmado con el usuario del
+    // proyecto; no se encontró ninguna acción adicional en la UI que lo
+    // persista de verdad.
+    await expect(toggleAprobado, 'El toggle "Aprobado" no quedó activado').toBeChecked();
+
+    // Confirma que los 3 productos siguen reflejados en la orden después de
+    // aprobar (no solo antes) — activar "Aprobado" no debe hacerlos
+    // desaparecer. Se valida que sigan ADJUNTOS al DOM, no "visibles":
+    // confirmado en vivo que aprobar colapsa de nuevo el panel de productos
+    // del componente (mismo panel que se expandió al inicio), así que sus
+    // filas siguen existiendo pero dejan de estar visibles — es el
+    // comportamiento normal de la app, no una pérdida de datos.
+    await expect(
+      listaProductosComponente.getByText(PRODUCTO_CATALOGO_PRUEBA.split(' ')[0]),
+      'El producto normal ya no aparece en la orden después de aprobar'
+    ).toBeAttached({ timeout: TIMEOUTS.CARGA });
+    await expect(
+      listaProductosComponente.getByText(nombreProductoRapido),
+      'El producto rápido ya no aparece en la orden después de aprobar'
+    ).toBeAttached({ timeout: TIMEOUTS.CARGA });
+    await expect(
+      listaProductosComponente.getByText(nombreProductoExterno),
+      'El producto externo ya no aparece en la orden después de aprobar'
+    ).toBeAttached({ timeout: TIMEOUTS.CARGA });
+
+    return idComponente;
+  }
+
+  // ─── Enderezado y Pintura ───────────────────────────────────────────────────
+
+  /**
+   * Recorre el flujo completo de "Enderezado y Pintura": Tipo de Vehículo →
+   * primera Parte disponible → primera Pieza disponible → primer Servicio
+   * disponible → primer Precio real del modal "Selecciona un precio"
+   * (excluye la tarjeta "Agregar precio a este servicio", que crea un precio
+   * nuevo en vez de seleccionar uno existente). Mismo widget conceptual que
+   * en POS (`pos-navegacion.page.ts`), reimplementado aquí porque este
+   * módulo usa ids propios distintos.
+   */
+  async agregarServicioEnderezadoYPintura(tipoVehiculo: string = TIPO_VEHICULO_PINTURA_PRUEBA) {
+    await this.seleccionarOpcionChosen(L.SELECT_TIPO_VEHICULO_PINTURA, tipoVehiculo);
+
+    // La "parte" es la tarjeta que aparece sobre los paneles Piezas/Servicios
+    // (p. ej. "Puerta") apenas se elige el tipo de vehículo — hay que hacer
+    // clic en ella explícitamente, no se auto-selecciona sola aunque sea la
+    // única disponible.
+    const primeraParte = this.page.locator('[id^="name_part_"]').first();
+    await expect(primeraParte, 'No apareció ninguna parte para el tipo de vehículo elegido').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await primeraParte.click();
+
+    const primeraPieza = this.page.locator('.name_piece').first();
+    await expect(primeraPieza, 'No hay ninguna pieza disponible para la parte de este vehículo').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await primeraPieza.click();
+
+    const primerServicio = this.page.getByText('SEVICIO HONDURAS').first();
+    await expect(primerServicio, 'No hay ningún servicio disponible para la pieza elegida').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await primerServicio.click();
+
+    const modalPrecios = this.page.locator(L.MODAL_PRECIOS_PINTURA);
+    await expect(modalPrecios, 'No apareció el modal "Selecciona un precio"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    const opcionPrecio = this.page.locator(L.OPCION_PRECIO_PINTURA).first();
+    await expect(opcionPrecio, 'No hay ningún precio disponible para este servicio').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await opcionPrecio.click();
+
+    await expect(
+      this.page.locator('.noty_bar', { hasText: 'Servicio añadido' }).last(),
+      'No apareció el toast de "Servicio añadido a la orden" tras seleccionar el precio de Enderezado y Pintura'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  // ─── Abonos ─────────────────────────────────────────────────────────────────
+
+  /**
+   * Campo de monto del paso "Abonos" del wizard — se usa como marcador
+   * funcional de que el paso está presente/disponible (p. ej. tras
+   * desactivarlo tanto para Administrador en "Configurar Pasos de la
+   * Recepción", este input nunca debería aparecer durante el wizard).
+   */
+  get inputMontoAbono(): Locator {
+    return this.page.locator(L.INPUT_MONTO_ABONO);
+  }
+
+  /** Total y abono acumulado mostrados en el resumen del paso "Abonos". */
+  async obtenerResumenAbonos(): Promise<{ subtotal: number; abono: number; total: number }> {
+    const texto = (await this.page.locator('body').innerText()).replace(/\s+/g, ' ');
+    const extraer = (etiqueta: string) => parseMonedaCR(texto.match(new RegExp(`${etiqueta}:?\\s*\\$?\\s*([\\d.,]+)`))?.[1] ?? '0');
+    return {
+      subtotal: extraer('Subtotal'),
+      abono: extraer('Abono'),
+      total: extraer('Total'),
+    };
+  }
+
+  /**
+   * Agrega un abono desde el paso "Abonos": monto, forma de pago y caja
+   * (ambos combos "Chosen", se selecciona la primera opción real de cada
+   * uno salvo que se indique un texto concreto). Confirma el guardado con el
+   * toast real "Abono agregado".
+   */
+  async agregarAbono(datos: { monto: string; formaPago?: string; caja?: string }) {
+    await this.page.locator(L.INPUT_MONTO_ABONO).fill(datos.monto);
+
+    // No se usa seleccionarPrimeraOpcionChosen() para estos dos combos:
+    // confirmado en vivo que su placeholder ("Forma de pago" / "Caja") queda
+    // como `.active-result` #0 aun cuando el `<option>` nativo que le
+    // corresponde en el `<select>` no tiene `value=""` (el heurístico
+    // genérico por `value` vacío no lo detecta) — se salta directamente al
+    // segundo resultado, que sí es una opción real en ambos combos.
+    const seleccionarSegundaOpcion = async (selectorId: string, texto?: string) => {
+      await this.refrescarChosen(selectorId);
+      const contenedor = this.chosenDeSelect(selectorId);
+      await contenedor.locator('a.chosen-single').click();
+      const resultados = contenedor.locator('.chosen-results li.active-result');
+      await expect(resultados.first(), `El combo "${selectorId}" no mostró ninguna opción`).toBeVisible({ timeout: TIMEOUTS.CARGA });
+      const opcion = texto ? resultados.filter({ hasText: texto }).first() : resultados.nth(1);
+      await opcion.click();
+    };
+
+    await seleccionarSegundaOpcion(L.SELECT_FORMA_PAGO_ABONO, datos.formaPago);
+    await seleccionarSegundaOpcion(L.SELECT_CAJA_ABONO, datos.caja);
+
+    await this.page.locator(L.BTN_GUARDAR_ABONO).click();
+    await expect(
+      this.page.locator('.noty_bar', { hasText: 'Abono agregado' }),
+      'No apareció el toast de "Abono agregado"'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  // ─── Abonos desde el menú "⋮" de una orden (flujo distinto al del wizard) ───
+
+  get modalAbonoMenu(): Locator {
+    return this.page.locator(L.MODAL_ABONO_MENU);
+  }
+
+  /** Abre "Abonos: Agregar Abono" desde el menú "⋮" ya desplegado. */
+  async abrirAgregarAbonoDesdeMenu(menu: Locator) {
+    const link = menu.locator(L.LINK_ABONOS_AGREGAR_DESDE_MENU);
+    await expect(link, 'El enlace "Abonos: Agregar Abono" no apareció en el menú "⋮"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await link.click();
+    await expect(this.modalAbonoMenu, 'El modal "Agregar Abono" no se abrió').toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /** Saldo actual mostrado en el modal "Agregar Abono" ya abierto. */
+  async obtenerSaldoActualAbonoMenu(): Promise<number> {
+    return parseMonedaCR(await this.page.locator(L.SALDO_ACTUAL_ABONO_MENU).innerText());
+  }
+
+  /** Saldo restante mostrado (recalculado en vivo) en el modal "Agregar Abono" ya abierto. */
+  async obtenerSaldoRestanteAbonoMenu(): Promise<number> {
+    return parseMonedaCR(await this.page.locator(L.INPUT_SALDO_RESTANTE_ABONO_MENU).inputValue());
+  }
+
+  /**
+   * Llena el modal "Agregar Abono" (monto, forma de pago, caja y
+   * observaciones). Mismo hallazgo que en `agregarAbono()` del wizard: los
+   * combos "Forma de pago"/"Aplicar a caja" tienen su placeholder con
+   * `value="0"` (no vacío), así que el heurístico genérico de
+   * `seleccionarPrimeraOpcionChosen()` no lo detecta — se salta directamente
+   * a la segunda opción, que sí es real en ambos.
+   */
+  async llenarFormularioAbonoMenu(datos: { monto: string; observaciones: string; formaPago?: string; caja?: string }) {
+    await this.page.locator(L.INPUT_MONTO_ABONO_MENU).fill(datos.monto);
+    await this.page.locator(L.TEXTAREA_OBSERVACIONES_ABONO_MENU).fill(datos.observaciones);
+
+    const seleccionarSegundaOpcion = async (selectorId: string, texto?: string) => {
+      await this.refrescarChosen(selectorId);
+      const contenedor = this.chosenDeSelect(selectorId);
+      await contenedor.locator('a.chosen-single').click();
+      const resultados = contenedor.locator('.chosen-results li.active-result');
+      await expect(resultados.first(), `El combo "${selectorId}" no mostró ninguna opción`).toBeVisible({ timeout: TIMEOUTS.CARGA });
+      const opcion = texto ? resultados.filter({ hasText: texto }).first() : resultados.nth(1);
+      await opcion.click();
+    };
+
+    await seleccionarSegundaOpcion(L.SELECT_FORMA_PAGO_ABONO_MENU, datos.formaPago);
+    await seleccionarSegundaOpcion(L.SELECT_CAJA_ABONO_MENU, datos.caja);
+  }
+
+  /**
+   * Guarda el abono del modal ya lleno. Confirmado en vivo: dispara
+   * `save_repair_order_payment()` — se ata al toast real de confirmación en
+   * vez de asumir que el modal se cierra solo.
+   */
+  async guardarAbonoMenu() {
+    await this.page.locator(L.BTN_GUARDAR_ABONO_MENU).click();
+    await expect(
+      this.page.locator('.noty_bar'),
+      'No apareció ningún mensaje de confirmación tras guardar el abono'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /**
+   * Activa "Abonos: Imprimir Abono" desde el menú "⋮" ya desplegado.
+   * Confirmado en vivo: este enlace solo aparece una vez la orden tiene al
+   * menos un abono registrado — no está presente en una orden recién creada
+   * sin abonos.
+   *
+   * Confirmado en vivo (investigación dedicada, con un listener de `page` en
+   * el contexto activo durante todo el clic): a diferencia de "Imprimir
+   * Orden" (que sí abre una pestaña real detectable), este enlace llama a
+   * `print_repair_order_payments(id)`, que no genera ninguna pestaña nueva,
+   * ningún modal, ni ningún iframe visible en la página — es un
+   * `window.print()` nativo del navegador. Un navegador headless no expone
+   * ningún DOM inspeccionable para ese diálogo de impresión nativo, así que
+   * no hay contenido real que esta automatización pueda leer para validar
+   * (limitación real de probar `window.print()` en modo headless, no un bug
+   * de la aplicación ni de esta suite). Este método solo hace el clic real y
+   * dispara la captura de errores de JS del propio test — es lo único
+   * verificable de forma honesta en este entorno.
+   */
+  async imprimirAbono(menu: Locator) {
+    const link = menu.locator(L.LINK_ABONOS_IMPRIMIR);
+    await expect(link, 'El enlace "Abonos: Imprimir Abono" no apareció en el menú "⋮"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await link.click();
   }
 
   // ─── Partes del vehículo ────────────────────────────────────────────────────
@@ -1032,6 +2637,14 @@ export class RecepcionPage {
       this.page.locator(L.INPUT_OBSERVACION_SERVICIO_DETALLE),
       'La vista de detalle de la orden no cargó (no apareció la sección de Observaciones)'
     ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    // Para una orden con muchas secciones (Orden completa: componentes de
+    // inspección con productos, enderezado y pintura, abonos, fotos...) el
+    // campo de observaciones puede quedar visible antes de que terminen TODAS
+    // las peticiones AJAX que arma la vista de detalle — confirmado en vivo
+    // que interactuar con el campo antes de ese punto puede no dejar su
+    // listener de guardado realmente enganchado. Se espera a que la red
+    // quede inactiva antes de continuar.
+    await this.page.waitForLoadState('networkidle', { timeout: TIMEOUTS.CARGA }).catch(() => {});
   }
 
   /**
@@ -1047,17 +2660,34 @@ export class RecepcionPage {
         { timeout: TIMEOUTS.CARGA }
       );
 
+    // El listener se arma ANTES de `fill()`, no después: confirmado en vivo
+    // que el guardado puede dispararse por el debounce del evento de
+    // escritura, no estrictamente por "blur" — si se arma el listener recién
+    // antes del blur, la petición puede haber ocurrido (y resuelto) mientras
+    // tanto, y `waitForResponse` nunca la ve. Se reintenta (rellenar + blur)
+    // si aun así no se observa nada dentro de CARGA, ya que en un ambiente
+    // compartido bajo carga la petición puede tardar más en dispararse.
+    async function llenarYEsperarGuardado(campo: Locator, valor: string) {
+      const intentosMax = 3;
+      for (let intento = 1; intento <= intentosMax; intento++) {
+        const guardado = esperarGuardado();
+        await campo.fill(valor);
+        await campo.blur();
+        try {
+          await guardado;
+          return;
+        } catch {
+          if (intento === intentosMax) throw new Error(`No se disparó "saveRepairOrderNotes" tras ${intento} intentos`);
+          await campo.click();
+        }
+      }
+    }
+
     const campoServicio = this.page.locator(L.INPUT_OBSERVACION_SERVICIO_DETALLE);
-    await campoServicio.fill(observacionServicio);
-    const guardadoServicio = esperarGuardado();
-    await campoServicio.blur();
-    await guardadoServicio;
+    await llenarYEsperarGuardado(campoServicio, observacionServicio);
 
     const campoCliente = this.page.locator(L.INPUT_OBSERVACION_CLIENTE_DETALLE);
-    await campoCliente.fill(observacionCliente);
-    const guardadoCliente = esperarGuardado();
-    await campoCliente.blur();
-    await guardadoCliente;
+    await llenarYEsperarGuardado(campoCliente, observacionCliente);
   }
 
   // ─── Firma del cliente ───────────────────────────────────────────────────────

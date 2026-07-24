@@ -785,10 +785,27 @@ export class PosCore {
    * posición: el catálogo puede reordenarse en cualquier momento con solo
    * agregar productos nuevos (confirmado: un producto nuevo desplazó a todos
    * los demás un puesto), así que depender de un índice es frágil por diseño.
+   *
+   * El regex NO ancla el inicio con `^` (solo el final, con `$`) — causa raíz
+   * confirmada en vivo (investigación de pos-facturar.spec.ts, Escenario 11):
+   * en Vista Cuadrícula, CADA tarjeta muestra un código interno numérico
+   * auto-asignado por el propio sistema INMEDIATAMENTE antes del nombre en el
+   * mismo nodo de texto (`.product_box_name`) — confirmado tanto en productos
+   * antiguos del catálogo compartido como en uno recién creado en el momento
+   * de esta misma investigación (p. ej. "3423423605 Investigacion Prefijo
+   * Codigo 1784916942199"), nunca solo el nombre. Un regex anclado también al
+   * inicio (`^\s*NOMBRE\s*$`) NUNCA coincide con ninguna tarjeta real, sin
+   * importar cuánto se espere — no es una condición de carrera, el texto
+   * jamás tiene esa forma. Anclar solo el final seguido de únicamente
+   * espacios, exigiendo además que lo que preceda al nombre sea el inicio del
+   * string o un espacio (nunca otro caracter alfanumérico), sigue evitando
+   * falsos positivos por coincidencia parcial de un nombre distinto que
+   * termine de forma similar, sin depender de la forma exacta (ni longitud)
+   * de ese código interno.
    */
   productoPorNombre(nombre: string): Locator {
     const nombreEscapado = nombre.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return this.page.locator(L.PRODUCTO).filter({ hasText: new RegExp(`^\\s*${nombreEscapado}\\s*$`) });
+    return this.page.locator(L.PRODUCTO).filter({ hasText: new RegExp(`(^|\\s)${nombreEscapado}\\s*$`) });
   }
 
 
@@ -1376,6 +1393,201 @@ export class PosCore {
   }
 
 
+  // ─── Cantidad de una línea del carrito: botones +/- y campo numérico ──────
+  // Confirmado en vivo (investigación de pos-facturar.spec.ts): "−"/"+"
+  // llevan id="down"/"up" NO únicos (se repiten iguales en cada fila) — se
+  // localizan siempre por la clase que sí lleva la clave real
+  // (L.CARRITO_CANTIDAD_BTN_MENOS_CLASE/_MAS_CLASE + clave), nunca por ese id
+  // plano. `#input_product_quantity_<clave>` ya existía en este archivo,
+  // hasta ahora solo para lectura (obtenerDatosLineaCarrito) — aquí se
+  // reutiliza también para escribir directo.
+
+  /**
+   * Lee el código visible ("COD. X", párrafo sin id propio dentro de la fila)
+   * y el código de barras real (`#product_hide_barcode_<clave>`, hidden) de
+   * una línea ya agregada al carrito — necesario para validar el buscador
+   * del grid por código/código de barras (L.PRODUCTO_BUSCADOR_GRID) sin
+   * depender de un producto hardcodeado: se agrega cualquier producto normal
+   * al carrito primero, y estos dos valores se leen de esa misma línea real.
+   */
+  async obtenerCodigoYBarcodeDeLineaCarrito(clave: string): Promise<{ codigo: string; barcode: string }> {
+    const textoCodigo = await this.page
+      .locator(`#table_product_name_${clave}`)
+      .locator('xpath=ancestor::tr[1]')
+      .locator('p', { hasText: /^COD\./ })
+      .textContent();
+    const codigo = (textoCodigo ?? '').replace(/^COD\.\s*/, '').trim();
+    const barcode = await this.page.locator(`#product_hide_barcode_${clave}`).textContent();
+    return { codigo, barcode: (barcode ?? '').trim() };
+  }
+
+
+  /** Lee la cantidad actual de una línea del carrito como número. */
+  async obtenerCantidadProducto(clave: string): Promise<number> {
+    const texto = await this.page.locator(`#input_product_quantity_${clave}`).inputValue();
+    return parseFloat(texto) || 0;
+  }
+
+
+  /**
+   * Presiona el botón "+" de una línea del carrito una vez y espera que la
+   * cantidad realmente suba (nunca asume el resultado) antes de devolver el
+   * control.
+   */
+  async incrementarCantidadProducto(clave: string) {
+    const cantidadAntes = await this.obtenerCantidadProducto(clave);
+    await this.page.locator(`.${L.CARRITO_CANTIDAD_BTN_MAS_CLASE}${clave}`).click();
+    await expect.poll(
+      () => this.obtenerCantidadProducto(clave),
+      { timeout: TIMEOUTS.PAYMENT_MODAL, message: `La cantidad de "${clave}" no subió tras presionar "+"` }
+    ).toBeGreaterThan(cantidadAntes);
+  }
+
+
+  /**
+   * Presiona el botón "−" de una línea del carrito una vez y espera que la
+   * cantidad realmente baje.
+   */
+  async decrementarCantidadProducto(clave: string) {
+    const cantidadAntes = await this.obtenerCantidadProducto(clave);
+    await this.page.locator(`.${L.CARRITO_CANTIDAD_BTN_MENOS_CLASE}${clave}`).click();
+    await expect.poll(
+      () => this.obtenerCantidadProducto(clave),
+      { timeout: TIMEOUTS.PAYMENT_MODAL, message: `La cantidad de "${clave}" no bajó tras presionar "−"` }
+    ).toBeLessThan(cantidadAntes);
+  }
+
+
+  /**
+   * Escribe directamente la cantidad de una línea del carrito en su campo
+   * numérico (`onchange="set_quantity_decimal(...);set_product_all_total(...)"`,
+   * confirmado en vivo) — dispara el recálculo real disparando el evento
+   * `change` con `blur()`, no solo `fill()` (que por sí solo no dispara
+   * `onchange` en Playwright).
+   */
+  async establecerCantidadProducto(clave: string, cantidad: string) {
+    const campo = this.page.locator(`#input_product_quantity_${clave}`);
+    await campo.fill(cantidad);
+    await campo.blur();
+    await expect.poll(
+      () => this.obtenerCantidadProducto(clave),
+      { timeout: TIMEOUTS.PAYMENT_MODAL, message: `La cantidad de "${clave}" no quedó en ${cantidad}` }
+    ).toBe(parseFloat(cantidad));
+  }
+
+
+  // ─── Impresión automática: activar/desactivar ──────────────────────────────
+  // Ver el comentario de L.SWITCH_PRINT para la evidencia completa (ícono del
+  // header + SweetAlert real de confirmación al desactivar).
+
+  /** Lee el estado real de la impresión automática (true = activa) desde el hidden state, no de la clase del ícono. */
+  async obtenerEstadoImpresionAutomatica(): Promise<boolean> {
+    const texto = await this.page.evaluate(
+      (id) => document.getElementById(id)?.textContent ?? '1',
+      L.SWITCH_PRINT_STATE
+    );
+    return texto.trim() === '1';
+  }
+
+
+  /**
+   * Activa o desactiva la impresión automática de facturas (ícono del
+   * header). No hace nada si el estado ya es el solicitado — evita disparar
+   * un SweetAlert y su confirmación innecesariamente. El SweetAlert de
+   * confirmación ("¡Deshabilitar impresión! ... ¿Desea continuar?") solo
+   * aparece al DESACTIVAR (confirmado en vivo); al reactivar no aparece
+   * ninguno, así que se confirma solo si realmente apareció.
+   */
+  async establecerImpresionAutomatica(activar: boolean) {
+    const estadoActual = await this.obtenerEstadoImpresionAutomatica();
+    if (estadoActual === activar) return;
+
+    await this.page.locator(L.SWITCH_PRINT).click();
+    const sweetAlert = this.page.locator('.sweet-alert.visible');
+    const aparecio = await sweetAlert.waitFor({ state: 'visible', timeout: 3_000 }).then(() => true).catch(() => false);
+    if (aparecio) {
+      await sweetAlert.locator('button.confirm').click();
+      await sweetAlert.waitFor({ state: 'hidden', timeout: TIMEOUTS.PAYMENT_MODAL }).catch(() => {});
+    }
+
+    await expect.poll(
+      () => this.obtenerEstadoImpresionAutomatica(),
+      { timeout: TIMEOUTS.PAYMENT_MODAL, message: `La impresión automática no quedó en "${activar}"` }
+    ).toBe(activar);
+  }
+
+
+  // ─── Perfil de producto ─────────────────────────────────────────────────────
+  // Link real dentro de cada tarjeta del grid — ver el comentario de
+  // L.PRODUCTO_LINK_PERFIL para la evidencia (target="_blank", href real con
+  // product_id/company_id).
+
+  /**
+   * Abre el perfil del producto indicado (link dentro de su tarjeta del
+   * grid, `target="_blank"`) y devuelve la pestaña nueva ya cargada — quien
+   * llama decide qué validar en ella y debe cerrarla. `metadato.locator` es
+   * la tarjeta ya localizada por cualquiera de los métodos `obtenerPrimer...`
+   * de esta clase.
+   */
+  async abrirPerfilProducto(metadato: MetadatoProducto): Promise<Page> {
+    const link = metadato.locator.locator('xpath=ancestor::*[contains(@class,"product_box")][1]').locator(L.PRODUCTO_LINK_PERFIL);
+    const [perfil] = await Promise.all([
+      this.page.context().waitForEvent('page', { timeout: TIMEOUTS.PAYMENT_MODAL }),
+      link.click(),
+    ]);
+    await perfil.waitForLoadState('domcontentloaded');
+    return perfil;
+  }
+
+
+  // ─── Reordenar líneas del carrito ──────────────────────────────────────────
+  // Investigado en vivo (pos-facturar.spec.ts): la tabla real del carrito
+  // (#table_buy_list, un <tbody>) inicializa `Sortable.create(...)` (librería
+  // SortableJS, NO jQuery UI — confirmado que jQuery.ui no está cargado en
+  // este ambiente) con `handle: '.drag-handler'` (drag_table_td.js, script
+  // propio de la aplicación, leído directo del bundle real servido). Cada
+  // fila trae ese `.drag-handler` (icono "ion-arrow-move") como primera
+  // celda — confirmado en el HTML real de una fila.
+  //
+  // Confirmado en vivo, en repetidos intentos con distintas técnicas
+  // (mouse.move/down/up manual con múltiples pasos y pausas, Locator.dragTo()
+  // con sourcePosition/targetPosition apuntando exactamente al handle real,
+  // tanto sobre el propio ícono como sobre la fila completa): la propiedad
+  // real `row.draggable` NUNCA pasa a `true`, ni siquiera manteniendo el
+  // mousedown activo sobre el handle exacto — es decir, SortableJS nunca
+  // llega a marcar la fila como arrastrable en respuesta a los eventos que
+  // Playwright puede disparar. No hay evidencia de que sea un problema de
+  // automatización corregible con otra técnica de la propia API de
+  // Playwright (ya se probaron las documentadas para HTML5 D&D); es
+  // indistinguible, desde el DOM, de un problema real de inicialización de
+  // SortableJS en este ambiente. Este método intenta el arrastre con la
+  // mejor técnica disponible (dragTo posicionado sobre el handle real) y
+  // devuelve el resultado REAL observado (si el orden cambió o no) en vez de
+  // asumir éxito — quien llama decide cómo reportarlo.
+  async intentarReordenarFilaCarrito(claveOrigen: string, claveDestino: string): Promise<boolean> {
+    const ordenAntes = await this.obtenerClavesFilasCarrito();
+
+    const filaOrigen = this.page.locator(`#table_product_name_${claveOrigen}`);
+    const filaDestino = this.page.locator(`#table_product_name_${claveDestino}`);
+    const handleOrigen = filaOrigen.locator('.drag-handler');
+    const handleBox = await handleOrigen.boundingBox();
+    const filaOrigenBox = await filaOrigen.boundingBox();
+    const filaDestinoBox = await filaDestino.boundingBox();
+
+    if (handleBox && filaOrigenBox && filaDestinoBox) {
+      const offsetX = handleBox.x - filaOrigenBox.x + handleBox.width / 2;
+      const offsetY = handleBox.y - filaOrigenBox.y + handleBox.height / 2;
+      await filaOrigen.dragTo(filaDestino, {
+        sourcePosition: { x: offsetX, y: offsetY },
+        targetPosition: { x: offsetX, y: filaDestinoBox.height - 5 },
+      }).catch(() => {});
+    }
+
+    const ordenDespues = await this.obtenerClavesFilasCarrito();
+    return JSON.stringify(ordenAntes) !== JSON.stringify(ordenDespues);
+  }
+
+
   /** Indica si el checkbox de descuento general está activo. */
   async estaDescuentoGeneralActivo(): Promise<boolean> {
     return this.page.evaluate(
@@ -1500,6 +1712,159 @@ export class PosCore {
   async categoriaEstaActiva(categoria: Locator): Promise<boolean> {
     const clase = await categoria.getAttribute('class');
     return clase?.includes(L.CAT_ACTIVE_CLASS) ?? false;
+  }
+
+
+  /** Locator del `<li>` de la categoría "Lista de precios" (ver el comentario de L.CAT_LISTA_PRECIOS). */
+  get categoriaListaPrecios() {
+    return this.page.locator(L.CAT_LISTA_PRECIOS);
+  }
+
+
+  /**
+   * Selecciona la categoría "Lista de precios" SOLO si está realmente
+   * disponible (visible) para esta compañía — nunca la fuerza. Confirmado en
+   * vivo (HONDURAS) que su `<li>` nace con `display:none` real, mantenido así
+   * por el propio sistema (configuración de la compañía, no un bug): forzar
+   * su visibilidad para poder clickearla simularía una función que un
+   * usuario real de esta compañía no puede usar desde la interfaz. Mismo
+   * criterio de "comprobar antes de actuar, sin forzar" que
+   * `_seleccionarPrimeraOpcionChosenSiEsPosible()`.
+   *
+   * Devuelve `false` sin lanzar cuando no está disponible — quien llama
+   * decide entonces si continúa con un flujo alternativo o documenta el
+   * hallazgo, en vez de que este método falle el test por algo que es una
+   * configuración real, no un error.
+   */
+  async seleccionarCategoriaListaPreciosSiExiste(): Promise<boolean> {
+    const visible = await this.categoriaListaPrecios.isVisible({ timeout: 3_000 }).catch(() => false);
+    if (!visible) return false;
+
+    await this.categoriaListaPrecios.click();
+    await expect
+      .poll(() => this.categoriaEstaActiva(this.categoriaListaPrecios), { timeout: TIMEOUTS.PAYMENT_MODAL })
+      .toBe(true);
+    return true;
+  }
+
+
+  // ─── "Filtros de Vehículos": filtro real de productos por Marca/Modelo ─────
+  // Ver el comentario completo de L.BTN_FILTROS_VEHICULO para la investigación
+  // en vivo (ubicación indicada por el usuario del proyecto tras una búsqueda
+  // propia infructuosa por otras vías).
+
+  /** Abre (si no está ya abierto) el panel colapsable "Filtros de Vehículos". */
+  async abrirFiltrosVehiculo() {
+    const panel = this.page.locator(L.PANEL_FILTROS_VEHICULO);
+    if (await panel.isVisible({ timeout: 2_000 }).catch(() => false)) return;
+
+    await this.page.locator(L.BTN_FILTROS_VEHICULO).click();
+    await expect(panel, 'El panel "Filtros de Vehículos" no se abrió').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+
+  /** Cuenta las tarjetas de producto actualmente visibles en el grid (tras un filtro, o sin ninguno). */
+  async obtenerCantidadProductosEnGrid(): Promise<number> {
+    return this.page.locator(L.PRODUCTO).count();
+  }
+
+
+  /**
+   * Aplica el filtro real de "Marca" (Chosen, `#filter_vehicle_brand_chosen`)
+   * y espera la respuesta real de `getModelsByBrand` antes de devolver el
+   * control — necesario porque el Chosen de "Modelo" nace deshabilitado y
+   * solo se puebla de forma asíncrona tras ese AJAX (confirmado en vivo).
+   */
+  async _seleccionarMarcaFiltroVehiculo(opcion: Locator) {
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_MODELOS_POR_MARCA),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await opcion.click();
+    await respuestaPromise;
+  }
+
+
+  /**
+   * Filtra el grid de productos por Marca y Modelo de vehículo, probando
+   * varias marcas reales conocidas hasta encontrar una combinación que deje
+   * al menos un producto visible — necesario porque, confirmado en vivo
+   * probando las 15 marcas reales más comunes del catálogo (Toyota, Nissan,
+   * Honda, Mazda, Hyundai, Kia, Ford, Chevrolet, Suzuki, Mitsubishi...), el
+   * catálogo de productos de esta compañía (HONDURAS) no tiene NINGÚN
+   * producto etiquetado con compatibilidad de vehículo para ninguna de
+   * ellas (0 resultados en las 15, incluso antes de elegir Modelo) — el
+   * propio mecanismo del filtro SÍ funciona correctamente (AJAX real,
+   * cascada Marca→Modelo real, grid real actualizado a 0 tarjetas + aviso
+   * "Sin resultados"), es una brecha de datos del catálogo de este
+   * ambiente, no un bug de la aplicación ni de esta suite.
+   *
+   * Devuelve el resultado real de la búsqueda (marca/modelo probados y
+   * cantidad de productos encontrados) para que quien llama decida cómo
+   * continuar sin que este método finja un resultado que no ocurrió — nunca
+   * lanza si terminó sin productos, eso es una respuesta válida a
+   * documentar, no un error de automatización.
+   */
+  async filtrarProductosPorMarcaYModelo(): Promise<{ marca: string; modelo: string | null; cantidadProductos: number }> {
+    await this.abrirFiltrosVehiculo();
+
+    const MARCAS_CANDIDATAS = [
+      'TOYOTA', 'NISSAN', 'HONDA', 'MAZDA', 'HYUNDAI', 'kia',
+      'FORD', 'CHEVROLET', 'SUZUKI', 'MITSUBISHI',
+    ];
+
+    for (const nombreMarca of MARCAS_CANDIDATAS) {
+      const triggerMarca = this.page.locator(`${L.FILTRO_VEHICULO_MARCA_CHOSEN} .chosen-single`);
+      await triggerMarca.click();
+      const opcionMarca = this.page
+        .locator(`${L.FILTRO_VEHICULO_MARCA_CHOSEN} .chosen-results li`, { hasText: new RegExp(`^\\s*${nombreMarca}\\s*$`, 'i') })
+        .first();
+      const existe = await opcionMarca.isVisible({ timeout: 2_000 }).catch(() => false);
+      if (!existe) {
+        await this.page.keyboard.press('Escape');
+        continue;
+      }
+
+      await this._seleccionarMarcaFiltroVehiculo(opcionMarca);
+
+      const opcionesModelo = await this.page.locator(`${L.FILTRO_VEHICULO_MODELO_SELECT} option`).count();
+      let modeloElegido: string | null = null;
+      if (opcionesModelo > 1) {
+        const triggerModelo = this.page.locator(`${L.FILTRO_VEHICULO_MODELO_CHOSEN} .chosen-single`);
+        await triggerModelo.click();
+        const primeraOpcionModelo = this.page
+          .locator(`${L.FILTRO_VEHICULO_MODELO_CHOSEN} .chosen-results li:not(.result-selected):not([data-option-array-index="0"])`)
+          .first();
+        modeloElegido = (await primeraOpcionModelo.textContent())?.trim() ?? null;
+        await primeraOpcionModelo.click();
+        await this.page.waitForTimeout(PAUSES.VER_PRODUCTOS);
+      }
+
+      const cantidadProductos = await this.obtenerCantidadProductosEnGrid();
+      if (cantidadProductos > 0) {
+        return { marca: nombreMarca, modelo: modeloElegido, cantidadProductos };
+      }
+      console.log(`[filtrarProductosPorMarcaYModelo] Marca "${nombreMarca}"${modeloElegido ? ` / Modelo "${modeloElegido}"` : ''} no tiene productos compatibles en el catálogo — probando la siguiente.`);
+    }
+
+    const cantidadFinal = await this.obtenerCantidadProductosEnGrid();
+    return { marca: MARCAS_CANDIDATAS[MARCAS_CANDIDATAS.length - 1], modelo: null, cantidadProductos: cantidadFinal };
+  }
+
+
+  /**
+   * Limpia el filtro de vehículo (vuelve "Marca" a "Todas las marcas") y
+   * espera a que el grid refleje el catálogo completo de nuevo — usado para
+   * continuar un escenario con un producto cualquiera cuando el filtro real
+   * no dejó ningún resultado (ver el comentario de
+   * `filtrarProductosPorMarcaYModelo()`).
+   */
+  async limpiarFiltroVehiculo() {
+    const triggerMarca = this.page.locator(`${L.FILTRO_VEHICULO_MARCA_CHOSEN} .chosen-single`);
+    await triggerMarca.click();
+    const opcionTodas = this.page.locator(`${L.FILTRO_VEHICULO_MARCA_CHOSEN} .chosen-results li`, { hasText: 'Todas las marcas' }).first();
+    await opcionTodas.click();
+    await expect.poll(() => this.obtenerCantidadProductosEnGrid(), { timeout: TIMEOUTS.PRODUCTS_LOAD }).toBeGreaterThan(0);
   }
 
 
@@ -1911,13 +2276,20 @@ export class PosCore {
     // add_sn_product() en pos.js. #product_total_tax_<clave> ya NO se lee:
     // pese al nombre, es un duplicado del total CON IVA, no el subtotal sin
     // IVA.
+    // Timeout explícito (TIMEOUTS.PAYMENT_MODAL) en cada locator: sin él,
+    // .textContent()/.inputValue() no traen límite propio y, si alguno de
+    // estos ids no existe para la clave dada (confirmado en vivo: ocurre con
+    // una línea de producto normal agregada por el buscador interno de Vista
+    // Expandida), el Promise.all queda colgado hasta que expire el timeout
+    // completo del test (varios minutos), sin ningún mensaje que indique cuál
+    // de los 6 locators es el que nunca resolvió.
     const [nombre, cantidadTexto, netoTexto, totalConIvaTexto, totalTexto, applyIvaTexto] = await Promise.all([
-      this.page.locator(`#product_table_name_${clave}`).textContent(),
-      this.page.locator(`#input_product_quantity_${clave}`).inputValue(),
-      this.page.locator(`#total_by_product_${clave}`).textContent(),
-      this.page.locator(`#total_by_product_with_iva_${clave}`).textContent(),
-      this.page.locator(totalSelector).textContent(),
-      this.page.locator(`#product_hide_apply_iva_${clave}`).inputValue(),
+      this.page.locator(`#product_table_name_${clave}`).textContent({ timeout: TIMEOUTS.PAYMENT_MODAL }),
+      this.page.locator(`#input_product_quantity_${clave}`).inputValue({ timeout: TIMEOUTS.PAYMENT_MODAL }),
+      this.page.locator(`#total_by_product_${clave}`).textContent({ timeout: TIMEOUTS.PAYMENT_MODAL }),
+      this.page.locator(`#total_by_product_with_iva_${clave}`).textContent({ timeout: TIMEOUTS.PAYMENT_MODAL }),
+      this.page.locator(totalSelector).textContent({ timeout: TIMEOUTS.PAYMENT_MODAL }),
+      this.page.locator(`#product_hide_apply_iva_${clave}`).inputValue({ timeout: TIMEOUTS.PAYMENT_MODAL }),
     ]);
 
     console.log(
@@ -2249,6 +2621,40 @@ export class PosCore {
 
 
   /**
+   * Asegura que una pestaña del POS esté dentro del área realmente visible
+   * de su contenedor horizontal (#menu_pos_option_item, `overflow-x: auto`,
+   * `PESTANAS_POS_CONTENEDOR`) antes de clickearla.
+   *
+   * Causa raíz confirmada en vivo (HONDURAS, investigación en vivo con el
+   * usuario): con las 9 pestañas reales del POS, el contenedor mide solo
+   * ~560px de ancho pero el contenido mide ~1176px — más de la mitad de las
+   * pestañas (Ruteo, Importar factura, Productos externos, Apartados)
+   * quedan fuera del área visible sin hacer scroll. Un `click()` directo
+   * sobre una de esas pestañas NO dispara su AJAX de cambio (confirmado con
+   * `page.waitForResponse` nunca resolviendo), aunque Playwright la reporte
+   * como `visible: true` — su propio chequeo de actionability no detecta
+   * que el recorte lo aplica el `overflow-x: auto` del contenedor, así que
+   * el click no lanza ningún error: simplemente aterriza sobre lo que sea
+   * que esté pintado en esa misma posición de pantalla, ajeno a la barra
+   * (confirmado en vivo viendo `document.elementFromPoint()` resolver a un
+   * `<label>` y, en otra corrida, a un tooltip `#powerTip` — ninguno
+   * relacionado con la pestaña real). Mismo mecanismo, en la práctica, que
+   * ya usa manualmente cualquier persona real: hacer click en la flecha
+   * (`#icon-right-pos-option`/`#icon-left-pos-option`) para desplazar la
+   * barra antes de poder seleccionar una pestaña fuera de vista.
+   *
+   * Se usa `scrollIntoView` nativo (mismo efecto que esos íconos —ambos
+   * solo mueven el `scrollLeft` del mismo contenedor, confirmado en el JS
+   * real de la página—) en vez de depender de que existan/sean clickeables:
+   * es instantáneo (sin animación que esperar) y no hace nada si la pestaña
+   * ya está completamente visible.
+   */
+  async _asegurarPestanaPosVisible(tab: Locator) {
+    await tab.evaluate((el) => el.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
+  }
+
+
+  /**
    * Visita una pestaña del POS ya confirmada existente: click real (sin
    * force), espera la petición AJAX genérica que toda pestaña dispara al
    * cambiar (`set_pos_type_option` — confirmado en vivo en las 8 pestañas
@@ -2256,12 +2662,24 @@ export class PosCore {
    * endpoint propio de contenido que cada una dispara además y que sí
    * varía), confirma que quedó activa (clase "btn_tab_active") y que su
    * contenedor de contenido correspondiente quedó visible.
+   *
+   * Usa TIMEOUTS.PRODUCTS_LOAD (120s), no PAYMENT_MODAL (15s): investigación
+   * en vivo (trace de red) confirmó que, para la pestaña "Productos
+   * externos", `set_pos_type_option` queda encolado detrás de una llamada
+   * previa propia de esa pestaña (`getProductExternalSearch`) que en este
+   * ambiente QA tardó 17.6s en una corrida y no llegó a resolver en otra —
+   * ambas por encima de los 15s originales. Causa raíz de backend/ambiente,
+   * no de esta automatización (ver el informe de investigación de esta
+   * suite); este margen más amplio evita que la suite falle por diseño
+   * mientras el backend responda dentro de un tiempo aún razonable, sin
+   * dejar de fallar si de verdad no responde.
    */
   async visitarPestanaPos(pestana: PestanaPos) {
     const tab = this.page.locator(pestana.selector);
+    await this._asegurarPestanaPosVisible(tab);
     const respuestaPromise = this.page.waitForResponse(
       (res) => res.url().includes(L.AJAX_CAMBIO_PESTANA_POS),
-      { timeout: TIMEOUTS.PAYMENT_MODAL }
+      { timeout: TIMEOUTS.PRODUCTS_LOAD }
     );
     await tab.click();
     await respuestaPromise;
@@ -2988,6 +3406,22 @@ export class PosCore {
    * completo al menos una vez en pruebas repetidas; cada intento sigue
    * acotado individualmente, así que más intentos no arriesgan colgar el
    * test, solo dan más oportunidades de ganarle la carrera al overlay.
+   *
+   * Ventana de espera de setTypeCurrencyReceipByUser en 9s (no 4s como
+   * originalmente): causa raíz confirmada en vivo (pos-facturar.spec.ts,
+   * corrida completa de los 16 escenarios en un mismo worker/sesión larga):
+   * los 8 intentos se agotaron por completo, con el mismo error exacto, en 5
+   * de 19 tests de una misma corrida — nunca de forma permanente a partir de
+   * un punto (los escenarios siguientes volvían a usar moneda con éxito),
+   * lo que descarta un click aterrizando en el elemento equivocado (ese
+   * defecto, confirmado para el menú de tres puntos en
+   * `abrirMenuTresPuntos()`, sería determinístico y persistiría en cada
+   * intento posterior, no intermitente). Consistente en cambio con la
+   * misma lentitud real de backend, bajo sesiones largas, ya documentada y
+   * corregida repetidas veces en este mismo archivo para otros AJAX
+   * (`visitarPestanaPos`, aviso "¿Desea imprimir copia?"): 4s de ventana no
+   * alcanzaba a cubrir esa lentitud en ningún intento, así que reintentar
+   * con la MISMA ventana corta nunca ganaba la carrera.
    */
   async _seleccionarOpcionMoneda(opcion: Locator): Promise<{ currency_symbol: string; currency_base_symbol: string }> {
     const MAX_INTENTOS = 8;
@@ -3008,9 +3442,9 @@ export class PosCore {
 
       const respuestaPromise = this.page.waitForResponse(
         (res) => res.url().includes(L.AJAX_CAMBIO_MONEDA),
-        { timeout: 4_000 }
+        { timeout: 9_000 }
       ).catch(() => null);
-      const clickeado = await opcion.click({ timeout: 4_000 }).then(() => true).catch(() => false);
+      const clickeado = await opcion.click({ timeout: 6_000 }).then(() => true).catch(() => false);
 
       if (clickeado) {
         const respuesta = await respuestaPromise;

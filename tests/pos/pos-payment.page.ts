@@ -399,14 +399,35 @@ export class PosPayment {
         // independiente del popup ya cerrado (confirmado en vivo) — la venta ya
         // se completó, así que se descarta con "Cancelar" en vez de pedir una
         // copia extra. Su overlay, si queda abierto, bloquea clicks posteriores.
+        // Espera TIMEOUTS.PRODUCTS_LOAD (120s), no PAYMENT_MODAL (15s): confirmado
+        // en vivo, en más de una corrida, que bajo la lentitud real del
+        // ambiente/backend ya documentada en esta suite este aviso puede tardar
+        // más de 15s en aparecer tras cerrar el popup — con un valor más corto,
+        // la función retornaba antes de que el aviso apareciera, dejando el
+        // SweetAlert abierto (detectado luego como "modal inesperado" al final
+        // del escenario).
         const avisoCopia = this.page.locator('.sweet-alert.visible', { hasText: '¿Desea imprimir copia?' });
         const aparecioAvisoCopia = await avisoCopia
-          .waitFor({ state: 'visible', timeout: 5_000 })
+          .waitFor({ state: 'visible', timeout: TIMEOUTS.PRODUCTS_LOAD })
           .then(() => true)
           .catch(() => false);
         if (aparecioAvisoCopia) {
           await avisoCopia.locator('button.cancel').click();
           await avisoCopia.waitFor({ state: 'hidden', timeout: TIMEOUTS.PAYMENT_MODAL }).catch(() => {});
+
+          // Confirmado en vivo: el backdrop propio de SweetAlert v1
+          // (.sweet-overlay) puede quedar visible incluso después de que el
+          // propio .sweet-alert ya se ocultó — sin ningún .sweet-alert.visible
+          // activo, no hay forma legítima de "cerrarlo" desde la UI (no tiene
+          // su propio botón), así que se oculta directo si sigue ahí. De no
+          // hacerlo, bloquea clicks de acciones posteriores en la misma
+          // página (confirmado en vivo: intercepta el click del menú de tres
+          // puntos al restaurar Vista Expandida al final del escenario).
+          const overlay = this.page.locator('.sweet-overlay');
+          const overlayVisible = await overlay.isVisible().catch(() => false);
+          if (overlayVisible) {
+            await overlay.evaluate((el) => { (el as HTMLElement).style.display = 'none'; });
+          }
         }
 
         return;
@@ -577,5 +598,230 @@ export class PosPayment {
     expect(nombreVendedor, 'El vendedor seleccionado en el modal de pago no quedó visible').not.toBe('');
     console.log(`[seleccionarVendedorEnModalPago] Vendedor seleccionado: "${nombreVendedor}"`);
     return nombreVendedor;
+  }
+
+
+  // ─── Modal de Pago: "Fecha de facturación" ─────────────────────────────────
+  // `#date_invoice_manually` — investigado en vivo (pos-facturar.spec.ts):
+  // input[type="date"] nativo, SIEMPRE visible dentro de #dialog_payment (no
+  // depende de ningún checkbox ni tipo de documento electrónico), prellenado
+  // con la fecha real del día al abrir el modal.
+
+  /** Lee la fecha de facturación actual del modal de pago (formato `YYYY-MM-DD`, el mismo de un `<input type="date">`). */
+  async obtenerFechaFacturacion(): Promise<string> {
+    return this.page.locator(L.DIALOG_PAGO_FECHA_FACTURACION).inputValue();
+  }
+
+
+  /**
+   * Cambia la fecha de facturación del modal de pago. `fecha` en formato
+   * `YYYY-MM-DD` (el que espera `fill()` sobre un `input[type="date"]`
+   * nativo). Valida que el valor realmente quedó aplicado antes de
+   * devolver el control — un `fill()` sobre un campo de fecha con un
+   * formato inválido puede no lanzar pero tampoco aplicar el cambio.
+   *
+   * `scrollIntoViewIfNeeded()` antes del `fill()` — confirmado en vivo
+   * (pos-facturar.spec.ts, Escenario 4) que, cuando este mismo modal de pago
+   * ya se abrió y se cerró antes en la misma página (fixture worker
+   * compartida entre varios escenarios), puede conservar una posición de
+   * scroll interna que deja este campo fuera del área realmente visible del
+   * modal aunque su `display`/`boundingBox` reporten un layout normal —
+   * mismo criterio defensivo que ya usa el resto de la suite para campos de
+   * formularios dentro de modales largos (ver `_seleccionarPrimeraOpcionChosen()`).
+   */
+  async establecerFechaFacturacion(fecha: string) {
+    const campo = this.page.locator(L.DIALOG_PAGO_FECHA_FACTURACION);
+    await campo.scrollIntoViewIfNeeded({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await campo.fill(fecha);
+    await expect(campo, `La fecha de facturación no quedó en "${fecha}"`).toHaveValue(fecha);
+  }
+
+
+  // ─── Modal de Pago: "Fecha de Vencimiento" (crédito) ───────────────────────
+  // Solo visible/interactuable tras cambiarTipoPagoEnModalPago('credito') —
+  // ese método ya valida que el CONTENEDOR (L.DIALOG_PAGO_FECHA_VENCIMIENTO)
+  // aparezca; estos dos leen/escriben el `input[type="date"]` real dentro.
+
+  /** Lee la fecha de vencimiento actual del modal de pago (formato `YYYY-MM-DD`). Requiere Crédito ya activo. */
+  async obtenerFechaVencimiento(): Promise<string> {
+    return this.page.locator(L.DIALOG_PAGO_INPUT_FECHA_VENCIMIENTO).inputValue();
+  }
+
+
+  /** Cambia la fecha de vencimiento del modal de pago. Requiere Crédito ya activo (ver cambiarTipoPagoEnModalPago). */
+  async establecerFechaVencimiento(fecha: string) {
+    const campo = this.page.locator(L.DIALOG_PAGO_INPUT_FECHA_VENCIMIENTO);
+    await campo.scrollIntoViewIfNeeded({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await campo.fill(fecha);
+    await expect(campo, `La fecha de vencimiento no quedó en "${fecha}"`).toHaveValue(fecha);
+  }
+
+
+  // ─── Modal de Pago: "Opciones avanzadas" propias del modal ─────────────────
+  // Distinto de mostrarDetalleAvanzadoFactura() (detalle de totales del
+  // carrito, fuera de este modal) — ver el comentario de
+  // L.DIALOG_PAGO_CK_OPCIONES_AVANZADAS para la evidencia completa.
+
+  /** Expande (si no lo está ya) el panel "Opciones avanzadas" del modal de pago — revela "A nombre de terceros". */
+  async abrirOpcionesAvanzadasModalPago() {
+    const checkbox = this.page.locator(L.DIALOG_PAGO_CK_OPCIONES_AVANZADAS);
+    if (await checkbox.isChecked().catch(() => false)) return;
+    await checkbox.evaluate((el: HTMLElement) => el.click());
+    await expect(
+      this.page.locator(L.DIALOG_PAGO_INPUT_TERCERO),
+      'El campo "Factura a nombre de terceros" no apareció tras abrir "Opciones avanzadas"'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+
+  /**
+   * Activa "Factura a nombre de terceros" (dentro de "Opciones avanzadas" del
+   * modal de pago directo — distinto de activarNombreTercerosOrdenCaja(),
+   * que es el mismo concepto pero en el modal "Enviar a caja") y llena el
+   * nombre. abrirOpcionesAvanzadasModalPago() debe llamarse antes (o se llama
+   * aquí mismo si no se hizo).
+   */
+  async activarFacturarATerceros(nombre: string) {
+    await this.abrirOpcionesAvanzadasModalPago();
+    await this.core._asegurarCheckboxEstado(this.page.locator(L.DIALOG_PAGO_CK_TERCERO), 'ck_third_person_name', true);
+    const input = this.page.locator(L.DIALOG_PAGO_INPUT_TERCERO);
+    await expect(input, 'El campo "Factura a nombre de terceros" no quedó habilitado').toBeEnabled({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await input.fill(nombre);
+    await expect(input, `El nombre de terceros no quedó en "${nombre}"`).toHaveValue(nombre);
+  }
+
+
+  /** Lee el nombre de terceros actualmente ingresado en el modal de pago (cadena vacía si el campo está deshabilitado/vacío). */
+  async obtenerNombreTerceros(): Promise<string> {
+    return this.page.locator(L.DIALOG_PAGO_INPUT_TERCERO).inputValue();
+  }
+
+
+  // ─── Modal de Pago: "No. Pedido" / "Orden de compra" ───────────────────────
+  // Ambos SIEMPRE visibles (no dependen de "Opciones avanzadas" pese a la
+  // clase real de su contenedor — ver el comentario de L.DIALOG_PAGO_NO_PEDIDO).
+
+  /** Llena el número de pedido del modal de pago. */
+  async establecerNumeroPedido(numero: string) {
+    const campo = this.page.locator(L.DIALOG_PAGO_NO_PEDIDO);
+    await campo.fill(numero);
+    await expect(campo, `El número de pedido no quedó en "${numero}"`).toHaveValue(numero);
+  }
+
+
+  /** Lee el número de pedido actual del modal de pago. */
+  async obtenerNumeroPedido(): Promise<string> {
+    return this.page.locator(L.DIALOG_PAGO_NO_PEDIDO).inputValue();
+  }
+
+
+  /** Llena la orden de compra del modal de pago. */
+  async establecerOrdenDeCompra(texto: string) {
+    const campo = this.page.locator(L.DIALOG_PAGO_ORDEN_COMPRA);
+    await campo.fill(texto);
+    await expect(campo, `La orden de compra no quedó en "${texto}"`).toHaveValue(texto);
+  }
+
+
+  /** Lee la orden de compra actual del modal de pago. */
+  async obtenerOrdenDeCompra(): Promise<string> {
+    return this.page.locator(L.DIALOG_PAGO_ORDEN_COMPRA).inputValue();
+  }
+
+
+  // ─── Modal de Pago: "Nota" (observación general de la factura) ────────────
+  // Ver el comentario de L.DIALOG_PAGO_OBSERVACION: required=true real, pero
+  // no bloquea la venta (los 16 escenarios previos de esta suite nunca lo
+  // llenan y facturan con éxito) — se llena en todos los escenarios nuevos
+  // por instrucción explícita del usuario, no por necesidad técnica.
+
+  /** Llena la observación/nota general de la factura en el modal de pago. */
+  async agregarObservacionFactura(texto: string) {
+    const campo = this.page.locator(L.DIALOG_PAGO_OBSERVACION);
+    await campo.fill(texto);
+    await expect(campo, `La observación de factura no quedó en "${texto}"`).toHaveValue(texto);
+  }
+
+
+  /** Lee la observación/nota general de la factura actualmente en el modal de pago. */
+  async obtenerObservacionFactura(): Promise<string> {
+    return this.page.locator(L.DIALOG_PAGO_OBSERVACION).inputValue();
+  }
+
+
+  // ─── Crédito: "Días de cobro (Opcional)" — variante Semanal ────────────────
+  // Master switch (DIALOG_PAGO_CK_DIAS_DE_COBRO) + elegir "Semanal"
+  // (DIALOG_PAGO_CK_DIAS_COBRO_SEMANAL) + monto de cobro — ver el comentario
+  // de L.DIALOG_PAGO_CK_DIAS_DE_COBRO para la evidencia completa (3
+  // periodicidades mutuamente excluyentes, solo Semanal usada por esta suite).
+  // Requiere Crédito ya activo (cambiarTipoPagoEnModalPago('credito')).
+
+  /**
+   * Activa "Días de cobro" en modalidad Semanal y establece el monto de
+   * cobro — dos checkboxes en cascada (master + Semanal, cada uno revela el
+   * siguiente) más el campo de monto, mismo patrón de checkbox-slider que el
+   * resto de la suite.
+   */
+  async activarDiasDeCobroSemanal(montoCobro: string) {
+    await this.core._asegurarCheckboxEstado(this.page.locator(L.DIALOG_PAGO_CK_DIAS_DE_COBRO), 'ck_is_payment_credit_option', true);
+    const ckSemanal = this.page.locator(L.DIALOG_PAGO_CK_DIAS_COBRO_SEMANAL);
+    await expect(ckSemanal, '"Días de cobro" no reveló la opción Semanal').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await this.core._asegurarCheckboxEstado(ckSemanal, 'ck_is_payment_credit_week', true);
+
+    const montoInput = this.page.locator(L.DIALOG_PAGO_DIAS_COBRO_SEMANAL_MONTO);
+    await expect(montoInput, 'El campo "Monto de cobro" semanal no quedó visible').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await montoInput.fill(montoCobro);
+    await expect(montoInput, `El monto de cobro semanal no quedó en "${montoCobro}"`).toHaveValue(montoCobro);
+  }
+
+
+  // ─── Crédito: "Abono inicial (Opcional)" ───────────────────────────────────
+  // Vive dentro de L.DIALOG_PAGO_OPCIONES_AVANZADAS_CONTENEDOR
+  // (#advance_options_modal) y reutiliza LOS MISMOS ids que el pago de
+  // contado normal — ver el comentario de L.ABONO_INICIAL_TOTAL_LABEL para
+  // la evidencia de la colisión real. Toda interacción aquí escopa
+  // explícitamente dentro de ese contenedor, nunca con el id plano.
+
+  /**
+   * Aplica un abono inicial en efectivo (dentro de Crédito) por el monto
+   * indicado. No reutiliza `_asegurarCheckboxEstado()` (que clickea vía
+   * `document.getElementById()` por id global): `#is_payment_cash`/
+   * `#payment_cash_total` están DUPLICADOS en el DOM mientras Crédito está
+   * activo (ver el comentario de L.ABONO_INICIAL_TOTAL_LABEL) y
+   * `getElementById()` siempre resolvería al primero (el del pago de
+   * contado normal, no el de este abono) — el click aquí se dispara sobre
+   * el propio locator ya escopado dentro del contenedor real, nunca por id
+   * global.
+   */
+  async seleccionarAbonoInicialEfectivo(monto: string) {
+    const contenedor = this.page.locator(L.DIALOG_PAGO_OPCIONES_AVANZADAS_CONTENEDOR);
+    const checkbox = contenedor.locator(`#${CHECKBOX_ID.EFECTIVO}`);
+    await expect.poll(async () => {
+      if (!(await checkbox.isChecked())) {
+        await checkbox.evaluate((el: HTMLElement) => el.click());
+      }
+      return checkbox.isChecked();
+    }, { timeout: TIMEOUTS.PAYMENT_MODAL, message: 'El checkbox de Efectivo del abono inicial no quedó marcado' }).toBe(true);
+
+    const montoInput = contenedor.locator(L.EFECTIVO_MONTO);
+    await montoInput.fill(monto);
+    // blur() tras fill(): confirmado en vivo que el recálculo real de
+    // "TOTAL PAGO INICIAL" (L.ABONO_INICIAL_TOTAL_LABEL) no se dispara solo
+    // con el evento "input"/"change" que fill() ya emite — necesita el
+    // mismo blur() que ya usa establecerPorcentajeDescuentoGeneral()/
+    // establecerCantidadProducto() para el mismo tipo de campo en esta app.
+    await montoInput.blur();
+    await expect(montoInput, `El monto del abono inicial en efectivo no quedó en "${monto}"`).toHaveValue(monto);
+    await expect.poll(
+      () => this.obtenerTotalPagoInicialNumerico(),
+      { timeout: TIMEOUTS.PAYMENT_MODAL, message: 'El total de pago inicial no reflejó el monto ingresado' }
+    ).toBeGreaterThan(0);
+  }
+
+
+  /** Lee el total de pago inicial (abono) mostrado actualmente en el modal de pago. */
+  async obtenerTotalPagoInicialNumerico(): Promise<number> {
+    const texto = await this.page.locator(L.ABONO_INICIAL_TOTAL_LABEL).textContent() ?? '$0.00';
+    return this.core._leerMontoDeTexto(texto);
   }
 }

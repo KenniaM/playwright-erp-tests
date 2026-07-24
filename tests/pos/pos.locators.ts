@@ -1452,4 +1452,150 @@ export const L = {
   // L.TOTAL_MODAL, ni el total de una sola línea). Confirmado en vivo que
   // vuelve a "$0.00" tras vaciar el carrito.
   TOTAL_VISIBLE_POS: '#total',
+
+  // ─── Fecha de facturación (modal de pago) ──────────────────────────────────
+  // Confirmado en vivo (Fase de investigación de pos-facturar.spec.ts):
+  // input[type="date"] real, SIEMPRE visible dentro de #dialog_payment (no
+  // depende de ningún checkbox ni tipo de documento), prellenado con la
+  // fecha real del día. Distinto de DIALOG_PAGO_FECHA_VENCIMIENTO (fecha de
+  // vencimiento de crédito, otro campo) y de CONTINGENCY_INVOICE_DATE
+  // (#contingency_invoice_date, modo contingencia — no usado por esta suite).
+  DIALOG_PAGO_FECHA_FACTURACION: '#date_invoice_manually',
+
+  // ─── Categoría "Lista de precios" (barra lateral) ──────────────────────────
+  // A diferencia de Categoría/NIVELES/Productos fraccionados/Productos
+  // variantes (todas con `data-category-name`, ver categoriaOpcionalPorNombre()),
+  // "Lista de precios" es la única categoría fija de la interfaz sin ese
+  // atributo — se localiza por su clase propia. Confirmado en vivo (outerHTML
+  // real) que su `<li>` nace con `style="display: none;"`: el propio sistema
+  // la mantiene oculta para la compañía HONDURAS — comportamiento real de
+  // configuración, no un bug de esta suite ni de la aplicación (el mecanismo
+  // en sí funciona: forzar su visibilidad y clickearla sí filtra el grid a un
+  // set de productos distinto, confirmado en vivo).
+  CAT_LISTA_PRECIOS: '.left_category_price_list',
+
+  // ─── "Filtros de Vehículos" (grid de productos) — filtro real por Marca/
+  // Modelo/Año/Transmisión/Motor/Categoría/Subcategoría ──────────────────────
+  // Botón colapsable arriba de la barra de categorías (confirmado en vivo,
+  // indicado por el usuario tras una investigación propia infructuosa por
+  // otras vías: sidebar de categorías, "Productos variantes", búsqueda
+  // global). Al expandirse revela #pos_vehicle_filters_container con 7
+  // Chosen en cascada (Marca → Modelo → Año → Transmisión → Motor →
+  // Categoría → Subcategoría, cada uno deshabilitado hasta elegir el
+  // anterior). Sin botón "Buscar" propio: cada `change` real dispara su
+  // propio AJAX (Marca dispara `getModelsByBrand` para poblar Modelo, y
+  // filtra el grid de productos de inmediato — confirmado en vivo
+  // interceptando la red y contando tarjetas antes/después).
+  BTN_FILTROS_VEHICULO:          '#btn_toggle_pos_vehicle_filters',
+  PANEL_FILTROS_VEHICULO:        '#pos_vehicle_filters_container',
+  FILTRO_VEHICULO_MARCA_CHOSEN:  '#filter_vehicle_brand_chosen',
+  FILTRO_VEHICULO_MODELO_CHOSEN: '#filter_vehicle_model_chosen',
+  FILTRO_VEHICULO_MODELO_SELECT: '#filter_vehicle_model',
+  AJAX_MODELOS_POR_MARCA:        'getModelsByBrand',
+
+  // ─── Modal de pago (#dialog_payment): "Opciones avanzadas" propias del modal
+  // (checkbox #ck_show_advance_options + contenedor #advance_options_modal) —
+  // DISTINTO de mostrarDetalleAvanzadoFactura()/L.TOTAL_FACTURA_TOGGLE (detalle
+  // de Subtotal/Descuento General/Exoneración, vive en el footer del carrito,
+  // fuera de este modal). Confirmado en vivo (investigación de
+  // pos-facturar.spec.ts, escenarios 17-35): al marcarlo aparecen "Días de
+  // cobro (Opcional)" y "Abono inicial (Opcional)" — en realidad SIEMPRE
+  // visibles apenas se activa Crédito, sin depender de este checkbox — y
+  // "A nombre de terceros", que sí depende de él (su contenedor
+  // ck_third_person_name_content trae la clase advance_options_item real).
+  DIALOG_PAGO_CK_OPCIONES_AVANZADAS: '#ck_show_advance_options',
+  DIALOG_PAGO_OPCIONES_AVANZADAS_CONTENEDOR: '#advance_options_modal',
+
+  // "Factura a nombre de terceros" — DENTRO del modal de pago directo
+  // (#dialog_payment), distinto de ORDEN_CAJA_CHECK_TERCERO/ORDEN_CAJA_INPUT_TERCERO
+  // (mismo concepto, pero en el modal "Enviar a caja", con sus propios ids).
+  // Confirmado en vivo que el checkbox trae el atributo estático
+  // checked="checked" pese a estar realmente desmarcado (mismo patrón de
+  // atributos crudos no confiables ya documentado en pos.types.ts para
+  // #check_quick_product_apply_tax) — la fuente real es siempre `.isChecked()`.
+  DIALOG_PAGO_CK_TERCERO: '#ck_third_person_name',
+  DIALOG_PAGO_INPUT_TERCERO: '#third_person_name',
+
+  // "No. Pedido" / "Orden de compra" — SIEMPRE visibles en el modal de pago
+  // (no dependen de #ck_show_advance_options pese a que sus contenedores
+  // reales traen la clase "aaadvance_options_item"/"advance_options_item" —
+  // confirmado en vivo con capturas: ambos ya se ven sin tocar ese
+  // checkbox). El `<input>` real vive DENTRO del contenedor con ese id
+  // (`#order_number`/`#content_purchase_order` son los <div> que envuelven
+  // la etiqueta + el campo, no el campo en sí — confirmado en vivo volcando
+  // el HTML real: el input de "No. Pedido" es `#order_number_input`).
+  DIALOG_PAGO_NO_PEDIDO: '#order_number_input',
+  DIALOG_PAGO_ORDEN_COMPRA: '#purchase_order',
+
+  // "Nota" / Observación general de la factura — único campo con
+  // required=true real (propiedad IDL, no solo el atributo estático) de todo
+  // el modal, confirmado en vivo; sin embargo los 16 escenarios previos de
+  // esta misma suite ya facturan con éxito sin llenarlo nunca, así que ese
+  // required no bloquea la venta a nivel de negocio (el propio botón
+  // "Facturar" no depende de un <form> con validación HTML5 nativa) — se
+  // llena de todas formas en todos los escenarios nuevos por instrucción
+  // explícita del usuario de este proyecto, no porque sea obligatorio.
+  DIALOG_PAGO_OBSERVACION: '#sale_observation',
+
+  // ─── Crédito: "Días de cobro (Opcional)" ───────────────────────────────────
+  // Master switch + 3 periodicidades mutuamente excluyentes (Semanal/
+  // Quincenal/Mensual), cada una con su propio Chosen de día y su propio
+  // campo "Monto de cobro" — confirmado en vivo volcando el HTML real de
+  // #advance_options_modal. Esta suite solo usa la variante Semanal
+  // (escenario "días de cobro semanal"); quincenal/mensual quedan
+  // documentados aquí por si un escenario futuro los necesita.
+  DIALOG_PAGO_CK_DIAS_DE_COBRO: '#ck_is_payment_credit_option',
+  DIALOG_PAGO_CK_DIAS_COBRO_SEMANAL: '#ck_is_payment_credit_week',
+  DIALOG_PAGO_DIAS_COBRO_SEMANAL_MONTO: '#sale_credit_payment_option_check_week_value_amount',
+
+  // ─── Crédito: "Abono inicial (Opcional)" ───────────────────────────────────
+  // Vive DENTRO de DIALOG_PAGO_OPCIONES_AVANZADAS_CONTENEDOR (#advance_options_modal)
+  // y reutiliza LOS MISMOS ids que el pago de contado normal (#is_payment_cash/
+  // #payment_cash_total, CHECKBOX_ID.EFECTIVO/L.EFECTIVO_MONTO) — confirmado en
+  // vivo con Crédito activo: hay DOS elementos reales con cada uno de esos ids
+  // en el DOM al mismo tiempo (colisión real de la propia aplicación, no un
+  // error de esta suite). Cualquier interacción con el abono inicial debe
+  // escoparse siempre dentro de este contenedor (`page.locator(DIALOG_PAGO_OPCIONES_AVANZADAS_CONTENEDOR).locator(EFECTIVO_MONTO)`),
+  // nunca con el id plano a secas mientras Crédito esté activo.
+  // "TOTAL PAGO INICIAL" real (reemplaza a "TOTAL CAMBIO" en el panel del
+  // numpad mientras Crédito está activo) — confirmado en vivo con el HTML
+  // real: `#initial_payment_plan_amount_label` (dentro de
+  // #advance_options_modal, sección "Devolución de la tarifa... Pagos en
+  // tarjeta") es un campo DISTINTO y no relacionado ("Monto de prima
+  // ingresado", una feature de seguros médicos, siempre display:none en
+  // este ambiente) — error real de automatización ya corregido, documentado
+  // aquí para no repetirlo.
+  ABONO_INICIAL_TOTAL_LABEL: '#initial_payment_change',
+
+  // ─── Cantidad de una línea del carrito: botones +/- y campo numérico ──────
+  // Confirmado en vivo (captura real de la fila): "−" (id="down", NO único —
+  // se repite igual en cada fila, hay que escopar por la clase que sí lleva
+  // la clave real) y "+" (id="up", mismo problema) rodean el campo de texto
+  // #input_product_quantity_<clave> (ya existente y reutilizado, antes solo
+  // para lectura). onclick="set_input_product_quantity('<clave>', 0|1)".
+  CARRITO_CANTIDAD_BTN_MENOS_CLASE: 'btn_set_input_quantity_down_',
+  CARRITO_CANTIDAD_BTN_MAS_CLASE:   'btn_set_input_quantity_up_',
+
+  // ─── Impresión automática: activar/desactivar ──────────────────────────────
+  // Ícono del header (mismo tipo que menu_type_currency/menu_type_print,
+  // fuera de cualquier modal) — confirmado en vivo que clickearlo abre un
+  // SweetAlert real de confirmación ("¡Deshabilitar impresión! ... ¿Desea
+  // continuar?" con botones Cancelar/Aceptar) antes de aplicar el cambio.
+  // #switch_print_state (sin "#", se lee vía evaluate como el resto de
+  // hidden state de este módulo) es la fuente real 0/1 del estado — la clase
+  // del ícono (switch_print_active/switch_print_disabled) es solo un reflejo
+  // visual confirmado en vivo que coincide, pero el estado real siempre se
+  // lee del propio hidden state.
+  SWITCH_PRINT: '#switch_print',
+  SWITCH_PRINT_STATE: 'switch_print_state',
+
+  // Input real de fecha de vencimiento (dentro de DIALOG_PAGO_FECHA_VENCIMIENTO,
+  // que solo ubica el CONTENEDOR completo con su etiqueta) — confirmado en vivo.
+  DIALOG_PAGO_INPUT_FECHA_VENCIMIENTO: '#credit_sale_end_date',
+
+  // ─── Perfil de producto ─────────────────────────────────────────────────────
+  // Link real dentro de cada tarjeta del grid (target="_blank", abre en
+  // pestaña nueva) — confirmado en vivo con href real
+  // ".../prod/product_profile?product_id=<id>_<algo>&company_id=<id>".
+  PRODUCTO_LINK_PERFIL: 'a[href*="product_profile?product_id"]',
 } as const;

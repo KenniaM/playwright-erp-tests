@@ -251,6 +251,33 @@ export class PosPage {
   async obtenerObservacionDeProducto(...args: Parameters<PosCore['obtenerObservacionDeProducto']>) {
     return this.core.obtenerObservacionDeProducto(...args);
   }
+  async obtenerCodigoYBarcodeDeLineaCarrito(...args: Parameters<PosCore['obtenerCodigoYBarcodeDeLineaCarrito']>) {
+    return this.core.obtenerCodigoYBarcodeDeLineaCarrito(...args);
+  }
+  async obtenerCantidadProducto(...args: Parameters<PosCore['obtenerCantidadProducto']>) {
+    return this.core.obtenerCantidadProducto(...args);
+  }
+  async incrementarCantidadProducto(...args: Parameters<PosCore['incrementarCantidadProducto']>) {
+    return this.core.incrementarCantidadProducto(...args);
+  }
+  async decrementarCantidadProducto(...args: Parameters<PosCore['decrementarCantidadProducto']>) {
+    return this.core.decrementarCantidadProducto(...args);
+  }
+  async establecerCantidadProducto(...args: Parameters<PosCore['establecerCantidadProducto']>) {
+    return this.core.establecerCantidadProducto(...args);
+  }
+  async obtenerEstadoImpresionAutomatica(...args: Parameters<PosCore['obtenerEstadoImpresionAutomatica']>) {
+    return this.core.obtenerEstadoImpresionAutomatica(...args);
+  }
+  async establecerImpresionAutomatica(...args: Parameters<PosCore['establecerImpresionAutomatica']>) {
+    return this.core.establecerImpresionAutomatica(...args);
+  }
+  async abrirPerfilProducto(...args: Parameters<PosCore['abrirPerfilProducto']>) {
+    return this.core.abrirPerfilProducto(...args);
+  }
+  async intentarReordenarFilaCarrito(...args: Parameters<PosCore['intentarReordenarFilaCarrito']>) {
+    return this.core.intentarReordenarFilaCarrito(...args);
+  }
   async estaDescuentoGeneralActivo(...args: Parameters<PosCore['estaDescuentoGeneralActivo']>) {
     return this.core.estaDescuentoGeneralActivo(...args);
   }
@@ -291,6 +318,22 @@ export class PosPage {
   get categoriaProductosVariantes() { return this.core.categoriaProductosVariantes; }
   async categoriaEstaActiva(...args: Parameters<PosCore['categoriaEstaActiva']>) {
     return this.core.categoriaEstaActiva(...args);
+  }
+  get categoriaListaPrecios() { return this.core.categoriaListaPrecios; }
+  async seleccionarCategoriaListaPreciosSiExiste(...args: Parameters<PosCore['seleccionarCategoriaListaPreciosSiExiste']>) {
+    return this.core.seleccionarCategoriaListaPreciosSiExiste(...args);
+  }
+  async abrirFiltrosVehiculo(...args: Parameters<PosCore['abrirFiltrosVehiculo']>) {
+    return this.core.abrirFiltrosVehiculo(...args);
+  }
+  async obtenerCantidadProductosEnGrid(...args: Parameters<PosCore['obtenerCantidadProductosEnGrid']>) {
+    return this.core.obtenerCantidadProductosEnGrid(...args);
+  }
+  async filtrarProductosPorMarcaYModelo(...args: Parameters<PosCore['filtrarProductosPorMarcaYModelo']>) {
+    return this.core.filtrarProductosPorMarcaYModelo(...args);
+  }
+  async limpiarFiltroVehiculo(...args: Parameters<PosCore['limpiarFiltroVehiculo']>) {
+    return this.core.limpiarFiltroVehiculo(...args);
   }
   get botonVistaLista() { return this.core.botonVistaLista; }
   get botonVistaCuadricula() { return this.core.botonVistaCuadricula; }
@@ -534,6 +577,9 @@ export class PosPage {
   async _seleccionarPrimeraOpcionChosenSiHayOpciones(...args: Parameters<PosCore['_seleccionarPrimeraOpcionChosenSiHayOpciones']>) {
     return this.core._seleccionarPrimeraOpcionChosenSiHayOpciones(...args);
   }
+  async _seleccionarPrimeraOpcionChosenSiEsPosible(...args: Parameters<PosCore['_seleccionarPrimeraOpcionChosenSiEsPosible']>) {
+    return this.core._seleccionarPrimeraOpcionChosenSiEsPosible(...args);
+  }
   async _asegurarCheckboxEstado(...args: Parameters<PosCore['_asegurarCheckboxEstado']>) {
     return this.core._asegurarCheckboxEstado(...args);
   }
@@ -641,6 +687,54 @@ export class PosPage {
   }
   async seleccionarVendedorEnModalPago(...args: Parameters<PosPayment['seleccionarVendedorEnModalPago']>) {
     return this.payment.seleccionarVendedorEnModalPago(...args);
+  }
+  async obtenerFechaFacturacion(...args: Parameters<PosPayment['obtenerFechaFacturacion']>) {
+    return this.payment.obtenerFechaFacturacion(...args);
+  }
+  async establecerFechaFacturacion(...args: Parameters<PosPayment['establecerFechaFacturacion']>) {
+    return this.payment.establecerFechaFacturacion(...args);
+  }
+  async obtenerFechaVencimiento(...args: Parameters<PosPayment['obtenerFechaVencimiento']>) {
+    return this.payment.obtenerFechaVencimiento(...args);
+  }
+  async establecerFechaVencimiento(...args: Parameters<PosPayment['establecerFechaVencimiento']>) {
+    return this.payment.establecerFechaVencimiento(...args);
+  }
+  async abrirOpcionesAvanzadasModalPago(...args: Parameters<PosPayment['abrirOpcionesAvanzadasModalPago']>) {
+    return this.payment.abrirOpcionesAvanzadasModalPago(...args);
+  }
+  async activarFacturarATerceros(...args: Parameters<PosPayment['activarFacturarATerceros']>) {
+    return this.payment.activarFacturarATerceros(...args);
+  }
+  async obtenerNombreTerceros(...args: Parameters<PosPayment['obtenerNombreTerceros']>) {
+    return this.payment.obtenerNombreTerceros(...args);
+  }
+  async establecerNumeroPedido(...args: Parameters<PosPayment['establecerNumeroPedido']>) {
+    return this.payment.establecerNumeroPedido(...args);
+  }
+  async obtenerNumeroPedido(...args: Parameters<PosPayment['obtenerNumeroPedido']>) {
+    return this.payment.obtenerNumeroPedido(...args);
+  }
+  async establecerOrdenDeCompra(...args: Parameters<PosPayment['establecerOrdenDeCompra']>) {
+    return this.payment.establecerOrdenDeCompra(...args);
+  }
+  async obtenerOrdenDeCompra(...args: Parameters<PosPayment['obtenerOrdenDeCompra']>) {
+    return this.payment.obtenerOrdenDeCompra(...args);
+  }
+  async agregarObservacionFactura(...args: Parameters<PosPayment['agregarObservacionFactura']>) {
+    return this.payment.agregarObservacionFactura(...args);
+  }
+  async obtenerObservacionFactura(...args: Parameters<PosPayment['obtenerObservacionFactura']>) {
+    return this.payment.obtenerObservacionFactura(...args);
+  }
+  async activarDiasDeCobroSemanal(...args: Parameters<PosPayment['activarDiasDeCobroSemanal']>) {
+    return this.payment.activarDiasDeCobroSemanal(...args);
+  }
+  async seleccionarAbonoInicialEfectivo(...args: Parameters<PosPayment['seleccionarAbonoInicialEfectivo']>) {
+    return this.payment.seleccionarAbonoInicialEfectivo(...args);
+  }
+  async obtenerTotalPagoInicialNumerico(...args: Parameters<PosPayment['obtenerTotalPagoInicialNumerico']>) {
+    return this.payment.obtenerTotalPagoInicialNumerico(...args);
   }
   get modalRuteo() { return this.ruteo.modalRuteo; }
   async abrirCrearOrdenRuteo(...args: Parameters<PosRuteo['abrirCrearOrdenRuteo']>) {
