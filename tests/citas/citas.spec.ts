@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
+import { BASE_URL } from '../env.config';
 
-const CITAS_URL = 'https://dev.designsoftcr.com/qa_talleralpha/public/reservation/reservation';
+const CITAS_URL = BASE_URL + '/reservation/reservation';
 
 const TIMEOUTS = {
   TEST:     60_000,

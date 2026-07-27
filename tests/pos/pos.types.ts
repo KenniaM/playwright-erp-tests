@@ -1,4 +1,5 @@
 import { Locator } from '@playwright/test';
+import { BASE_URL } from '../env.config';
 
 // Tipos y constantes compartidas de todo el módulo POS — movidos tal cual
 // desde pos.page.ts (Paso 0 de la migración a composición, ver el plan
@@ -15,8 +16,7 @@ import { Locator } from '@playwright/test';
 // aplicación resuelva la URL final del POS (incluido `company_pos`, que
 // varía por compañía/ambiente) — nunca se construye a mano ni se hardcodea
 // ningún id de compañía. Ver PosPage._irAlPosResolviendoCompania().
-export const DASHBOARD_URL =
-  'https://dev.designsoftcr.com/qa_talleralpha/public/dash/dashboard';
+export const DASHBOARD_URL = `${BASE_URL}/dash/dashboard`;
 
 // ─── Timeouts ─────────────────────────────────────────────────────────────────
 

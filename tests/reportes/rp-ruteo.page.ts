@@ -1,4 +1,5 @@
 import { Download, expect, Locator, Page } from '@playwright/test';
+import { BASE_URL } from '../env.config';
 import { contentHeaderConTexto, SubmoduloReportes, TIMEOUTS } from './reportes.page';
 
 export const SUBMODULOS_REPORTES_RUTEO: SubmoduloReportes[] = [
@@ -8,7 +9,7 @@ export const SUBMODULOS_REPORTES_RUTEO: SubmoduloReportes[] = [
     // <li>): "Comisiones por vendedor", cuya pantalla real se titula
     // "Reporte de Comisiones".
     nombre: 'Comisiones por vendedor',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/reports/routeReport',
+    url: BASE_URL + '/reports/routeReport',
     rutaEsperada: 'routeReport',
     tituloEsperado: /reporte de comisiones/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /reporte de comisiones/i),

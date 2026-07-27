@@ -1,9 +1,10 @@
 import { expect, Locator, Page } from '@playwright/test';
+import { BASE_URL } from '../env.config';
 
 // ─── URL ──────────────────────────────────────────────────────────────────────
 
 export const RUTAS_URL =
-  'https://dev.designsoftcr.com/qa_talleralpha/public/route/adminRoute';
+  BASE_URL + '/route/adminRoute';
 
 // ─── Timeouts ─────────────────────────────────────────────────────────────────
 

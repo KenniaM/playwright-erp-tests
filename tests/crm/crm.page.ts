@@ -1,4 +1,5 @@
 import { Locator, Page } from '@playwright/test';
+import { BASE_URL } from '../env.config';
 
 // ─── Timeouts ─────────────────────────────────────────────────────────────────
 
@@ -37,31 +38,39 @@ export type SubmoduloCRM = {
 export const SUBMODULOS_CRM: SubmoduloCRM[] = [
   {
     nombre: 'Pipeline de ventas',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/CRM/pipeline',
+    url: BASE_URL + '/CRM/pipeline',
     rutaEsperada: 'CRM/pipeline',
     obtenerLocatorDeCarga: (page) => page.locator('input[placeholder="Buscar prospecto..."]'),
   },
   {
     nombre: 'Seguimiento colaborativo',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/collaborativeMonitoringCRM/index',
+    url: BASE_URL + '/collaborativeMonitoringCRM/index',
     rutaEsperada: 'collaborativeMonitoringCRM',
-    obtenerLocatorDeCarga: (page) => page.locator('#cm-btn-new-task'),
+    // Antes: '#cm-btn-new-task' — confirmado en vivo (ambiente qa_restaurant,
+    // compañía sin ninguna tarea creada todavía) que ese botón solo se
+    // renderiza cuando ya existe al menos una tarea; con la lista vacía la
+    // pantalla real muestra "No hay tareas" en su lugar y el botón nunca
+    // aparece — no es que el submódulo no cargó, es un estado vacío real. El
+    // encabezado h1 "Seguimiento Colaborativo" sí se renderiza siempre,
+    // tenga o no datos, así que es el locator de carga real más estable
+    // entre ambientes con distinta cantidad de datos semilla.
+    obtenerLocatorDeCarga: (page) => page.getByRole('heading', { name: 'Seguimiento Colaborativo', level: 1 }),
   },
   {
     nombre: 'Plantillas de comunicación',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/CRMCommunicationTemplates/index',
+    url: BASE_URL + '/CRMCommunicationTemplates/index',
     rutaEsperada: 'CRMCommunicationTemplates',
     obtenerLocatorDeCarga: (page) => page.locator('#ct-btn-new-template'),
   },
   {
     nombre: 'Entidades Financieras',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/FinancialEntities/index',
+    url: BASE_URL + '/FinancialEntities/index',
     rutaEsperada: 'FinancialEntities',
     obtenerLocatorDeCarga: (page) => page.locator('#fe-btn-new-entity'),
   },
   {
     nombre: 'Inventario de Vehículos',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/CRM/vehicleInventory',
+    url: BASE_URL + '/CRM/vehicleInventory',
     rutaEsperada: 'CRM/vehicleInventory',
     obtenerLocatorDeCarga: (page) => page.locator('input[placeholder="Placa, marca, modelo..."]'),
   },
@@ -79,7 +88,7 @@ export const SUBMODULOS_CRM: SubmoduloCRM[] = [
  */
 export const REPORTES_ROTO = {
   nombre: 'Reportes',
-  url: 'https://dev.designsoftcr.com/qa_talleralpha/public/CRM/report',
+  url: BASE_URL + '/CRM/report',
 } as const;
 
 // ─── Page Object ──────────────────────────────────────────────────────────────

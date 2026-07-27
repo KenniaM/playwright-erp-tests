@@ -1,4 +1,5 @@
 import { Download, expect, Locator, Page } from '@playwright/test';
+import { BASE_URL } from '../env.config';
 import { contentHeaderConTexto, SubmoduloReportes, TIMEOUTS } from './reportes.page';
 
 export const SUBMODULOS_REPORTES_CAJA: SubmoduloReportes[] = [
@@ -6,14 +7,14 @@ export const SUBMODULOS_REPORTES_CAJA: SubmoduloReportes[] = [
     // Sin `.content-header` en esta pantalla (confirmado en vivo) — se valida
     // con el buscador real, que sí es visible.
     nombre: 'Cierres de Caja',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/reports/cashReport',
+    url: BASE_URL + '/reports/cashReport',
     rutaEsperada: 'cashReport',
     tituloEsperado: /reporte de cierre/i,
     obtenerLocatorDeCarga: (page: Page) => page.locator('#newSearchInput'),
   },
   {
     nombre: 'Movimientos de Caja',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/reports/cash_movement_report',
+    url: BASE_URL + '/reports/cash_movement_report',
     rutaEsperada: 'cash_movement_report',
     tituloEsperado: /movimientos de caja/i,
     obtenerLocatorDeCarga: (page: Page) => contentHeaderConTexto(page, /movimientos de caja/i),

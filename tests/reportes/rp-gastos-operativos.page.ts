@@ -1,4 +1,5 @@
 import { Download, expect, Locator, Page } from '@playwright/test';
+import { BASE_URL } from '../env.config';
 import { SubmoduloReportes, TIMEOUTS } from './reportes.page';
 
 export const SUBMODULOS_REPORTES_GASTOS_OPERATIVOS: SubmoduloReportes[] = [
@@ -8,7 +9,7 @@ export const SUBMODULOS_REPORTES_GASTOS_OPERATIVOS: SubmoduloReportes[] = [
     // existe en el DOM pero queda oculto dentro de un panel colapsado,
     // confirmado en vivo.)
     nombre: 'Gastos Operativos',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/family_expenses/familyExpenses',
+    url: BASE_URL + '/family_expenses/familyExpenses',
     rutaEsperada: 'familyExpenses',
     tituloEsperado: /gastos operativos/i,
     obtenerLocatorDeCarga: (page) => page.locator('#btn_search'),

@@ -1,31 +1,32 @@
 import { Download, expect, Locator, Page } from '@playwright/test';
+import { BASE_URL } from '../env.config';
 import { contentHeaderConTexto, SubmoduloReportes, TIMEOUTS } from './reportes.page';
 
 export const SUBMODULOS_REPORTES_COTIZACIONES: SubmoduloReportes[] = [
   {
     nombre: 'Cotizaciones',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/reports/seeProformaReport',
+    url: BASE_URL + '/reports/seeProformaReport',
     rutaEsperada: 'seeProformaReport',
     tituloEsperado: /reporte de proformas/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /reporte de proformas/i),
   },
   {
     nombre: 'Comisiones por meta',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/reports/seeCommissionGoalReport',
+    url: BASE_URL + '/reports/seeCommissionGoalReport',
     rutaEsperada: 'seeCommissionGoalReport',
     tituloEsperado: /comisiones/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /comisiones por metas/i),
   },
   {
     nombre: 'Análisis de Cotizaciones',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/reports/proformAnalysis',
+    url: BASE_URL + '/reports/proformAnalysis',
     rutaEsperada: 'proformAnalysis',
     tituloEsperado: /an[aá]lisis de cotizaciones/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /an[aá]lisis de cotizaciones/i),
   },
   {
     nombre: 'Productos mas cotizados',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/reports/productsMostQuoted',
+    url: BASE_URL + '/reports/productsMostQuoted',
     rutaEsperada: 'productsMostQuoted',
     tituloEsperado: /productos m[aá]s cotizados/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /productos m[aá]s cotizados/i),

@@ -1,4 +1,5 @@
 import { expect, Locator, Page } from '@playwright/test';
+import { BASE_URL } from '../env.config';
 import { espiarErroresJS, esperarQuedaActivo } from '../pos/pos.page';
 
 // espiarErroresJS/esperarQuedaActivo se reexportan tal cual desde pos.page.ts
@@ -10,7 +11,7 @@ export { espiarErroresJS, esperarQuedaActivo };
 // ─── URL ──────────────────────────────────────────────────────────────────────
 
 export const RECEPCION_VEHICULAR_URL =
-  'https://dev.designsoftcr.com/qa_talleralpha/public/vehicularReception/vehicularQuickReception';
+  BASE_URL + '/vehicularReception/vehicularQuickReception';
 
 // ─── Timeouts ─────────────────────────────────────────────────────────────────
 
@@ -338,6 +339,51 @@ const L = {
   TEXTAREA_OBSERVACIONES_ABONO_MENU: '#rop_txta_observations',
   BTN_GUARDAR_ABONO_MENU: '#btn_add_repair_order_payment',
 
+  // ─── Editar orden / Ver orden (menú "⋮", fuera de las <details> colapsables) ─
+  // Confirmado en vivo: viven en el `href="javascript:void(...)"` (mismo
+  // patrón ya visto repetidas veces en este menú), fuera de cualquier
+  // sección <details> — siempre visibles sin necesitar forzar su apertura.
+  LINK_EDITAR_ORDEN: 'a[href*="getOrderById"]',
+  LINK_VER_ORDEN_DETALLE: 'a[href*="getOrderDetailById"]',
+
+  // ─── Asignar mecánico (ícono propio de la tarjeta, fuera del menú "⋮") ──────
+  // Confirmado en vivo: la tarjeta "Lista" (vista Lista de Órdenes) y la
+  // tarjeta "Kanban" (Tablero, y Órdenes en vista Caja) usan DOS marcados
+  // distintos para el mismo ícono — comparten el mismo `onclick` real
+  // (`getMechanicDefaultByOrder`) pero en elementos con clases diferentes:
+  // Lista → `<div class="user_avatar customer-name ...">` (dentro de un
+  // wrapper `.BoardCardLayout-assignee` SIN el onclick); Kanban → el propio
+  // `.BoardCardLayout-assignee` YA tiene el onclick directamente, sin ese
+  // div interno. Acotar por clase (como se intentó primero) deja fuera la
+  // variante Kanban por completo — el `onclick` es el único rasgo
+  // verdaderamente compartido entre ambas.
+  ICONO_ASIGNAR_MECANICO: '[onclick*="getMechanicDefaultByOrder"]',
+  ITEM_MECANICO_POPOVER: '.mechanic-item',
+  NOMBRE_MECANICO_POPOVER: '.mechanic-item__name',
+
+  // ─── Ver Orden (vista de detalle comprensiva, distinta del wizard) ─────────
+  // Confirmado en vivo: se abre tanto por "Paso 2: Ver orden" del menú "⋮"
+  // como al hacer clic directo en la placa/marca/modelo de la tarjeta de una
+  // orden (ambos disparan la misma petición real `getOrderDetailById`).
+  // Acotados al tag real del encabezado (`h3`/`h1`/`h5`, confirmados en vivo
+  // vía snapshot de accesibilidad) con `:text-matches` (sensible a
+  // mayúsculas, a diferencia de `text=`/`:has-text`): el campanario global de
+  // notificaciones renderiza decenas de `<p class="workshop-web-bell-item-body">`
+  // ocultos con texto libre que puede coincidir por subcadena (p. ej.
+  // "Vehículo" en minúscula dentro de una notificación) — sin acotar por tag
+  // exacto, esos falsos positivos ocultos rompían la espera (30+ intentos
+  // resolviendo siempre al `<p>` oculto en vez del encabezado real visible).
+  ENCABEZADO_INFO_CLIENTE_VER_ORDEN: 'h3:text-matches("Información del cliente")',
+  ENCABEZADO_VEHICULO_VER_ORDEN: 'h3:text-matches("Vehículo")',
+  ENCABEZADO_SERVICIOS_VER_ORDEN: 'h1:text-matches("Gestión de Servicios")',
+  ENCABEZADO_PRODUCTOS_VER_ORDEN: 'h1:text-matches("Gestión de productos")',
+  ENCABEZADO_OBSERVACIONES_VER_ORDEN: 'h5:text-is("Observaciones")',
+
+  // ─── Refrescar por tab (confirmado en vivo: solo Tablero y Repuestos tienen
+  // un botón propio dentro de su contenedor de contenido; Dashboard y Órdenes
+  // no exponen ninguno) ────────────────────────────────────────────────────
+  BTN_REFRESCAR_REPUESTOS: '#btn_refresh_spare_parts_cache',
+
   // ─── Crear Recepción / Nueva orden de reparación ────────────────────────
   BTN_NUEVA_RECEPCION:  '.quick-reception-add-btn',
   MODAL_NUEVA_RECEPCION: '#dialog_search_vehicle_by_plaque',
@@ -649,6 +695,17 @@ export class RecepcionPage {
     return this.page.locator(L.BADGE_ORDEN, { hasText: new RegExp(`^${numero}$`) });
   }
 
+  /**
+   * Locator de la tarjeta completa de una orden específica, identificada por
+   * su número real (no por posición) — necesario para volver a ubicar la
+   * MISMA orden tras una recarga completa, ya que el orden de las tarjetas
+   * en el listado puede cambiar entre cargas (p. ej. al reordenarse por
+   * última actividad).
+   */
+  tarjetaPorNumero(numero: string): Locator {
+    return this.page.locator(L.TARJETA_ORDEN, { has: this.badgeOrden(numero) });
+  }
+
   /** Números de orden actualmente visibles (en cualquiera de los dos tabs que comparten este badge). */
   async obtenerNumerosOrdenVisibles(): Promise<string[]> {
     return this.page.locator(L.BADGE_ORDEN).allTextContents();
@@ -678,8 +735,12 @@ export class RecepcionPage {
   async obtenerPrimeraOrdenYPlaca(): Promise<{ numero: string; placa: string }> {
     const primeraTarjeta = this.page.locator(L.TARJETA_ORDEN).first();
     await expect(primeraTarjeta, 'No hay ninguna orden visible para tomar como base de la prueba').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    return this.obtenerNumeroYPlacaDeTarjeta(primeraTarjeta);
+  }
 
-    const texto = (await primeraTarjeta.innerText()).replace(/\s+/g, ' ');
+  /** Igual que `obtenerPrimeraOrdenYPlaca()`, pero sobre una tarjeta específica ya identificada (no necesariamente la primera). */
+  async obtenerNumeroYPlacaDeTarjeta(tarjeta: Locator): Promise<{ numero: string; placa: string }> {
+    const texto = (await tarjeta.innerText()).replace(/\s+/g, ' ');
     const numero = texto.match(/^(\d+)/)?.[1] ?? '';
     const placa = texto.match(/Placa:\s*([A-Za-z0-9-]+)/)?.[1] ?? '';
     return { numero, placa };
@@ -972,6 +1033,167 @@ export class RecepcionPage {
     await expect(link, 'El enlace "Reporte de Inspección Avanzado" no apareció en "Documentos"').toBeVisible({ timeout: TIMEOUTS.CARGA });
     const [descarga] = await Promise.all([this.page.waitForEvent('download', { timeout: TIMEOUTS.CARGA }), link.click()]);
     return descarga;
+  }
+
+  // ─── Editar orden / Ver orden (menú "⋮", fuera de "Documentos") ─────────────
+
+  /**
+   * Abre "Editar orden" desde el menú "⋮" ya desplegado. Es el MISMO
+   * componente de wizard que `abrirDetallePrimeraOrdenVisible()` (badge/
+   * número de la orden) — pero, a diferencia de ese, confirmado en vivo que
+   * NO reabre directamente en la vista comprensiva de detalle: reabre el
+   * wizard paso a paso, resumiendo en el paso que el backend considera
+   * pendiente de revisión (confirmado en vivo, de forma repetible, en
+   * "Marcación de daños" para una orden ya generada por completo con el
+   * flujo estándar de estas pruebas) — nunca en "Observaciones generales"
+   * directamente, así que el dato editable a validar aquí es el de ESE
+   * paso (ver `marcarDanioYGuardar()`/`obtenerTotalMarcacionesDanio()`), no
+   * las observaciones (esas solo persisten desde la vista abierta por
+   * `abrirDetallePrimeraOrdenVisible()`, el clic en el badge/número).
+   */
+  async abrirEditarOrdenDesdeMenu(menu: Locator) {
+    const link = menu.locator(L.LINK_EDITAR_ORDEN);
+    await expect(link, 'El enlace "Editar orden" no apareció en el menú "⋮"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await link.click();
+    await expect(
+      this.page.locator(L.CANVAS_DIBUJO_VISIBLE).first(),
+      'La vista de "Editar orden" no cargó (no apareció el canvas de "Marcación de daños")'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /**
+   * Espera a que la vista comprensiva de "Ver orden" (`getOrderDetailById`)
+   * quede cargada. Confirmado en vivo (tras descartar modal/pestaña
+   * nueva/iframe con un screenshot de página completa): es un reemplazo de
+   * contenido en el mismo lugar, sin cambio de URL — por eso la única señal
+   * real de carga es el propio contenido (secciones "Información del
+   * cliente" y "Vehículo"), no una navegación ni un modal.
+   */
+  private async _esperarVistaVerOrdenCargada() {
+    await expect(
+      this.page.locator(L.ENCABEZADO_INFO_CLIENTE_VER_ORDEN),
+      'La vista de "Ver orden" no cargó (no apareció "Información del cliente")'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await expect(
+      this.page.locator(L.ENCABEZADO_VEHICULO_VER_ORDEN).first(),
+      'La vista de "Ver orden" no cargó (no apareció la sección "Vehículo")'
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /** Abre "Ver orden" desde el menú "⋮" ya desplegado. */
+  async abrirVerOrdenDesdeMenu(menu: Locator) {
+    const link = menu.locator(L.LINK_VER_ORDEN_DETALLE);
+    await expect(link, 'El enlace "Ver orden" no apareció en el menú "⋮"').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await link.click();
+    await this._esperarVistaVerOrdenCargada();
+  }
+
+  /**
+   * Abre la misma vista "Ver orden" pero haciendo clic directamente sobre la
+   * información de placa/cliente/vehículo de la tarjeta (fuera del menú
+   * "⋮"). Confirmado en vivo con un listener de red: dispara la MISMA
+   * petición `getOrderDetailById` que el enlace "Ver orden" del menú.
+   */
+  async abrirVerOrdenDesdeInfoTarjeta(tarjeta: Locator) {
+    const infoPlaca = tarjeta.getByText(/Placa:/).first();
+    await expect(infoPlaca, 'No se encontró la información de placa en la tarjeta de la orden').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await infoPlaca.click();
+    await this._esperarVistaVerOrdenCargada();
+  }
+
+  /** Texto completo (normalizado, sin saltos/espacios repetidos) de la vista "Ver orden" ya cargada — para validar campos puntuales por contenido. */
+  async obtenerTextoVerOrden(): Promise<string> {
+    return (await this.page.locator('body').innerText()).replace(/\s+/g, ' ');
+  }
+
+  /** Confirma que las secciones "Gestión de Servicios", "Gestión de productos" y "Observaciones" de la vista "Ver orden" ya cargada están visibles. */
+  async verificarSeccionesVerOrden() {
+    await expect(this.page.locator(L.ENCABEZADO_SERVICIOS_VER_ORDEN), '"Ver orden" no muestra la sección "Gestión de Servicios"').toBeVisible();
+    await expect(this.page.locator(L.ENCABEZADO_PRODUCTOS_VER_ORDEN), '"Ver orden" no muestra la sección "Gestión de productos"').toBeVisible();
+    await expect(this.page.locator(L.ENCABEZADO_OBSERVACIONES_VER_ORDEN), '"Ver orden" no muestra la sección "Observaciones"').toBeVisible();
+  }
+
+  // ─── Asignar mecánico (ícono propio de la tarjeta) ──────────────────────────
+
+  /** Ícono/avatar de "Asignar mecánico" de una tarjeta de orden específica — mismo componente en Tablero y Órdenes. */
+  iconoAsignarMecanico(tarjeta: Locator): Locator {
+    return tarjeta.locator(L.ICONO_ASIGNAR_MECANICO);
+  }
+
+  /**
+   * Primera tarjeta de orden que SÍ expone el ícono de "Asignar mecánico" —
+   * no simplemente la primera tarjeta visible. Confirmado en vivo: no todas
+   * las órdenes lo muestran (p. ej. columnas/estados terminales del
+   * tablero), así que un `.first()` a ciegas sobre `TARJETA_ORDEN` puede
+   * caer en una orden sin esa función, dejando cualquier espera posterior
+   * sobre el ícono colgada indefinidamente.
+   */
+  primeraTarjetaConAsignarMecanico(): Locator {
+    return this.page.locator(L.TARJETA_ORDEN).filter({ has: this.page.locator(L.ICONO_ASIGNAR_MECANICO) }).first();
+  }
+
+  /** Mecánico actualmente asignado en la tarjeta, leído del `aria-label` real del ícono ("MECÁNICO: Sin asignar" o "MECÁNICO: <nombre>"). */
+  async obtenerMecanicoAsignado(tarjeta: Locator): Promise<string> {
+    const etiqueta = (await this.iconoAsignarMecanico(tarjeta).getAttribute('aria-label')) ?? '';
+    return etiqueta.replace('MECÁNICO:', '').trim();
+  }
+
+  /** Abre el popover de "Asignar mecánico" de una tarjeta y devuelve el popover ya visible. */
+  async abrirAsignarMecanico(tarjeta: Locator): Promise<Locator> {
+    const icono = this.iconoAsignarMecanico(tarjeta);
+    await expect(icono, 'No se encontró el ícono de "Asignar mecánico" en la tarjeta').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await icono.click();
+
+    const popover = tarjeta.locator('[id^="mechanic_repair_order_content_"]');
+    await expect(popover, 'El popover de "Asignar mecánico" no se desplegó').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    return popover;
+  }
+
+  /**
+   * Selecciona un mecánico disponible en el popover ya abierto y confirma la
+   * asignación esperando el ícono real de confirmación
+   * (`[id^="check_mechanic_"]` visible) — esta acción no muestra ningún
+   * toast, así que ese ícono es la única señal real de éxito.
+   *
+   * Si `evitarNombre` se indica, se elige el primer mecánico del popover
+   * CUYO nombre sea distinto de ese (nunca el índice 0 a ciegas): en un
+   * ambiente compartido donde las órdenes no se limpian entre corridas, la
+   * primera orden visible puede ya tener asignado justo el mecánico que
+   * `.first()` elegiría, dejando la prueba de "el cambio se reflejó" sin
+   * ningún cambio real que observar. Con 3+ mecánicos reales confirmados en
+   * el ambiente, siempre hay al menos una alternativa real distinta.
+   */
+  async asignarPrimerMecanicoDisponible(popover: Locator, evitarNombre?: string): Promise<string> {
+    const items = popover.locator(L.ITEM_MECANICO_POPOVER);
+    await expect(items.first(), 'No hay ningún mecánico disponible para asignar').toBeVisible({ timeout: TIMEOUTS.CARGA });
+
+    let item = items.first();
+    if (evitarNombre) {
+      const nombreLimpio = evitarNombre.trim();
+      const candidato = items.filter({ hasNotText: nombreLimpio }).first();
+      if (await candidato.count()) item = candidato;
+    }
+
+    const nombre = (await item.locator(L.NOMBRE_MECANICO_POPOVER).innerText()).trim();
+    const iconoConfirmacion = item.locator('[id^="check_mechanic_"]');
+    await item.click();
+    await expect(iconoConfirmacion, 'No se confirmó visualmente la asignación del mecánico').toBeVisible({ timeout: TIMEOUTS.CARGA });
+
+    return nombre;
+  }
+
+  // ─── Refrescar (Repuestos) ───────────────────────────────────────────────────
+
+  /**
+   * Refresca el caché del tab Repuestos — mismo patrón que
+   * `refrescarTablero()`. Confirmado en vivo (consulta acotada a cada
+   * `contenedorContenido`): Dashboard y Órdenes NO exponen un botón
+   * "Refrescar" propio dentro de su contenedor de contenido — solo Tablero y
+   * Repuestos lo tienen, por eso no existe un método equivalente para los
+   * otros dos tabs.
+   */
+  async refrescarRepuestos() {
+    await this.page.locator(L.BTN_REFRESCAR_REPUESTOS).click();
   }
 
   // ─── Configurar Tablero (modo de tarjeta: Detallado / Compacto) ─────────────
@@ -2601,6 +2823,12 @@ export class RecepcionPage {
       this.page.getByText(L.TEXTO_DANIO_GUARDADO),
       'La marcación de daño no quedó guardada (no apareció "Foto seleccionada... Total: N")'
     ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /** Lee el total actual de marcaciones de daño guardadas, del mismo texto real que confirma `marcarDanioYGuardar()` ("Foto seleccionada: #N. Total: N."). */
+  async obtenerTotalMarcacionesDanio(): Promise<number> {
+    const texto = await this.page.getByText(L.TEXTO_DANIO_GUARDADO).first().innerText();
+    return Number(texto.match(/Total:\s*(\d+)/)?.[1] ?? NaN);
   }
 
   // ─── Observaciones generales ────────────────────────────────────────────────

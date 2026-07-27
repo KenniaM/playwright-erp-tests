@@ -60,6 +60,10 @@ export class PosPayment {
    * necesaria, solo puede ocurrir más adelante al confirmar el pago —no aquí—.
    */
   async presionarFacturar() {
+    // No-op en compañías sin flujo de restaurante (ver el comentario de
+    // asegurarTipoOrdenRestauranteSiEsNecesario en PosCore) — mismo código
+    // para ambos tipos de ambiente.
+    await this.core.asegurarTipoOrdenRestauranteSiEsNecesario();
     await this.page.locator(L.BTN_FACTURAR).click();
   }
 
@@ -184,8 +188,19 @@ export class PosPayment {
   }
 
 
-  /** Llena el monto en efectivo y el dinero recibido. Efectivo permite superar el total. */
+  /**
+   * Llena el monto en efectivo y el dinero recibido. Efectivo permite superar el total.
+   *
+   * Asegura primero que el checkbox de Efectivo (`CHECKBOX_ID.EFECTIVO`)
+   * quede marcado — confirmado en vivo (ambiente qa_restaurant) que, a
+   * diferencia del ambiente original (donde nace marcado por defecto, ver el
+   * comentario de `_cambiarMetodoPago`), aquí el modal de pago puede abrir
+   * sin ningún método preseleccionado, dejando `#payment_cash_total`
+   * deshabilitado. No-op si ya está marcado (ambiente original): mismo
+   * código para ambos.
+   */
   async seleccionarPagoEfectivo(monto: string) {
+    await this.core._asegurarCheckboxEstado(this.page.locator(`#${CHECKBOX_ID.EFECTIVO}`), CHECKBOX_ID.EFECTIVO, true);
     await this.page.locator(L.EFECTIVO_MONTO).fill(monto);
     await this.page.locator(L.EFECTIVO_RECIBIDO).fill(monto);
     await this.page.waitForTimeout(PAUSES.VER_MONTO);
@@ -511,12 +526,20 @@ export class PosPayment {
   }
 
 
-  /** Pago mixto: activa tarjeta manteniendo efectivo, luego llena ambos montos. */
+  /**
+   * Pago mixto: activa tarjeta manteniendo efectivo, luego llena ambos montos.
+   *
+   * Asegura primero que AMBOS checkboxes (Efectivo y Tarjeta) queden
+   * marcados — confirmado en vivo (ambiente qa_restaurant) que, a diferencia
+   * del ambiente original (donde Efectivo nace marcado por defecto), aquí el
+   * modal puede abrir sin ningún método preseleccionado: activar solo
+   * Tarjeta (como asumía este método) deja Efectivo sin marcar y
+   * `#payment_credit_card_total` deshabilitado. No-op si ya están marcados
+   * (ambiente original): mismo código para ambos.
+   */
   async seleccionarPagoMixto(montoTarjeta: string, montoEfectivo: string) {
-    await this.page.evaluate(
-      (id) => (document.getElementById(id) as HTMLInputElement).click(),
-      CHECKBOX_ID.TARJETA
-    );
+    await this.core._asegurarCheckboxEstado(this.page.locator(`#${CHECKBOX_ID.EFECTIVO}`), CHECKBOX_ID.EFECTIVO, true);
+    await this.core._asegurarCheckboxEstado(this.page.locator(`#${CHECKBOX_ID.TARJETA}`), CHECKBOX_ID.TARJETA, true);
     await this.page.waitForTimeout(PAUSES.CAMPO_HABILITADO);
     await this.page.locator('#payment_credit_card_total').fill(montoTarjeta);
     await this.page.getByPlaceholder('Referencia pago en tarjeta').fill('AUTOMATIZADO');

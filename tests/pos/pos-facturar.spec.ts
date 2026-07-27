@@ -360,7 +360,25 @@ testFacturar.describe('Facturación POS', () => {
     if (!(await pos.vistaEstaActiva(pos.botonVistaCuadricula))) {
       await pos.botonVistaCuadricula.click();
     }
-    if (!(await pos.tabEstaActivo(pos.tabProductos))) {
+    // El sub-tab "Productos" (#ck_view_products, junto con Servicios/Pintura)
+    // no existe en compañías tipo restaurante (confirmado en vivo, ambiente
+    // qa_restaurant: esa fila de sub-tabs no aparece en absoluto — el POS de
+    // restaurante organiza el catálogo distinto, vía PRODUCTOS/MESAS/PARA
+    // LLEVAR). Sin este guard, `.click()` esperaba indefinidamente un
+    // elemento que nunca se iba a crear, colgando TODO este beforeEach (y por
+    // tanto los 35 escenarios del describe) hasta agotar el timeout de 5min.
+    // No-op si no existe: mismo código para ambos tipos de ambiente.
+    //
+    // `.count()` en vez de `.isVisible({timeout})`: confirmado en vivo (A/B
+    // real contra el ambiente original, con y sin este guard, mismos
+    // escenarios) que anteponer un `.isVisible()` — que sí participa del
+    // mecanismo de actionability/auto-wait de Playwright — producía cuelgues
+    // reales de 5 minutos en el `beforeEach` que NO ocurrían sin ningún
+    // guard. `.count()` es una consulta directa al DOM sin espera ni
+    // reintento automático, así que solo confirma existencia del nodo sin
+    // interactuar con ese mecanismo.
+    const existeTabProductos = await pos.tabProductos.count().then((n) => n > 0).catch(() => false);
+    if (existeTabProductos && !(await pos.tabEstaActivo(pos.tabProductos))) {
       await pos.tabProductos.click();
     }
   });
@@ -1911,7 +1929,20 @@ testFacturar.describe('Facturación POS', () => {
       // activado ni desactivado): el producto elegido por
       // agregarPrimerProductoDePrecioFijo() es "el primero disponible" del
       // catálogo, sin garantía de que tenga IVA aplicado.
+      //
+      // Bug de automatización encontrado y corregido en vivo (Escenario 35):
+      // `linea.total` refleja lo que el carrito está MOSTRANDO en pantalla,
+      // que depende del checkbox "mostrar precio con IVA"
+      // (#show_price_with_iva) — no de si el producto tiene IVA aplicado
+      // (ver el comentario de LineaCarrito en pos.types.ts). Sin activar ese
+      // checkbox primero, `total` queda igual al neto (sin IVA) aunque
+      // `ivaAplicado` sea true, y validarLineaCarrito(clave, true) fallaba
+      // comparando el total mostrado (sin IVA) contra el total esperado CON
+      // IVA. Mismo patrón que ya usan correctamente los Escenarios 10/15/16
+      // de este archivo: activar establecerMostrarPrecioConIva(true, ...)
+      // antes de validar la línea.
       const datosPrevios = await pos.obtenerDatosLineaCarrito(claveProducto);
+      await pos.establecerMostrarPrecioConIva(true, [claveProducto]);
       const linea = await pos.validarLineaCarrito(claveProducto, datosPrevios.ivaAplicado);
       expect(linea.precioUnitarioNeto, 'El precio unitario neto debe ser mayor a 0').toBeGreaterThan(0);
       expect(linea.neto, 'El subtotal de la línea debe ser mayor a 0').toBeGreaterThan(0);

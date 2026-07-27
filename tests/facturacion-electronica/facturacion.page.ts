@@ -1,4 +1,5 @@
 import { Locator, Page } from '@playwright/test';
+import { BASE_URL } from '../env.config';
 
 // ─── Timeouts ─────────────────────────────────────────────────────────────────
 
@@ -39,56 +40,56 @@ const contentHeaderConTexto = (page: Page, texto: RegExp) => page.locator('.cont
 export const SUBMODULOS_FACTURACION: SubmoduloFacturacion[] = [
   {
     nombre: 'Configuración',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/comp/electronicBilling',
+    url: BASE_URL + '/comp/electronicBilling',
     rutaEsperada: 'comp/electronicBilling',
     tituloEsperado: /facturaci[oó]n electr[oó]nica/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /configuraci[oó]n de facturaci[oó]n electr[oó]nica/i),
   },
   {
     nombre: 'Reporte Facturas',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/ElectronicBilling/ElectronicBillingReport',
+    url: BASE_URL + '/ElectronicBilling/ElectronicBillingReport',
     rutaEsperada: 'ElectronicBillingReport',
     tituloEsperado: /reporte facturaci[oó]n electr[oó]nica/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /reporte facturaci[oó]n electr[oó]nica/i),
   },
   {
     nombre: 'Re-envío de Facturas',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/ElectronicBilling/pendingInvoice',
+    url: BASE_URL + '/ElectronicBilling/pendingInvoice',
     rutaEsperada: 'pendingInvoice',
     tituloEsperado: /re-env[ií]o de facturas/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /re-env[ií]o de facturas/i),
   },
   {
     nombre: 'Recepción de Documentos',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/ElectronicBilling/ElectronicBillingReceptor',
+    url: BASE_URL + '/ElectronicBilling/ElectronicBillingReceptor',
     rutaEsperada: 'ElectronicBillingReceptor',
     tituloEsperado: /recepci[oó]n de documentos/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /recepci[oó]n de documentos/i),
   },
   {
     nombre: 'Factura de compra',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/ElectronicBilling/ElectronicBillingPurchase',
+    url: BASE_URL + '/ElectronicBilling/ElectronicBillingPurchase',
     rutaEsperada: 'ElectronicBillingPurchase',
     tituloEsperado: /factura electr[oó]nica de compra/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /factura electr[oó]nica de compra/i),
   },
   {
     nombre: 'Prorrata',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/ElectronicBilling/Prorrata',
+    url: BASE_URL + '/ElectronicBilling/Prorrata',
     rutaEsperada: 'Prorrata',
     tituloEsperado: /prorrata/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /prorrata/i),
   },
   {
     nombre: 'Reporte D-151',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/ElectronicBilling/D151',
+    url: BASE_URL + '/ElectronicBilling/D151',
     rutaEsperada: 'D151',
     tituloEsperado: /d-151/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /reporte d-151/i),
   },
   {
     nombre: 'Admin Productos con Código CABYS',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/prod/adminCabys',
+    url: BASE_URL + '/prod/adminCabys',
     rutaEsperada: 'adminCabys',
     tituloEsperado: /administrar c[oó]digo cabys/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /administrar c[oó]digo cabys/i),

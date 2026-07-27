@@ -3,9 +3,12 @@ import { test, expect } from '@playwright/test';
 import {
   erroresJSRelevantes,
   espiarErroresJS,
+  MARCA_VEHICULO_PRUEBA,
   ModoTarjetaTablero,
+  PRODUCTO_CATALOGO_PRUEBA,
   RecepcionPage,
   SERVICIO_CON_PAQUETE_INSPECCION,
+  TAB_DASHBOARD,
   TAB_ORDENES,
   TAB_REPUESTOS,
   TAB_TABLERO,
@@ -1714,3 +1717,336 @@ test('Abonos: agregar un abono desde el menú "⋮" e imprimirlo', async ({ page
 
   await test.step('Validar que no aparecen errores visibles ni de JavaScript', validarSinErrores(page, errores));
 });
+
+test('Editar orden: modificar un dato real desde el wizard y verificar que persiste al reabrir', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST_ORDEN_SENCILLA);
+  const recepcion = new RecepcionPage(page);
+  const errores = espiarErroresJS(page);
+  const placa = `QAEDIT${Date.now().toString().slice(-6)}`;
+
+  await test.step('Crear una orden desechable, generada por completo', async () => {
+    await recepcion.ir();
+    await recepcion.abrirNuevaRecepcion();
+    await recepcion.agregarVehiculoNuevo(placa);
+    await recepcion.seleccionarPrimerClienteWizard();
+    await recepcion.avanzarWizard();
+    await recepcion.completarDetallesVehiculoMinimo();
+    await recepcion.guardarDetallesVehiculo();
+    await expect(page.getByText('Lista de productos y servicios')).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await recepcion.agregarProductoDelCatalogo();
+    await recepcion.avanzarWizardVeces(4);
+    await recepcion.marcarPrimeraParteComoBuena();
+    await recepcion.avanzarWizard();
+    await recepcion.subirFotoRecepcion(FOTO_PRUEBA);
+    await recepcion.avanzarWizard();
+    await recepcion.marcarDanioYGuardar();
+    await recepcion.avanzarWizard();
+    await recepcion.llenarObservaciones('Observación inicial QA', 'Observación inicial cliente QA');
+    await recepcion.avanzarWizard();
+    await recepcion.firmarCliente();
+    await recepcion.generarOrden();
+  });
+
+  let totalTrasEditar = 0;
+
+  // Confirmado en vivo: "Editar orden" reabre el wizard paso a paso (no la
+  // vista comprensiva de detalle que abre el clic en el badge/número) y,
+  // para una orden ya generada con este mismo flujo, resume de forma
+  // repetible en "Marcación de daños" — el dato editable real y persistente
+  // disponible justo en ese paso es agregar otra marcación de daño.
+  await test.step('Abrir "Editar orden" desde el menú "⋮" y agregar otra marcación de daño', async () => {
+    await recepcion.ir();
+    await recepcion.visitarTab(TAB_ORDENES);
+    await recepcion.buscarOrden(placa);
+    const menu = await recepcion.abrirOpcionesPrimeraOrden();
+    await recepcion.abrirEditarOrdenDesdeMenu(menu);
+
+    const totalAntes = await recepcion.obtenerTotalMarcacionesDanio();
+    await recepcion.marcarDanioYGuardar();
+    totalTrasEditar = await recepcion.obtenerTotalMarcacionesDanio();
+    expect(totalTrasEditar, 'El total de marcaciones de daño no aumentó tras guardar la nueva marcación').toBeGreaterThan(totalAntes);
+  });
+
+  await test.step('Reabrir la orden desde cero (nueva navegación) y verificar que el cambio persistió', async () => {
+    await recepcion.ir();
+    await recepcion.visitarTab(TAB_ORDENES);
+    await recepcion.buscarOrden(placa);
+    const menu = await recepcion.abrirOpcionesPrimeraOrden();
+    await recepcion.abrirEditarOrdenDesdeMenu(menu);
+
+    const totalTrasReabrir = await recepcion.obtenerTotalMarcacionesDanio();
+    expect(totalTrasReabrir, 'El total de marcaciones de daño editado no persistió al reabrir la orden').toBe(totalTrasEditar);
+  });
+
+  await test.step('Validar que no aparecen errores visibles ni de JavaScript', validarSinErrores(page, errores));
+});
+
+test('Ver orden: la información mostrada corresponde a los datos reales de la orden', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST_ORDEN_SENCILLA);
+  const recepcion = new RecepcionPage(page);
+  const errores = espiarErroresJS(page);
+  const placa = `QAVER${Date.now().toString().slice(-6)}`;
+
+  await test.step('Crear una orden desechable con un producto real agregado', async () => {
+    await recepcion.ir();
+    await recepcion.abrirNuevaRecepcion();
+    await recepcion.agregarVehiculoNuevo(placa);
+    await recepcion.seleccionarPrimerClienteWizard();
+    await recepcion.avanzarWizard();
+    await recepcion.completarDetallesVehiculoMinimo();
+    await recepcion.guardarDetallesVehiculo();
+    await expect(page.getByText('Lista de productos y servicios')).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await recepcion.agregarProductoDelCatalogo();
+  });
+
+  await test.step('Abrir "Ver orden" desde el menú "⋮" y validar la información mostrada', async () => {
+    await recepcion.ir();
+    await recepcion.visitarTab(TAB_ORDENES);
+    await recepcion.buscarOrden(placa);
+    const menu = await recepcion.abrirOpcionesPrimeraOrden();
+    await recepcion.abrirVerOrdenDesdeMenu(menu);
+    await recepcion.verificarSeccionesVerOrden();
+
+    const texto = await recepcion.obtenerTextoVerOrden();
+    expect(texto, 'La vista "Ver orden" no muestra la placa real del vehículo de la orden').toContain(placa);
+    expect(texto, 'La vista "Ver orden" no muestra la marca real del vehículo de la orden').toContain(MARCA_VEHICULO_PRUEBA);
+    expect(texto, 'La vista "Ver orden" no muestra el producto real agregado a la orden').toContain(PRODUCTO_CATALOGO_PRUEBA);
+  });
+
+  await test.step('Validar que no aparecen errores visibles ni de JavaScript', validarSinErrores(page, errores));
+});
+
+test('Crear recepción desde los diferentes tabs que lo permiten', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST_ORDEN_COMPLETA);
+  const recepcion = new RecepcionPage(page);
+  const errores = espiarErroresJS(page);
+
+  // Confirmado en vivo: "+ Recepción" (`.quick-reception-add-btn`) es un
+  // botón GLOBAL del encabezado, visible por igual en los 4 tabs del modo
+  // básico que exponen listado de órdenes — no en Gráficos ni Tabla
+  // informativa, que no tienen ningún concepto de "orden" que crear.
+  const tabsConNuevaRecepcion = [
+    { tab: TAB_DASHBOARD, prefijo: 'QADASH' },
+    { tab: TAB_TABLERO, prefijo: 'QATABL' },
+    { tab: TAB_ORDENES, prefijo: 'QAORD' },
+    { tab: TAB_REPUESTOS, prefijo: 'QAREP' },
+  ];
+
+  for (const { tab, prefijo } of tabsConNuevaRecepcion) {
+    const placa = `${prefijo}${Date.now().toString().slice(-6)}`;
+
+    await test.step(`Tab "${tab.etiqueta}": crear la recepción con el flujo mínimo y generar la orden`, async () => {
+      await recepcion.ir();
+      await recepcion.visitarTab(tab);
+      await recepcion.abrirNuevaRecepcion();
+      await recepcion.agregarVehiculoNuevo(placa);
+      await recepcion.seleccionarPrimerClienteWizard();
+      await recepcion.avanzarWizard();
+      await recepcion.completarDetallesVehiculoMinimo();
+      await recepcion.guardarDetallesVehiculo();
+    });
+
+    await test.step(`Tab "${tab.etiqueta}": validar que la orden generada existe realmente en Órdenes`, async () => {
+      // No se usa `regresarAOrdenesDesdeWizard()` aquí: confirmado en vivo
+      // que "Regresar a órdenes" vuelve al TAB que estaba activo antes de
+      // abrir el wizard (Dashboard/Repuestos en esta prueba), no siempre a
+      // uno con el buscador (`#repair_order_search`) propio — esa
+      // aserción interna solo aplica cuando se partió de Tablero/Órdenes.
+      // Una recarga fresca del módulo evita depender de a dónde "regresa".
+      await recepcion.ir();
+      await recepcion.visitarTab(TAB_ORDENES);
+      await recepcion.buscarOrden(placa);
+
+      await expect
+        .poll(() => recepcion.obtenerNumerosOrdenVisibles().then((n) => n.length), { timeout: TIMEOUTS.CARGA })
+        .toBeGreaterThan(0);
+      const { placa: placaEncontrada } = await recepcion.obtenerPrimeraOrdenYPlaca();
+      expect(placaEncontrada, `La orden creada desde el tab "${tab.etiqueta}" no aparece con la placa esperada`).toBe(placa);
+    });
+  }
+
+  await test.step('Validar que no aparecen errores visibles ni de JavaScript', validarSinErrores(page, errores));
+});
+
+test('Refrescar: disponible y funcional en los tabs que lo exponen (Tablero y Repuestos)', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const recepcion = new RecepcionPage(page);
+  const errores = espiarErroresJS(page);
+
+  await test.step('Tablero: "Refrescar" recarga el listado sin errores', async () => {
+    await recepcion.ir();
+    await recepcion.visitarTab(TAB_TABLERO);
+    await recepcion.refrescarTablero();
+    await expect(page.locator('.noty_bar', { hasText: /error/i })).toHaveCount(0);
+    await expect(page.locator(TAB_TABLERO.contenedorContenido)).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  });
+
+  await test.step('Repuestos: "Refrescar" recarga el listado sin errores', async () => {
+    await recepcion.ir();
+    await recepcion.visitarTab(TAB_REPUESTOS);
+    await recepcion.refrescarRepuestos();
+    await expect(page.locator('.noty_bar', { hasText: /error/i })).toHaveCount(0);
+    await expect(page.locator(TAB_REPUESTOS.contenedorContenido)).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  });
+
+  // Confirmado en vivo con una consulta ACOTADA al `contenedorContenido`
+  // propio de cada tab (no una búsqueda global de texto "Refrescar" en toda
+  // la página, que sí encuentra falsos positivos ajenos): Dashboard y
+  // Órdenes no exponen ningún botón "Refrescar" propio — una ausencia real,
+  // no una omisión de esta prueba.
+  await test.step('Dashboard y Órdenes: se confirma que NO exponen un botón "Refrescar" propio', async () => {
+    await recepcion.ir();
+    await recepcion.visitarTab(TAB_DASHBOARD);
+    expect(
+      await page.locator(TAB_DASHBOARD.contenedorContenido).getByText('Refrescar').count(),
+      'Dashboard expone un botón "Refrescar" que antes no existía — actualizar esta prueba con su flujo real'
+    ).toBe(0);
+
+    await recepcion.visitarTab(TAB_ORDENES);
+    expect(
+      await page.locator(TAB_ORDENES.contenedorContenido).getByText('Refrescar').count(),
+      'Órdenes expone un botón "Refrescar" que antes no existía — actualizar esta prueba con su flujo real'
+    ).toBe(0);
+  });
+
+  await test.step('Validar que no aparecen errores visibles ni de JavaScript', validarSinErrores(page, errores));
+});
+
+test('Acceso a "Ver orden" desde la información de cliente/vehículo de la tarjeta', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST_ORDEN_SENCILLA);
+  const recepcion = new RecepcionPage(page);
+  const errores = espiarErroresJS(page);
+  const placa = `QAINFO${Date.now().toString().slice(-6)}`;
+
+  await test.step('Crear una orden desechable', async () => {
+    await recepcion.ir();
+    await recepcion.abrirNuevaRecepcion();
+    await recepcion.agregarVehiculoNuevo(placa);
+    await recepcion.seleccionarPrimerClienteWizard();
+    await recepcion.avanzarWizard();
+    await recepcion.completarDetallesVehiculoMinimo();
+    await recepcion.guardarDetallesVehiculo();
+  });
+
+  await test.step('En Órdenes, hacer clic en la información de cliente/vehículo de la tarjeta y validar que redirige a "Ver orden"', async () => {
+    await recepcion.regresarAOrdenesDesdeWizard();
+    await recepcion.visitarTab(TAB_ORDENES);
+    await recepcion.buscarOrden(placa);
+
+    const tarjeta = page.locator('.reception-order-card:visible, .repair-order-card:visible').first();
+    await expect(tarjeta, 'No se encontró la tarjeta de la orden recién creada para hacer clic en su información').toBeVisible({
+      timeout: TIMEOUTS.CARGA,
+    });
+    await recepcion.abrirVerOrdenDesdeInfoTarjeta(tarjeta);
+
+    const texto = await recepcion.obtenerTextoVerOrden();
+    expect(texto, 'La vista "Ver orden" abierta desde la tarjeta no corresponde a la orden seleccionada (placa distinta)').toContain(placa);
+  });
+
+  await test.step('Validar que no aparecen errores visibles ni de JavaScript', validarSinErrores(page, errores));
+});
+
+// BUG CONFIRMADO EN VIVO (investigación dedicada: comparación directa entre
+// la tarjeta de Órdenes/vista Lista y la tarjeta de Tablero/Caja, ambas con
+// el mismo ícono real de "Asignar mecánico"): en Órdenes el ícono dispara
+// `getMechanicDefaultByOrder(id)` y el popover SÍ se llena con
+// `.mechanic-item` reales (clase pasa a "...content show"); en Tablero el
+// MISMO ícono (mismo componente, otra variante de tarjeta) dispara
+// `getMechanicDefaultByOrder(id, 1)` — con un segundo argumento — cuya
+// respuesta real SÍ llega (200, confirmado con un listener de red) pero el
+// popover correspondiente (`mechanic_repair_order_content_kanban_{id}`)
+// queda permanentemente vacío y sin la clase "show": ni con distintas
+// órdenes (una recién creada con "Etapa: No aplica" y una orden real antigua
+// ya con etapa asignada), ni reintentando el clic. Es el mismo patrón de
+// "acción con petición 200 que no completa su efecto visible" ya
+// documentado para "Desactivar orden" y "Eliminar orden" — se documenta con
+// `test.fail()` en vez de omitir la validación en Tablero.
+test.fail(
+  'BUG CONOCIDO: Asignar mecánico desde Tablero no llena el popover de mecánicos (la petición real responde 200 pero el contenido nunca se renderiza)',
+  async ({ page }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const recepcion = new RecepcionPage(page);
+    let modoOriginal: ModoTarjetaTablero = 'detallado';
+
+    try {
+      await test.step('Registrar el modo de tarjeta original y forzar "Detallado" (requerido para que la tarjeta del tablero exponga el ícono)', async () => {
+        await recepcion.ir();
+        await recepcion.visitarTab(TAB_TABLERO);
+        modoOriginal = await recepcion.modoTarjetaActivoEnTablero();
+
+        if (modoOriginal !== 'detallado') {
+          await recepcion.abrirConfigurarTablero();
+          await recepcion.seleccionarModoTarjeta('detallado');
+          await recepcion.guardarConfigTablero();
+          await recepcion.refrescarTablero();
+          await expect.poll(() => recepcion.modoTarjetaActivoEnTablero(), { timeout: TIMEOUTS.CARGA }).toBe('detallado');
+        }
+      });
+
+      await test.step('Abrir "Asignar mecánico" en Tablero y esperar (sin éxito) que el popover se llene', async () => {
+        // El caché del tablero se refresca explícitamente: confirmado en
+        // vivo que, sin esto, la carga de página puede mostrar 0 tarjetas
+        // en las 3 columnas aunque existan órdenes reales.
+        await recepcion.refrescarTablero();
+
+        const tarjeta = recepcion.primeraTarjetaConAsignarMecanico();
+        await expect(tarjeta, 'No hay ninguna orden con la opción de "Asignar mecánico" visible en "Tablero"').toBeVisible({
+          timeout: TIMEOUTS.CARGA,
+        });
+
+        await recepcion.abrirAsignarMecanico(tarjeta);
+      });
+    } finally {
+      await test.step('Restaurar el modo de tarjeta original del tablero', async () => {
+        if (modoOriginal !== 'detallado') {
+          await recepcion.ir();
+          await recepcion.visitarTab(TAB_TABLERO);
+          await recepcion.abrirConfigurarTablero();
+          await recepcion.seleccionarModoTarjeta(modoOriginal);
+          await recepcion.guardarConfigTablero();
+          await recepcion.refrescarTablero();
+        }
+      });
+    }
+  }
+);
+
+// BUG CONFIRMADO EN VIVO (investigación dedicada, 3 verificaciones
+// independientes: clic real de Playwright sobre el `.mechanic-item`, espera
+// de un `page.waitForResponse` para cualquier petición con
+// "setQuickMechanicOrder" en la URL, e invocar DIRECTAMENTE por JS el mismo
+// `onclick` real del elemento — `setQuickMechanicOrder(mechanicId, orderId)`
+// — vía `new Function(...)`, descartando así cualquier problema de
+// interceptación del clic de Playwright): en la vista Lista de Órdenes el
+// popover de "Asignar mecánico" SÍ se abre y lista mecánicos reales (ver el
+// test anterior sobre Tablero, que documenta que ahí ni siquiera eso
+// ocurre), pero seleccionar cualquiera de ellos NO dispara ninguna petición
+// de red real (ninguna de las 3 verificaciones detectó tráfico alguno hacia
+// el backend), no lanza ningún error de JavaScript, y el ícono de
+// confirmación (`#check_mechanic_{id}_order_{id}`) nunca se vuelve visible
+// — confirmado tanto con una orden recién creada por esta misma suite como
+// con una orden real preexistente en el ambiente. Mismo patrón de "función
+// que se ejecuta sin excepción pero no completa su efecto real" ya
+// documentado para "Desactivar orden" y "Eliminar orden" — se documenta con
+// `test.fail()` en vez de forzar un verde falso debilitando la aserción.
+test.fail(
+  'BUG CONOCIDO: Asignar mecánico desde Órdenes — seleccionar un mecánico del popover no dispara ninguna petición real ni actualiza el ícono',
+  async ({ page }) => {
+    test.setTimeout(TIMEOUTS.TEST_ORDEN_SENCILLA);
+    const recepcion = new RecepcionPage(page);
+
+    await test.step('Abrir el popover de "Asignar mecánico" en Órdenes y seleccionar un mecánico (sin éxito)', async () => {
+      await recepcion.ir();
+      await recepcion.visitarTab(TAB_ORDENES);
+
+      const tarjeta = recepcion.primeraTarjetaConAsignarMecanico();
+      await expect(tarjeta, 'No hay ninguna orden con la opción de "Asignar mecánico" visible en "Órdenes"').toBeVisible({
+        timeout: TIMEOUTS.CARGA,
+      });
+
+      const antes = await recepcion.obtenerMecanicoAsignado(tarjeta);
+      const popover = await recepcion.abrirAsignarMecanico(tarjeta);
+      await recepcion.asignarPrimerMecanicoDisponible(popover, antes);
+    });
+  }
+);

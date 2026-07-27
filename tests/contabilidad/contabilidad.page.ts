@@ -1,4 +1,5 @@
 import { Locator, Page } from '@playwright/test';
+import { BASE_URL } from '../env.config';
 
 // ─── Timeouts ─────────────────────────────────────────────────────────────────
 
@@ -42,14 +43,14 @@ export type SubmoduloContabilidad = {
 export const SUBMODULOS_CONTABILIDAD: SubmoduloContabilidad[] = [
   {
     nombre: 'Dashboard Contable',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/acaccountingdashboard/index',
+    url: BASE_URL + '/acaccountingdashboard/index',
     rutaEsperada: 'acaccountingdashboard',
     tituloEsperado: /dashboard contable/i,
     obtenerLocatorDeCarga: (page) => page.locator('h1', { hasText: /dashboard contable/i }),
   },
   {
     nombre: 'Asiento de diario',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/acjournalentry/ac_journal_entry',
+    url: BASE_URL + '/acjournalentry/ac_journal_entry',
     rutaEsperada: 'ac_journal_entry',
     tituloEsperado: /asientos de diario/i,
     obtenerLocatorDeCarga: (page) => page.locator('h2', { hasText: /asientos de diario/i }),
@@ -57,28 +58,28 @@ export const SUBMODULOS_CONTABILIDAD: SubmoduloContabilidad[] = [
   // ─── Bancos ───────────────────────────────────────────────────────────────
   {
     nombre: 'Cuentas bancarias',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/bank_account/bank_account',
+    url: BASE_URL + '/bank_account/bank_account',
     rutaEsperada: 'bank_account/bank_account',
     tituloEsperado: /cuentas bancarias/i,
     obtenerLocatorDeCarga: (page) => page.locator('input[placeholder="Buscar por banco o número de cuenta..."]'),
   },
   {
     nombre: 'Tipo de movimiento',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/bnkmovementtype/bnk_movement_type',
+    url: BASE_URL + '/bnkmovementtype/bnk_movement_type',
     rutaEsperada: 'bnk_movement_type',
     tituloEsperado: /tipos de movimientos/i,
     obtenerLocatorDeCarga: (page) => page.locator('#v_search'),
   },
   {
     nombre: 'Solicitudes',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/bnkpaymentrequest/bnk_payment_request',
+    url: BASE_URL + '/bnkpaymentrequest/bnk_payment_request',
     rutaEsperada: 'bnk_payment_request',
     tituloEsperado: /solicitudes de cheque/i,
     obtenerLocatorDeCarga: (page) => page.locator('#btnRequest'),
   },
   {
     nombre: 'Depósitos y transferencias',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/depositsAndTransfers/depositsAndTransfersList',
+    url: BASE_URL + '/depositsAndTransfers/depositsAndTransfersList',
     rutaEsperada: 'depositsAndTransfersList',
     tituloEsperado: /dep[oó]sitos y transferencias/i,
     // `\s+` entre palabras porque el texto real del DOM tiene saltos de
@@ -88,7 +89,7 @@ export const SUBMODULOS_CONTABILIDAD: SubmoduloContabilidad[] = [
   // ─── Activo fijo ──────────────────────────────────────────────────────────
   {
     nombre: 'Activos',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/faassets/fa_assets',
+    url: BASE_URL + '/faassets/fa_assets',
     rutaEsperada: 'faassets/fa_assets',
     tituloEsperado: /activos fijos/i,
     obtenerLocatorDeCarga: (page) => page.locator('h2', { hasText: /activos fijos/i }),
@@ -96,21 +97,21 @@ export const SUBMODULOS_CONTABILIDAD: SubmoduloContabilidad[] = [
   // ─── Reportes ─────────────────────────────────────────────────────────────
   {
     nombre: 'Balance de comprobación',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/ac_trial_balance_report',
+    url: BASE_URL + '/ac_trial_balance_report',
     rutaEsperada: 'ac_trial_balance_report',
     tituloEsperado: /balanza de comprobaci[oó]n/i,
     obtenerLocatorDeCarga: (page) => page.locator('h2', { hasText: /balanza de comprobaci[oó]n/i }),
   },
   {
     nombre: 'Estado de resultado',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/acprofitlossreport/ac_profit_loss_report',
+    url: BASE_URL + '/acprofitlossreport/ac_profit_loss_report',
     rutaEsperada: 'ac_profit_loss_report',
     tituloEsperado: /estado de resultados/i,
     obtenerLocatorDeCarga: (page) => page.locator('h2', { hasText: /estado de resultados/i }),
   },
   {
     nombre: 'Estado de situación financiera',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/acfinancialpositionreport/index',
+    url: BASE_URL + '/acfinancialpositionreport/index',
     rutaEsperada: 'acfinancialpositionreport',
     tituloEsperado: /estado de situaci[oó]n financiera/i,
     obtenerLocatorDeCarga: (page) => page.locator('h2', { hasText: /estado de situaci[oó]n financiera/i }),
@@ -118,7 +119,7 @@ export const SUBMODULOS_CONTABILIDAD: SubmoduloContabilidad[] = [
   // ─── Configuraciones adicionales ─────────────────────────────────────────
   {
     nombre: 'Centro de costo',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/accocenter/ac_cost_center',
+    url: BASE_URL + '/accocenter/ac_cost_center',
     rutaEsperada: 'ac_cost_center',
     tituloEsperado: /centro de costo/i,
     obtenerLocatorDeCarga: (page) => page.locator('h2', { hasText: /centro de costo/i }),
@@ -127,21 +128,21 @@ export const SUBMODULOS_CONTABILIDAD: SubmoduloContabilidad[] = [
     // Sin `<h1>`/`<h2>` visible en esta pantalla (confirmado en vivo, el
     // título real es un `<h4>` sin id) — se valida con el buscador real.
     nombre: 'Tipos de diario',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/acjournaltype/ac_journal_type',
+    url: BASE_URL + '/acjournaltype/ac_journal_type',
     rutaEsperada: 'ac_journal_type',
     tituloEsperado: /tipos de diarios/i,
     obtenerLocatorDeCarga: (page) => page.locator('#v_search'),
   },
   {
     nombre: 'Catalogo de cuentas',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/accatalogaccount/ac_catalog_account',
+    url: BASE_URL + '/accatalogaccount/ac_catalog_account',
     rutaEsperada: 'ac_catalog_account',
     tituloEsperado: /cat[aá]logo de cuentas/i,
     obtenerLocatorDeCarga: (page) => page.locator('h2', { hasText: /cat[aá]logo de cuentas/i }),
   },
   {
     nombre: 'Numeración de documentos',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/acdocumentnumber/ac_document_number',
+    url: BASE_URL + '/acdocumentnumber/ac_document_number',
     rutaEsperada: 'ac_document_number',
     tituloEsperado: /numeraci[oó]n de documentos/i,
     obtenerLocatorDeCarga: (page) => page.locator('h2', { hasText: /numeraci[oó]n de documentos/i }),
@@ -151,21 +152,21 @@ export const SUBMODULOS_CONTABILIDAD: SubmoduloContabilidad[] = [
     // vivo), no "Mes Fiscal" como el link del menú — se valida con el texto
     // real de la pantalla, no con el nombre del menú.
     nombre: 'Mes fiscal',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/acfiscalmonth/ac_fiscal_month',
+    url: BASE_URL + '/acfiscalmonth/ac_fiscal_month',
     rutaEsperada: 'ac_fiscal_month',
     tituloEsperado: /mes fiscal/i,
     obtenerLocatorDeCarga: (page) => page.locator('h2', { hasText: /per[ií]odo contable/i }),
   },
   {
     nombre: 'Configuración de asientos',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/acjournalconfiguration/ac_journal_configuration',
+    url: BASE_URL + '/acjournalconfiguration/ac_journal_configuration',
     rutaEsperada: 'ac_journal_configuration',
     tituloEsperado: /configuraci[oó]n de asientos/i,
     obtenerLocatorDeCarga: (page) => page.locator('h2', { hasText: /configuraci[oó]n de asientos/i }),
   },
   {
     nombre: 'Tipo de cambio',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/acexchangerate/ac_exchange_rate',
+    url: BASE_URL + '/acexchangerate/ac_exchange_rate',
     rutaEsperada: 'ac_exchange_rate',
     tituloEsperado: /tipo de cambio/i,
     obtenerLocatorDeCarga: (page) => page.locator('h2', { hasText: /tipo de cambio/i }),

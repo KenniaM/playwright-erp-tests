@@ -1,4 +1,5 @@
 import { Locator, Page } from '@playwright/test';
+import { BASE_URL } from '../env.config';
 
 // ─── Timeouts ─────────────────────────────────────────────────────────────────
 
@@ -35,49 +36,49 @@ const contentHeaderConTexto = (page: Page, texto: RegExp) => page.locator('.cont
 export const SUBMODULOS_COMPRAS: SubmoduloCompras[] = [
   {
     nombre: 'Administrar Compras',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/purchase/purchase',
+    url: BASE_URL + '/purchase/purchase',
     rutaEsperada: 'purchase/purchase',
     tituloEsperado: /administrar compras/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /administrar compras/i),
   },
   {
     nombre: 'Abono Cuentas por Pagar',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/credit_purchase/providerCreditPurchase',
+    url: BASE_URL + '/credit_purchase/providerCreditPurchase',
     rutaEsperada: 'providerCreditPurchase',
     tituloEsperado: /cuentas por pagar/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /cuentas por pagar/i),
   },
   {
     nombre: 'Orden de Compra',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/purchaseProform/purchaseProform',
+    url: BASE_URL + '/purchaseProform/purchaseProform',
     rutaEsperada: 'purchaseProform',
     tituloEsperado: /orden de compras/i,
     obtenerLocatorDeCarga: (page) => page.locator('input[placeholder="search..."]'),
   },
   {
     nombre: 'Devoluciones',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/pRefound/refund_purchase',
+    url: BASE_URL + '/pRefound/refund_purchase',
     rutaEsperada: 'refund_purchase',
     tituloEsperado: /devoluci[oó]n compras/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /devoluciones de compras/i),
   },
   {
     nombre: 'Nota de crédito',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/purchaseCreditNote/creditNote',
+    url: BASE_URL + '/purchaseCreditNote/creditNote',
     rutaEsperada: 'purchaseCreditNote',
     tituloEsperado: /notas de cr[eé]dito de compras/i,
     obtenerLocatorDeCarga: (page) => page.locator('#btn_search_refound'),
   },
   {
     nombre: 'Agregar gastos',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/expense/expense',
+    url: BASE_URL + '/expense/expense',
     rutaEsperada: 'expense/expense',
     tituloEsperado: /gastos/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /gastos/i),
   },
   {
     nombre: 'Factura de compra',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/ElectronicBilling/ElectronicBillingPurchase',
+    url: BASE_URL + '/ElectronicBilling/ElectronicBillingPurchase',
     rutaEsperada: 'ElectronicBillingPurchase',
     tituloEsperado: /factura electr[oó]nica de compra/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /factura electr[oó]nica de compra/i),

@@ -1,4 +1,5 @@
 import { Locator, Page } from '@playwright/test';
+import { BASE_URL } from '../env.config';
 
 // ─── Timeouts ─────────────────────────────────────────────────────────────────
 
@@ -32,7 +33,7 @@ export type SubmoduloVentas = {
 export const SUBMODULOS_VENTAS: SubmoduloVentas[] = [
   {
     nombre: 'Histórico de Ventas',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/receip/printPosReceip',
+    url: BASE_URL + '/receip/printPosReceip',
     rutaEsperada: 'printPosReceip',
     tituloEsperado: /facturas/i,
     obtenerLocatorDeCarga: (page) =>
@@ -40,35 +41,35 @@ export const SUBMODULOS_VENTAS: SubmoduloVentas[] = [
   },
   {
     nombre: 'Abono Cuentas por Cobrar',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/credit_sale/clientCreditSales',
+    url: BASE_URL + '/credit_sale/clientCreditSales',
     rutaEsperada: 'clientCreditSales',
     tituloEsperado: /cuentas por cobrar/i,
     obtenerLocatorDeCarga: (page) => page.locator('#btn_search'),
   },
   {
     nombre: 'Lista de Cobros',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/receip/receivableList',
+    url: BASE_URL + '/receip/receivableList',
     rutaEsperada: 'receivableList',
     tituloEsperado: /lista de cobro/i,
     obtenerLocatorDeCarga: (page) => page.locator('#show_list_status_0'),
   },
   {
     nombre: 'Historial Mov. de Caja',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/cash_movement/movements',
+    url: BASE_URL + '/cash_movement/movements',
     rutaEsperada: 'cash_movement/movements',
     tituloEsperado: /movimientos de caja/i,
     obtenerLocatorDeCarga: (page) => page.locator('input[placeholder="Fecha inicio"]'),
   },
   {
     nombre: 'Devoluciones',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/refund/refund',
+    url: BASE_URL + '/refund/refund',
     rutaEsperada: 'refund/refund',
     tituloEsperado: /devoluciones/i,
     obtenerLocatorDeCarga: (page) => page.locator('#btn_add_refund'),
   },
   {
     nombre: 'Nota de crédito',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/creditNote/creditNote',
+    url: BASE_URL + '/creditNote/creditNote',
     rutaEsperada: 'creditNote/creditNote',
     tituloEsperado: /registro de notas de crédito/i,
     obtenerLocatorDeCarga: (page) => page.locator('#btn_credit_note_actions'),

@@ -719,6 +719,52 @@ export class PosCore {
 
 
   /**
+   * Compañías de tipo restaurante (confirmado en vivo: ambiente
+   * qa_restaurant, compañía "Restaurante Rancho Robertos") exigen asignar el
+   * pedido a una mesa o marcarlo "Para Llevar" antes de que el botón
+   * "Facturar" (`L.BTN_FACTURAR`, #btn_pay_sale) deje de estar
+   * `display:none` — confirmado inspeccionando el DOM en vivo (el botón
+   * existe siempre, solo cambia su estilo inline). Se elige "Para Llevar"
+   * como opción por defecto porque no requiere seleccionar una mesa
+   * específica del salón (dato que no se puede asumir en ningún ambiente).
+   *
+   * Compañías sin este flujo (p. ej. taller, el ambiente original) nunca
+   * muestran `L.ORDEN_PARA_LLEVAR` ni ocultan `L.BTN_FACTURAR` de entrada —
+   * el primer chequeo (`btnFacturar` ya visible) hace que el método no haga
+   * nada en ese caso. Mismo código para ambos tipos de ambiente, sin ramas
+   * por nombre de compañía ni por ambiente.
+   */
+  async asegurarTipoOrdenRestauranteSiEsNecesario() {
+    const btnFacturar = this.page.locator(L.BTN_FACTURAR);
+    if (await btnFacturar.isVisible().catch(() => false)) return;
+
+    const paraLlevar = this.page.locator(L.ORDEN_PARA_LLEVAR).first();
+    if (await paraLlevar.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      await paraLlevar.click();
+      await expect(btnFacturar, 'El botón "Facturar" no quedó visible tras marcar el pedido como "Para Llevar"').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    }
+  }
+
+
+  /**
+   * Cierra el tooltip informativo `L.TOOLTIP_MONEDA` si quedó visible sobre
+   * el menú de moneda ya abierto — confirmado en vivo (ambiente
+   * qa_restaurant) que puede quedar físicamente encima de las opciones del
+   * menú, interceptando su click ("intercepts pointer events"). Alejar el
+   * mouse del elemento que lo disparó (hover) es la misma acción real que un
+   * usuario haría para que desaparezca por su cuenta — no se oculta a la
+   * fuerza vía DOM.
+   */
+  async _cerrarTooltipMonedaSiAparece() {
+    const tooltip = this.page.locator(L.TOOLTIP_MONEDA);
+    if (await tooltip.isVisible().catch(() => false)) {
+      await this.page.mouse.move(0, 0);
+      await tooltip.waitFor({ state: 'hidden', timeout: 2_000 }).catch(() => {});
+    }
+  }
+
+
+  /**
    * Cierra, en este orden, los tres overlays opcionales que el POS puede
    * mostrar tras cargar (modal de permisos de notificación, aviso de
    * consecutivo fuera de rango, y cualquier toast "noty" restante). Ninguno
@@ -3439,6 +3485,13 @@ export class PosCore {
         .then(() => true)
         .catch(() => false);
       if (!menuAbierto) continue;
+
+      // Confirmado en vivo (ambiente qa_restaurant): el tooltip informativo
+      // del botón de moneda puede quedar visible ENCIMA de las opciones del
+      // menú ya abierto e interceptar este click — ver
+      // _cerrarTooltipMonedaSiAparece(). No-op si el tooltip no existe/no
+      // está visible (ambiente original).
+      await this._cerrarTooltipMonedaSiAparece();
 
       const respuestaPromise = this.page.waitForResponse(
         (res) => res.url().includes(L.AJAX_CAMBIO_MONEDA),

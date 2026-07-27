@@ -1,9 +1,10 @@
 import { expect, Locator, Page } from '@playwright/test';
+import { BASE_URL } from '../env.config';
 
 // ─── URL ──────────────────────────────────────────────────────────────────────
 
 export const PANEL_CONTROL_URL =
-  'https://dev.designsoftcr.com/qa_talleralpha/public/sett/setting';
+  BASE_URL + '/sett/setting';
 
 // Primera sección del acordeón del tab Dashboard ("Dashboard" propiamente),
 // donde vive el select de idioma.

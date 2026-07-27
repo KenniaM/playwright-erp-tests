@@ -1,4 +1,5 @@
 import { Locator, Page } from '@playwright/test';
+import { BASE_URL } from '../env.config';
 
 // ─── Timeouts ─────────────────────────────────────────────────────────────────
 
@@ -39,7 +40,7 @@ export const SUBMODULOS_CONTACTOS: SubmoduloContactos[] = [
   // a CLIENTES_ROTO más abajo.
   {
     nombre: 'Proveedores',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/prov/provider',
+    url: BASE_URL + '/prov/provider',
     rutaEsperada: 'prov/provider',
     tituloEsperado: /proveedores/i,
     obtenerLocatorDeCarga: (page) => page.locator('.content-header', { hasText: /proveedores/i }).first(),
@@ -58,7 +59,7 @@ export const SUBMODULOS_CONTACTOS: SubmoduloContactos[] = [
  */
 export const CLIENTES_ROTO = {
   nombre: 'Clientes',
-  url: 'https://dev.designsoftcr.com/qa_talleralpha/public/cust/customer',
+  url: BASE_URL + '/cust/customer',
 } as const;
 
 // ─── Page Object ──────────────────────────────────────────────────────────────

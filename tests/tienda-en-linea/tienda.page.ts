@@ -1,4 +1,5 @@
 import { Locator, Page } from '@playwright/test';
+import { BASE_URL } from '../env.config';
 
 // ─── Timeouts ─────────────────────────────────────────────────────────────────
 
@@ -54,119 +55,119 @@ const contentHeaderConTexto = (page: Page, texto: RegExp) => page.locator('.cont
 export const SUBMODULOS_TIENDA: SubmoduloTienda[] = [
   {
     nombre: 'Panel de Control',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/soSetting/storeOnlineSetting',
+    url: BASE_URL + '/soSetting/storeOnlineSetting',
     rutaEsperada: 'storeOnlineSetting',
     tituloEsperado: /panel de control de la tienda/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /panel\s+administrativo/i),
   },
   {
     nombre: 'Tema',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/online_store_appearance/appearance_settings',
+    url: BASE_URL + '/online_store_appearance/appearance_settings',
     rutaEsperada: 'appearance_settings',
     tituloEsperado: /conf\. de la tienda/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /configuraci[oó]n\s+de\s+la\s+tienda/i),
   },
   {
     nombre: 'Admin. Zonas de Entrega',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/osDeliveryZone/adminDeliveryZone',
+    url: BASE_URL + '/osDeliveryZone/adminDeliveryZone',
     rutaEsperada: 'adminDeliveryZone',
     tituloEsperado: /config\. de entrega/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /config\.\s+de\s+entrega/i),
   },
   {
     nombre: 'Administración de ofertas',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/rest/combosadmin',
+    url: BASE_URL + '/rest/combosadmin',
     rutaEsperada: 'combosadmin',
     tituloEsperado: /administrar combos/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /administrar\s+combos/i),
   },
   {
     nombre: 'Administración de puntos',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/rest/adminpointsproduct',
+    url: BASE_URL + '/rest/adminpointsproduct',
     rutaEsperada: 'adminpointsproduct',
     tituloEsperado: /puntos/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /administraci[oó]n\s+de\s+puntos/i),
   },
   {
     nombre: 'Admin. Redes Sociales',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/social/social_accounts',
+    url: BASE_URL + '/social/social_accounts',
     rutaEsperada: 'social_accounts',
     tituloEsperado: /admin\. redes sociales/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /admin\.\s+redes\s+sociales/i),
   },
   {
     nombre: '(%) Admin. Descuentos',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/store_discount/admin',
+    url: BASE_URL + '/store_discount/admin',
     rutaEsperada: 'store_discount/admin',
     tituloEsperado: /admin\. descuentos/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /admin\.\s+descuentos/i),
   },
   {
     nombre: 'Agregar Productos',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/prod/product',
+    url: BASE_URL + '/prod/product',
     rutaEsperada: 'prod/product',
     tituloEsperado: /inventario/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /administraci[oó]n\s+de\s+productos/i),
   },
   {
     nombre: 'Métodos de Pago',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/pay/payment',
+    url: BASE_URL + '/pay/payment',
     rutaEsperada: 'pay/payment',
     tituloEsperado: /opciones de pago/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /m[eé]todos\s+de\s+pago/i),
   },
   {
     nombre: 'Ofertas del día',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/deal_products/deal_products',
+    url: BASE_URL + '/deal_products/deal_products',
     rutaEsperada: 'deal_products',
     tituloEsperado: /ofertas/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /ofertas\s+del\s+d[ií]a/i),
   },
   {
     nombre: 'Términos y Condiciones',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/tc/terms_and_conditions?type_conditions=1',
+    url: BASE_URL + '/tc/terms_and_conditions?type_conditions=1',
     rutaEsperada: 'terms_and_conditions',
     tituloEsperado: /t[eé]rminos y cond/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /t[eé]rminos\s+y\s+condiciones/i),
   },
   {
     nombre: 'Configuración de Horario',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/comp/admin_schedule_company',
+    url: BASE_URL + '/comp/admin_schedule_company',
     rutaEsperada: 'admin_schedule_company',
     tituloEsperado: /horario compa[ñn]ia/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /configuraci[oó]n\s+de\s+horarios/i),
   },
   {
     nombre: 'Banner',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/banner/banner',
+    url: BASE_URL + '/banner/banner',
     rutaEsperada: 'banner/banner',
     tituloEsperado: /banners/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /banners\s+panel/i),
   },
   {
     nombre: 'Ofertas',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/off/offer',
+    url: BASE_URL + '/off/offer',
     rutaEsperada: 'off/offer',
     tituloEsperado: /ofertas/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /^\s*ofertas\s+panel/i),
   },
   {
     nombre: 'Opciones de Envío',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/ship/shipping',
+    url: BASE_URL + '/ship/shipping',
     rutaEsperada: 'ship/shipping',
     tituloEsperado: /opciones de env[ií]o/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /opciones\s+de\s+env[ií]o/i),
   },
   {
     nombre: 'Contacto',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/cont/contact',
+    url: BASE_URL + '/cont/contact',
     rutaEsperada: 'cont/contact',
     tituloEsperado: /conf\. de contacto/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /configuraci[oó]n\s+de\s+contacto/i),
   },
   {
     nombre: 'Mision y visión',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/mv/mision_and_vision',
+    url: BASE_URL + '/mv/mision_and_vision',
     rutaEsperada: 'mision_and_vision',
     tituloEsperado: /mision y vision/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /misi[oó]n\s+y\s+visi[oó]n/i),
@@ -184,7 +185,7 @@ export const SUBMODULOS_TIENDA: SubmoduloTienda[] = [
  */
 export const VER_TIENDA_ROTO = {
   nombre: 'Ver la Tienda',
-  url: 'https://dev.designsoftcr.com/qa_talleralpha/public/online_orders/dashboard',
+  url: BASE_URL + '/online_orders/dashboard',
 } as const;
 
 // ─── Page Object ──────────────────────────────────────────────────────────────

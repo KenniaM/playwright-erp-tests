@@ -1,4 +1,5 @@
 import { Locator, Page } from '@playwright/test';
+import { BASE_URL } from '../env.config';
 
 // ─── Timeouts ─────────────────────────────────────────────────────────────────
 
@@ -40,42 +41,42 @@ const contentHeaderConTexto = (page: Page, texto: RegExp) => page.locator('.cont
 export const SUBMODULOS_TALLER_PRINCIPALES: SubmoduloTaller[] = [
   {
     nombre: 'Recepción de Vehículo',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/vehicularReception/vehicularQuickReception',
+    url: BASE_URL + '/vehicularReception/vehicularQuickReception',
     rutaEsperada: 'vehicularQuickReception',
     tituloEsperado: /recepci[oó]n vehicular/i,
     obtenerLocatorDeCarga: (page) => page.locator('#repair_order_search'),
   },
   {
     nombre: 'Tablero de Órdenes de Trabajo',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/vehicularReception/workOrderBoard',
+    url: BASE_URL + '/vehicularReception/workOrderBoard',
     rutaEsperada: 'workOrderBoard',
     tituloEsperado: /tablero kanban/i,
     obtenerLocatorDeCarga: (page) => page.locator('#kanban-config-menu-btn'),
   },
   {
     nombre: 'Estadísticas órdenes',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/vehicularReception/vehicularReceptionDetails',
+    url: BASE_URL + '/vehicularReception/vehicularReceptionDetails',
     rutaEsperada: 'vehicularReceptionDetails',
     tituloEsperado: /reporte de recepci[oó]n vehicular/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /recepci[oó]n vehicular/i),
   },
   {
     nombre: 'Recordatorios RTV',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/rtv/rtvReminder',
+    url: BASE_URL + '/rtv/rtvReminder',
     rutaEsperada: 'rtvReminder',
     tituloEsperado: /recordatorios para rtv/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /recordatorios para rtv/i),
   },
   {
     nombre: 'Relacionar servicios a estados de la órden',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/vehicularReception/relationServiceAndOrderState',
+    url: BASE_URL + '/vehicularReception/relationServiceAndOrderState',
     rutaEsperada: 'relationServiceAndOrderState',
     tituloEsperado: /relacionar servicios a estados de la orden/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /relacionar servicios a estados de la orden/i),
   },
   {
     nombre: 'Reporte de órdenes',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/reports/order_report',
+    url: BASE_URL + '/reports/order_report',
     rutaEsperada: 'order_report',
     tituloEsperado: /reporte de [oó]rdenes/i,
     obtenerLocatorDeCarga: (page) => page.locator('#btn_toggle_advanced_filters'),
@@ -86,13 +87,13 @@ export const SUBMODULOS_TALLER_PRINCIPALES: SubmoduloTaller[] = [
     // — no identifica la página, así que se omite `tituloEsperado` y se
     // valida solo con el encabezado de contenido real, que sí es propio.
     nombre: 'Reporte de Inspección',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/reports/order_report_inspection',
+    url: BASE_URL + '/reports/order_report_inspection',
     rutaEsperada: 'order_report_inspection',
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /reporte de inspecci[oó]n/i),
   },
   {
     nombre: 'Listado de Vehículo',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/reports/vehicle_report',
+    url: BASE_URL + '/reports/vehicle_report',
     rutaEsperada: 'vehicle_report',
     tituloEsperado: /reporte de veh[ií]culos/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /reporte de veh[ií]culos/i),
@@ -102,7 +103,7 @@ export const SUBMODULOS_TALLER_PRINCIPALES: SubmoduloTaller[] = [
 export const SUBMODULOS_TALLER_CONFIGURACION: SubmoduloTaller[] = [
   {
     nombre: 'Servicios de Reparación',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/WorkshopServices/adminWorkshopServices',
+    url: BASE_URL + '/WorkshopServices/adminWorkshopServices',
     rutaEsperada: 'adminWorkshopServices',
     tituloEsperado: /administrar servicios reparaci[oó]n/i,
     obtenerLocatorDeCarga: (page) => page.locator('input[placeholder="Buscar..."]').first(),
@@ -113,69 +114,69 @@ export const SUBMODULOS_TALLER_CONFIGURACION: SubmoduloTaller[] = [
     // vivo) — no identifica la página, así que se omite `tituloEsperado` y
     // se valida solo con el encabezado de contenido real, que sí es propio.
     nombre: 'Servicios End. y Pintura',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/WorkshopServices/adminServicesEP',
+    url: BASE_URL + '/WorkshopServices/adminServicesEP',
     rutaEsperada: 'adminServicesEP',
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /enderezado y pintura/i),
   },
   {
     nombre: 'Servicios de Revisión',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/WorkshopServices/adminWorkshopServices?service_type_id=3',
+    url: BASE_URL + '/WorkshopServices/adminWorkshopServices?service_type_id=3',
     rutaEsperada: 'service_type_id=3',
     tituloEsperado: /servicios revision/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /administrar servicios revisi[oó]n/i),
   },
   {
     nombre: 'Paquetes de inspección',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/WorkshopServices/inspectionPackagemanagement',
+    url: BASE_URL + '/WorkshopServices/inspectionPackagemanagement',
     rutaEsperada: 'inspectionPackagemanagement',
     tituloEsperado: /paquetes de inspecci[oó]n/i,
     obtenerLocatorDeCarga: (page) => page.locator('#ipmConfigBtn'),
   },
   {
     nombre: 'Admin. Tipo de Vehículo',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/adminVehicleType/vehicleType',
+    url: BASE_URL + '/adminVehicleType/vehicleType',
     rutaEsperada: 'adminVehicleType',
     tituloEsperado: /administrar tipo de veh[ií]culo/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /administrar tipo de veh[ií]culo/i),
   },
   {
     nombre: 'Admin. Marcas y modelos',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/brand/vehicle-brands',
+    url: BASE_URL + '/brand/vehicle-brands',
     rutaEsperada: 'vehicle-brands',
     tituloEsperado: /gesti[oó]n de marcas/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /administrar marcas de veh[ií]culos/i),
   },
   {
     nombre: 'Admin. Estilos',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/style/adminVehicleStyle',
+    url: BASE_URL + '/style/adminVehicleStyle',
     rutaEsperada: 'adminVehicleStyle',
     tituloEsperado: /administrar estilos/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /administrar estilos/i),
   },
   {
     nombre: 'Admin. Combustibles',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/fuel/adminFuel',
+    url: BASE_URL + '/fuel/adminFuel',
     rutaEsperada: 'adminFuel',
     tituloEsperado: /combustible/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /tipos de combustibles/i),
   },
   {
     nombre: 'Admin. Transmisión',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/adminTrans/adminTransmission',
+    url: BASE_URL + '/adminTrans/adminTransmission',
     rutaEsperada: 'adminTransmission',
     tituloEsperado: /tipo de transmisi[oó]n/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /tipos de transmisi[oó]n/i),
   },
   {
     nombre: 'Admin. Tipo de motor',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/adminVehicleEngine/AdminVehicleEngine',
+    url: BASE_URL + '/adminVehicleEngine/AdminVehicleEngine',
     rutaEsperada: 'AdminVehicleEngine',
     tituloEsperado: /tipos de motor/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /tipos de motor/i),
   },
   {
     nombre: 'Admin. Partes del vehículo',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/ass/adminCarAssets',
+    url: BASE_URL + '/ass/adminCarAssets',
     rutaEsperada: 'adminCarAssets',
     // El título/encabezado real tiene una errata propia de la app
     // ("Administracíón" en vez de "Administración", confirmada en vivo) —
@@ -185,28 +186,28 @@ export const SUBMODULOS_TALLER_CONFIGURACION: SubmoduloTaller[] = [
   },
   {
     nombre: 'Admin. Aseguradoras',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/insurance/adminInsurancePolicy',
+    url: BASE_URL + '/insurance/adminInsurancePolicy',
     rutaEsperada: 'adminInsurancePolicy',
     tituloEsperado: /administrar aseguradoras/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /administrar aseguradoras/i),
   },
   {
     nombre: 'Admin. Etiquetas fotos',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/repairOrderCategory/adminRepairOrderCategory',
+    url: BASE_URL + '/repairOrderCategory/adminRepairOrderCategory',
     rutaEsperada: 'adminRepairOrderCategory',
     tituloEsperado: /etiquetas/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /etiquetas fotos de recepci[oó]n de veh[ií]culos/i),
   },
   {
     nombre: 'Admin. Opciones pintura',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/serviceReparationState/adminServiceReparationState',
+    url: BASE_URL + '/serviceReparationState/adminServiceReparationState',
     rutaEsperada: 'adminServiceReparationState',
     tituloEsperado: /opciones/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /opciones para enderezado y pintura/i),
   },
   {
     nombre: 'Términos y Condiciones',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/tc/terms_and_conditions?type_conditions=2',
+    url: BASE_URL + '/tc/terms_and_conditions?type_conditions=2',
     rutaEsperada: 'terms_and_conditions',
     // El <title> de esta página tiene una errata propia de la app
     // ("Condciones", confirmada en vivo) — el patrón se detiene antes de esa
@@ -220,13 +221,13 @@ export const SUBMODULOS_TALLER_CONFIGURACION: SubmoduloTaller[] = [
     // actualiza document.title) y no identifica la página, así que se omite
     // `tituloEsperado` y se valida solo con el contenido propio.
     nombre: 'Ajustes de flujo de trabajo',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/new-workflow-reception/adjust-workflow',
+    url: BASE_URL + '/new-workflow-reception/adjust-workflow',
     rutaEsperada: 'adjust-workflow',
     obtenerLocatorDeCarga: (page) => page.locator('#aw-search-btn'),
   },
   {
     nombre: 'Config. Horarios',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/schedule/get_mechanic_schedule',
+    url: BASE_URL + '/schedule/get_mechanic_schedule',
     rutaEsperada: 'get_mechanic_schedule',
     tituloEsperado: /configuraci[oó]n de horarios/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /configuraci[oó]n de horarios/i),

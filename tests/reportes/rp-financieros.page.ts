@@ -1,10 +1,11 @@
 import { Download, expect, Locator, Page } from '@playwright/test';
+import { BASE_URL } from '../env.config';
 import { contentHeaderConTexto, SubmoduloReportes, TIMEOUTS } from './reportes.page';
 
 export const SUBMODULOS_REPORTES_FINANCIEROS: SubmoduloReportes[] = [
   {
     nombre: 'Reporte Financiero',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/reports/reportFinancialIndex',
+    url: BASE_URL + '/reports/reportFinancialIndex',
     rutaEsperada: 'reportFinancialIndex',
     tituloEsperado: /reporte financiero/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /reporte financiero/i),

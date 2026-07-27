@@ -1,9 +1,10 @@
 import { expect, Locator, Page } from '@playwright/test';
+import { BASE_URL } from '../env.config';
 
 // ─── URL ──────────────────────────────────────────────────────────────────────
 
 export const COMISIONES_URL =
-  'https://dev.designsoftcr.com/qa_talleralpha/public/route/adminCommission';
+  BASE_URL + '/route/adminCommission';
 
 // ─── Timeouts ─────────────────────────────────────────────────────────────────
 

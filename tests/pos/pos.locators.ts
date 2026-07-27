@@ -17,6 +17,21 @@ export const L = {
   // comportamiento ya existente.
   PRODUCTO:          '.product_box_name, td[id^="product_table_click_event_"]',
   BTN_FACTURAR:      '#btn_pay_sale',
+  // Selector de tipo de orden ("Mesa" / "Para Llevar") — confirmado en vivo
+  // (ambiente qa_restaurant, compañía "Restaurante Rancho Robertos") que solo
+  // aparece en compañías de tipo restaurante; en compañías sin este flujo
+  // (p. ej. taller) ninguno de los dos elementos existe, así que los métodos
+  // que los usan (ver PosCore.asegurarTipoOrdenRestauranteSiEsNecesario) no
+  // hacen nada en ese caso — mismo código para ambos tipos de ambiente.
+  ORDEN_PARA_LLEVAR: 'center:has-text("PARA LLEVAR")',
+  // Tooltip informativo ("powerTip", biblioteca de terceros ya usada en toda
+  // la aplicación para ayudas contextuales al pasar el mouse) que aparece
+  // sobre el botón de moneda (#menu_type_currency) — confirmado en vivo que
+  // en el ambiente qa_restaurant puede quedar visible físicamente ENCIMA de
+  // las opciones del menú de moneda ya abierto, interceptando el click real
+  // ("<div id=powerTip> intercepts pointer events"). Puramente decorativo,
+  // sin relación con el flujo de negocio que se prueba.
+  TOOLTIP_MONEDA: '#powerTip.se-alt',
   CARRITO_CLAVES:    '#table_buy_list p[id^="drag_and_drop_"]',
   DESCUENTO_GENERAL: '#apply_general_discount',
 

@@ -1,4 +1,5 @@
 import { Locator, Page } from '@playwright/test';
+import { BASE_URL } from '../env.config';
 
 // ─── Timeouts ─────────────────────────────────────────────────────────────────
 
@@ -36,14 +37,14 @@ export type SubmoduloBancos = {
 export const SUBMODULOS_BANCOS: SubmoduloBancos[] = [
   {
     nombre: 'Admin. Cuentas Bancarias',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/bank_account/bank_account',
+    url: BASE_URL + '/bank_account/bank_account',
     rutaEsperada: 'bank_account/bank_account',
     tituloEsperado: /cuentas bancarias/i,
     obtenerLocatorDeCarga: (page) => page.locator('input[placeholder="Buscar por banco o número de cuenta..."]'),
   },
   {
     nombre: 'Depósitos y transferencias',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/depositsAndTransfers/depositsAndTransfersList',
+    url: BASE_URL + '/depositsAndTransfers/depositsAndTransfersList',
     rutaEsperada: 'depositsAndTransfersList',
     tituloEsperado: /dep[oó]sitos y transferencias/i,
     // `\s+` entre palabras porque el texto real del DOM tiene saltos de
@@ -55,14 +56,14 @@ export const SUBMODULOS_BANCOS: SubmoduloBancos[] = [
     // Sin `.content-header` en esta pantalla (confirmado en vivo) — se
     // valida con el buscador real, que sí es visible.
     nombre: 'Tipo de movimiento',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/bnkmovementtype/bnk_movement_type',
+    url: BASE_URL + '/bnkmovementtype/bnk_movement_type',
     rutaEsperada: 'bnk_movement_type',
     tituloEsperado: /tipos de movimientos/i,
     obtenerLocatorDeCarga: (page) => page.locator('#v_search'),
   },
   {
     nombre: 'Solicitudes',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/bnkpaymentrequest/bnk_payment_request',
+    url: BASE_URL + '/bnkpaymentrequest/bnk_payment_request',
     rutaEsperada: 'bnk_payment_request',
     tituloEsperado: /solicitudes de cheque/i,
     obtenerLocatorDeCarga: (page) => page.locator('#btnRequest'),

@@ -1,31 +1,32 @@
 import { Download, expect, Locator, Page } from '@playwright/test';
+import { BASE_URL } from '../env.config';
 import { contentHeaderConTexto, SubmoduloReportes, TIMEOUTS } from './reportes.page';
 
 export const SUBMODULOS_REPORTES_CLIENTES: SubmoduloReportes[] = [
   {
     nombre: 'Bitácora de Clientes',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/cust/customerBinnacle',
+    url: BASE_URL + '/cust/customerBinnacle',
     rutaEsperada: 'customerBinnacle',
     tituloEsperado: /bit[aá]cora clientes/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /bit[aá]cora\s+clientes/i),
   },
   {
     nombre: 'Estado de cuenta',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/reports/customerAccountingStatementReport',
+    url: BASE_URL + '/reports/customerAccountingStatementReport',
     rutaEsperada: 'customerAccountingStatementReport',
     tituloEsperado: /estado de cuenta/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /estado de cuenta/i),
   },
   {
     nombre: 'Clientes frecuentes',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/reports/clientReport',
+    url: BASE_URL + '/reports/clientReport',
     rutaEsperada: 'clientReport',
     tituloEsperado: /reporte de clientes/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /reporte de clientes/i),
   },
   {
     nombre: 'Clientes por Vendedor',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/reports/customerBySellerReport',
+    url: BASE_URL + '/reports/customerBySellerReport',
     rutaEsperada: 'customerBySellerReport',
     tituloEsperado: /clientes por vendedor/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /clientes por vendedor/i),
@@ -38,7 +39,7 @@ export const SUBMODULOS_REPORTES_CLIENTES: SubmoduloReportes[] = [
     // renderiza; la validación real recae en el encabezado de contenido, que
     // sí es propio de esta pantalla.
     nombre: 'Redes Sociales',
-    url: 'https://dev.designsoftcr.com/qa_talleralpha/public/reports/customerBySocialNetworks',
+    url: BASE_URL + '/reports/customerBySocialNetworks',
     rutaEsperada: 'customerBySocialNetworks',
     tituloEsperado: /reporte de ventas por cliente/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /redes sociales/i),
