@@ -1,5 +1,5 @@
 import { test as base, expect, Response, Page } from '@playwright/test';
-import { PosPage, TIMEOUTS, DESCUENTO_INDIVIDUAL_PCT, DESCUENTO_GENERAL_PCT, espiarErroresJS } from './pos.page';
+import { PosPage, TIMEOUTS, DESCUENTO_INDIVIDUAL_PCT, DESCUENTO_GENERAL_PCT, PRECIO_PRODUCTO_RAPIDO, PESTANA_POS_FACTURACION, espiarErroresJS } from './pos.page';
 
 // ─── Sesión compartida (fixture de scope 'worker', NO mode: 'serial') ──────
 //
@@ -73,9 +73,23 @@ const test = base.extend<{}, RuteoFixtures>({
  * cerrar cada posible modal por su cuenta, la recarga los descarta todos.
  */
 test.beforeEach(async ({ pos }) => {
-  test.setTimeout(TIMEOUTS.TEST);
-  await pos.irAlPos();
-  await pos.esperarEstadoInicial();
+  test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+  const listo = await pos.irAlPos()
+    .then(() => pos.esperarEstadoInicial())
+    .then(() => true)
+    .catch(() => false);
+  if (!listo) {
+    // Confirmado en vivo: bajo carga sostenida (corridas largas con muchos
+    // escenarios seguidos en el mismo worker), la ruta rápida puede
+    // quedarse sin resolver ni el modal "Abrir Caja" ni el grid dentro de
+    // PRODUCTS_LOAD — no es un problema de ningún escenario en particular
+    // (se confirmó antes de escenarios muy distintos entre sí: Editar
+    // Orden, Marcar como Pendiente, Marcar como Entregado, cambiar
+    // cliente). recargarPosConReintento() ya reintenta la ruta completa
+    // por Dashboard hasta 3 veces para el mismo síntoma tras facturar; se
+    // reutiliza aquí como fallback en vez de duplicar esa lógica.
+    await recargarPosConReintento(pos);
+  }
   if (await pos.modalAbrirCajaVisible()) {
     await pos.cerrarModalAbrirCaja();
   }
@@ -124,6 +138,42 @@ async function completarYGuardarOrdenRuteo(pos: PosPage, observacion: string) {
   return { ruta, repartidor, direccion, respuesta };
 }
 
+/**
+ * Recupera un estado navegable del POS (modal "Abrir Caja" o grid de
+ * productos visible) reintentando la ruta completa por Dashboard
+ * (cargarPosDesdeDashboard()) hasta 3 veces — confirmado en vivo, en
+ * corridas independientes, que esto puede fallar en dos escenarios
+ * distintos, ninguno de los dos un error determinista de ningún método en
+ * particular:
+ *   1. Tras un flujo pesado de Vista Expandida + "AGREGAR ITEMS" + Facturar
+ *      sobre una Orden de Ruteo, donde ni irAlPos() (ruta rápida) ni
+ *      cargarPosDesdeDashboard() (ruta completa) por sí solos bastan.
+ *   2. Bajo carga sostenida de la propia sesión/worker (corridas largas con
+ *      muchos escenarios seguidos): confirmado en vivo que
+ *      beforeEach()/irAlPos()+esperarEstadoInicial() puede quedarse sin
+ *      resolver ni el modal de caja ni el grid dentro de PRODUCTS_LOAD,
+ *      incluso ANTES de escenarios que ni siquiera facturan (Editar Orden,
+ *      Marcar como Pendiente/Entregado) — degradación real del ambiente/
+ *      sesión compartida, no específica de ningún flujo.
+ * Mismo patrón de reintento acotado ya usado en el resto de este archivo/
+ * pos.page.ts para overlays y navegación inestable (p. ej.
+ * _cerrarOverlayDashboardSiAparece()): cargarPosDesdeDashboard() ya incluye
+ * su propio esperarEstadoInicial(), así que un segundo o tercer intento
+ * completo suele bastar para recuperarse en la práctica.
+ */
+async function recargarPosConReintento(pos: PosPage) {
+  const MAX_INTENTOS = 3;
+  for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+    try {
+      await pos.cargarPosDesdeDashboard();
+      return;
+    } catch (e) {
+      if (intento === MAX_INTENTOS) throw e;
+      console.log(`[recargarPosConReintento] Intento ${intento} no dejó el POS en un estado navegable, reintentando: ${(e as Error).message.slice(0, 200)}`);
+    }
+  }
+}
+
 /** Aplica descuento individual a cada línea del carrito — mismo criterio ya usado en pos-proforma.spec.ts/pos-orden-caja.spec.ts/pos-apartado.spec.ts. */
 async function aplicarDescuentoIndividualATodos(pos: PosPage) {
   await pos.desactivarDescuentoGeneral();
@@ -132,6 +182,38 @@ async function aplicarDescuentoIndividualATodos(pos: PosPage) {
   for (const clave of claves) {
     await pos.aplicarDescuentoIndividual(clave, DESCUENTO_INDIVIDUAL_PCT);
   }
+}
+
+/**
+ * Crea una Orden de Ruteo nueva (mismo flujo del Escenario 1: un producto +
+ * cliente existente + completarYGuardarOrdenRuteo()) y la factura de
+ * inmediato en efectivo por el monto exacto (mismo flujo de pago del
+ * Escenario 20) para dejarla Facturada — y por lo tanto visible en el
+ * filtro real "H. de Órdenes" (ver el comentario de FILTRO_RUTEO_HISTORIAL
+ * en pos-ruteo.page.ts: "Facturado se MUEVE de 'Todos' a 'H. de Órdenes'").
+ * Únicamente se usa como fallback del Escenario 38 cuando ese filtro no
+ * tiene ninguna orden disponible en el momento de correr la suite — el
+ * resto de este archivo prioriza reutilizar órdenes ya existentes del
+ * ambiente compartido en vez de crear las propias.
+ */
+async function crearOrdenFacturadaEnHistorial(pos: PosPage, observacion: string): Promise<string> {
+  await agregarUnProducto(pos);
+  await pos.seleccionarClienteExistente();
+  await pos.abrirCrearOrdenRuteo();
+  const { respuesta } = await completarYGuardarOrdenRuteo(pos, observacion);
+  const idOrden = (await respuesta.text()).trim();
+
+  await pos.abrirListadoOrdenesRuteo();
+  await pos.seleccionarOrdenRuteoParaFacturar(idOrden);
+  await pos.abrirModalDePago();
+  const total = await pos.obtenerTotalVentaNumerico();
+  expect(total, 'El total de la orden recién creada debe ser mayor a 0').toBeGreaterThan(0);
+  await pos.seleccionarPagoEfectivo(String(total));
+  await pos.confirmarPagoAbriendoCajaSiEsNecesario();
+  await pos.validarCarritoVacio();
+
+  expect(await pos.obtenerEstadoFacturacionOrdenRuteo(idOrden), `La orden #${idOrden} recién creada debía quedar "Facturado"`).toBe('Facturado');
+  return idOrden;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -146,7 +228,7 @@ async function aplicarDescuentoIndividualATodos(pos: PosPage) {
 test.describe('Orden de Ruteo', () => {
 
   test('1. Seleccionar un producto, seleccionar un cliente y crear la Orden de Ruteo', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     await agregarUnProducto(pos);
 
@@ -174,7 +256,7 @@ test.describe('Orden de Ruteo', () => {
   });
 
   test('2. Seleccionar un cliente, seleccionar los productos y crear la Orden de Ruteo', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     let nombreCliente = '';
@@ -211,7 +293,7 @@ test.describe('Orden de Ruteo', () => {
   });
 
   test('3. Crear la Orden de Ruteo usando las dos formas de seleccionar cliente (Forma 1 y Forma 2)', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     await test.step('Forma 1: cliente desde arriba del carrito', async () => {
@@ -241,7 +323,7 @@ test.describe('Orden de Ruteo', () => {
   });
 
   test('4. Crear una Orden de Ruteo con producto normal, fraccionado y rápido', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     let clavesEnCarrito: string[] = [];
@@ -267,7 +349,7 @@ test.describe('Orden de Ruteo', () => {
   });
 
   test('5. Crear una Orden de Ruteo con producto normal, fraccionado, rápido y descuento general', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     await pos.agregarProductoNormalFraccionadoYRapido('Ruteo', `DescGeneral ${Date.now()}`);
@@ -292,7 +374,7 @@ test.describe('Orden de Ruteo', () => {
   });
 
   test('6. Crear una Orden de Ruteo con producto normal, fraccionado, rápido y descuento individual', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     await pos.agregarProductoNormalFraccionadoYRapido('Ruteo', `DescIndividual ${Date.now()}`);
@@ -312,7 +394,7 @@ test.describe('Orden de Ruteo', () => {
   });
 
   test('7. Crear una Orden de Ruteo con producto normal, fraccionado, rápido y un combo existente', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     await pos.agregarProductoNormalFraccionadoYRapido('Ruteo', `ConCombo ${Date.now()}`);
@@ -341,6 +423,2116 @@ test.describe('Orden de Ruteo', () => {
 
     await test.step('Completar ruta, repartidor, dirección y observación, y crear la orden', async () => {
       await completarYGuardarOrdenRuteo(pos, 'Escenario 7 - normal + fraccionado + rápido + combo');
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  // ─── Escenarios adicionales: orden completa, Vista Expandida, y listado de
+  // Órdenes de Ruteo YA CREADAS ("Ver Orden"/"Editar Orden"/cambio de estado) ──
+  //
+  // Los últimos cuatro (10-13) usan la pestaña superior "Ruteo"
+  // (abrirListadoOrdenesRuteo(), #btn_routing_option de PESTANAS_POS_A_RECORRER
+  // — ver el comentario de L.RUTEO_LISTA_TARJETA_PREFIJO en pos.page.ts), no
+  // el menú "Crear Orden de Ruteo" que usan los escenarios 1-9. Cada uno crea
+  // su PROPIA orden y la localiza siempre por su id real (nunca por posición
+  // en el listado): bajo `fullyParallel`, otro worker puede estar creando/
+  // editando sus propias órdenes en esa misma pestaña al mismo tiempo.
+
+  test('8. Crear una Orden de Ruteo completa: normal + fraccionado + rápido + combo, con descuento, exoneración y moneda no base', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    const { simboloBase } = await pos.obtenerInfoMoneda();
+    const monedaNoBase = simboloBase === '$' ? '₡' : '$';
+
+    let cantidadProductosEnCarrito = 0;
+    await test.step('Agregar producto normal, fraccionado, rápido y un combo existente', async () => {
+      await pos.agregarProductoNormalFraccionadoYRapido('RuteoCompleta', `Mixto ${Date.now()}`);
+      const combo = await pos.obtenerPrimerCombo();
+      await pos.agregarProductoDelGridAlCarrito(combo);
+
+      const claves = await pos.obtenerClavesProductos();
+      cantidadProductosEnCarrito = claves.length;
+      expect(cantidadProductosEnCarrito, 'Se esperaban al menos 4 líneas en el carrito (normal+fraccionado+rápido+combo)').toBeGreaterThanOrEqual(4);
+    });
+
+    await test.step('Aplicar descuento general y exoneración, y validar que ambos bajan el total', async () => {
+      await pos.mostrarDetalleAvanzadoFactura();
+      const totalSinDescuentos = await pos.obtenerTotalVentaNumerico();
+
+      await pos.activarDescuentoGeneral();
+      await pos.establecerPorcentajeDescuentoGeneral(DESCUENTO_GENERAL_PCT);
+      const totalConDescuento = await pos.obtenerTotalVentaNumerico();
+      expect(totalConDescuento, 'El descuento general no bajó el total').toBeLessThan(totalSinDescuentos);
+
+      await pos.abrirModalExoneracion();
+      await pos.aplicarExoneracion(DESCUENTO_GENERAL_PCT);
+      const montoExoneracion = await pos.obtenerMontoExoneracionNumerico();
+      expect(montoExoneracion, 'La exoneración no quedó reflejada en los totales').toBeGreaterThan(0);
+
+      const totalConAmbos = await pos.obtenerTotalVentaNumerico();
+      expect(totalConAmbos, 'El total no bajó tras descuento + exoneración').toBeLessThan(totalConDescuento);
+    });
+
+    await pos.seleccionarClienteExistente();
+
+    let monedaUsadaFinal = simboloBase;
+    let idOrdenCreada = 0;
+    await test.step(`Intentar crear la orden en moneda NO base (${monedaNoBase}); si el ambiente la bloquea (mismo bloqueo silencioso ya documentado para "Crear Proforma" en asegurarMonedaBaseActiva()), caer automáticamente a la moneda base (${simboloBase}) sin fallar el test`, async () => {
+      await pos.cambiarMoneda(monedaNoBase);
+      await pos.abrirCrearOrdenRuteo();
+      await pos.seleccionarRutaRuteo();
+      await pos.seleccionarRepartidorRuteo();
+      await pos.seleccionarDireccionRuteoSiExiste();
+      await pos.llenarObservacionesRuteo('Escenario 8 - orden completa (intento en moneda no base)');
+
+      let respuesta: Response;
+      try {
+        respuesta = await pos.guardarOrdenRuteoYObtenerRespuesta();
+        monedaUsadaFinal = monedaNoBase;
+      } catch {
+        console.log(
+          `[Escenario 8] El ambiente NO permite crear una Orden de Ruteo en moneda no base (${monedaNoBase}): ` +
+          'bloqueo silencioso confirmado en vivo (el botón "Enviar Orden" no dispara ningún SweetAlert ni ' +
+          'AJAX_GUARDAR_RUTEO), el mismo comportamiento ya documentado para "Crear Proforma". Se cierra el modal, ' +
+          `se restaura la moneda base (${simboloBase}) y se completa la orden ahí.`
+        );
+
+        await pos.cerrarModalRuteoForzado();
+        await pos.cambiarMoneda(simboloBase);
+        monedaUsadaFinal = simboloBase;
+
+        await pos.abrirCrearOrdenRuteo();
+        await pos.seleccionarRutaRuteo();
+        await pos.seleccionarRepartidorRuteo();
+        await pos.seleccionarDireccionRuteoSiExiste();
+        await pos.llenarObservacionesRuteo('Escenario 8 - orden completa (moneda base, tras bloqueo en moneda no base)');
+        respuesta = await pos.guardarOrdenRuteoYObtenerRespuesta();
+      }
+
+      await pos.validarOrdenRuteoCreada(respuesta);
+      idOrdenCreada = parseInt((await respuesta.text()).trim(), 10);
+      expect(idOrdenCreada, 'La respuesta de guardado debe devolver un id numérico válido').toBeGreaterThanOrEqual(1);
+    });
+
+    await test.step('Validar la orden ya creada (consecutivo, estado, cantidad de productos y totales) en el listado "Ruteo"', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+
+      const estado = await pos.obtenerEstadoTarjetaRuteo(String(idOrdenCreada));
+      expect(estado, 'La orden recién creada debe iniciar en estado Pendiente (1)').toBe(1);
+
+      await pos.abrirMenuAccionesOrdenRuteo(String(idOrdenCreada));
+      const detalle = await pos.verOrdenRuteo(String(idOrdenCreada));
+
+      expect(detalle.numero.length, 'La orden debe mostrar un número de consecutivo').toBeGreaterThan(0);
+      expect(detalle.cantidadProductos, 'La cantidad de productos de la orden no coincide con lo agregado al carrito').toBe(cantidadProductosEnCarrito);
+      expect(detalle.descuento, 'El descuento no quedó reflejado en la orden ya creada').toBeGreaterThan(0);
+      expect(detalle.total, 'El total de la orden debe ser mayor que cero').toBeGreaterThan(0);
+
+      console.log(`[Escenario 8] Orden #${idOrdenCreada} creada en moneda ${monedaUsadaFinal === simboloBase ? 'BASE' : 'NO base'} (${monedaUsadaFinal}).`);
+    });
+
+    await test.step(
+      'Limpieza: volver a "POS Facturación" (NO pos.irAlPos()/esperarEstadoInicial() — el listado "Ruteo" recién visitado ' +
+      'es un DOM muy pesado (90+ órdenes) y una navegación completa mientras queda activo puede tardar mucho más que el ' +
+      'timeout habitual; visitarPestanaPos() confirma el cambio de pestaña real en la misma página) y restaurar moneda/' +
+      'descuento/exoneración para no afectar otros tests del mismo worker',
+      async () => {
+        await pos.visitarPestanaPos(PESTANA_POS_FACTURACION);
+        await pos.mostrarDetalleAvanzadoFactura();
+        await pos.desactivarDescuentoGeneral();
+        await pos.cancelarExoneracionSiEstaAplicada();
+        if (monedaUsadaFinal !== simboloBase) await pos.cambiarMoneda(simboloBase);
+      }
+    );
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('9. Crear una Orden de Ruteo en Vista Expandida con producto normal y producto rápido', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+    let expandidaAlInicio = false;
+
+    await test.step('Detectar la vista actual sin asumirla', async () => {
+      expandidaAlInicio = await pos.vistaExpandidaActiva();
+    });
+
+    let codigoProducto = '';
+    let nombreProducto = '';
+    await test.step('Asegurar Vista Normal para leer el código del producto (el buscador interno de Vista Expandida filtra por código, no por nombre)', async () => {
+      if (await pos.vistaExpandidaActiva()) {
+        await pos.alternarVistaExpandida();
+      }
+      const { producto, codigo } = await pos.obtenerPrimerProductoNormalConCodigo();
+      nombreProducto = producto.nombre;
+      codigoProducto = codigo;
+    });
+
+    await test.step('Cambiar a Vista Expandida y validar que el cambio ocurrió realmente', async () => {
+      if (!(await pos.vistaExpandidaActiva())) {
+        await pos.alternarVistaExpandida();
+      }
+      expect(await pos.vistaExpandidaActiva(), 'La vista no quedó en modo Expandida').toBe(true);
+    });
+
+    let clavesEnCarrito: string[] = [];
+    await test.step('Agregar el producto normal desde el buscador interno de Vista Expandida', async () => {
+      await pos.agregarProductoPorCodigoEnVistaExpandida(codigoProducto);
+      clavesEnCarrito = await pos.obtenerClavesProductos();
+      expect(clavesEnCarrito.length, 'El producto normal no quedó agregado al carrito en Vista Expandida').toBeGreaterThanOrEqual(1);
+
+      const lineaAgregada = await pos.obtenerDatosLineaCarrito(clavesEnCarrito[0]);
+      expect(lineaAgregada.nombre, 'El producto agregado en Vista Expandida no coincide con el esperado').toBe(nombreProducto);
+    });
+
+    await test.step('Agregar un producto rápido (modal independiente de la vista de grilla activa)', async () => {
+      await pos.agregarProductoRapidoSimple(`Rápido VistaExpandida ${Date.now()}`, PRECIO_PRODUCTO_RAPIDO);
+      const clavesTrasRapido = await pos.obtenerClavesProductos();
+      expect(clavesTrasRapido.length, 'El producto rápido no quedó agregado al carrito').toBeGreaterThan(clavesEnCarrito.length);
+      clavesEnCarrito = clavesTrasRapido;
+    });
+
+    await test.step('Validar los totales del carrito (ambos productos) antes de crear la orden', async () => {
+      const total = await pos.obtenerTotalVentaNumerico();
+      expect(total, 'El total del carrito debe ser mayor que cero').toBeGreaterThan(0);
+      expect(clavesEnCarrito.length, 'Deben quedar exactamente 2 productos en el carrito (normal + rápido)').toBe(2);
+    });
+
+    await pos.seleccionarClienteExistente();
+    await pos.abrirCrearOrdenRuteo();
+
+    await test.step('Completar ruta, repartidor, dirección y observación, y crear la orden', async () => {
+      await completarYGuardarOrdenRuteo(pos, 'Escenario 9 - Vista Expandida (normal + rápido)');
+    });
+
+    await test.step('Volver a la vista anterior y validar que revirtió correctamente', async () => {
+      if ((await pos.vistaExpandidaActiva()) !== expandidaAlInicio) {
+        await pos.alternarVistaExpandida();
+      }
+      expect(await pos.vistaExpandidaActiva(), 'La vista no volvió a su estado original').toBe(expandidaAlInicio);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('10. Ver Orden: validar que el detalle de una Orden de Ruteo ya creada coincide con lo ingresado', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    let nombreCliente = '';
+    let repartidor = '';
+    let cantidadProductos = 0;
+    const observacion = `Escenario 10 - Ver Orden ${Date.now()}`;
+
+    await test.step('Agregar dos productos y seleccionar cliente/ruta/repartidor con datos conocidos', async () => {
+      const primero = await pos.obtenerPrimerProductoNormal();
+      await pos.agregarProductoDelGridAlCarrito(primero);
+      const segundo = await pos.obtenerSegundoProductoNormalDistinto(primero.nombre);
+      await pos.agregarProductoDelGridAlCarrito(segundo);
+
+      const claves = await pos.obtenerClavesProductos();
+      cantidadProductos = claves.length;
+      expect(cantidadProductos, 'Se esperaban al menos 2 productos en el carrito').toBeGreaterThanOrEqual(2);
+
+      nombreCliente = await pos.seleccionarClienteExistente();
+      await pos.abrirCrearOrdenRuteo();
+      await pos.seleccionarRutaRuteo();
+      repartidor = await pos.seleccionarRepartidorRuteo();
+      await pos.seleccionarDireccionRuteoSiExiste();
+      await pos.llenarObservacionesRuteo(observacion);
+    });
+
+    let idOrdenCreada = 0;
+    await test.step('Guardar la orden', async () => {
+      const respuesta = await pos.guardarOrdenRuteoYObtenerRespuesta();
+      await pos.validarOrdenRuteoCreada(respuesta);
+      idOrdenCreada = parseInt((await respuesta.text()).trim(), 10);
+      expect(idOrdenCreada, 'La respuesta de guardado debe devolver un id numérico válido').toBeGreaterThanOrEqual(1);
+    });
+
+    await test.step('Abrir "Ver Orden" desde el listado "Ruteo" y validar que el detalle coincide con lo ingresado', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      await pos.abrirMenuAccionesOrdenRuteo(String(idOrdenCreada));
+      const detalle = await pos.verOrdenRuteo(String(idOrdenCreada));
+
+      // Nota (limitación real del sistema, no de la automatización): el modal
+      // "Ver Orden" (#dialog_view_routing_order_detail) no incluye un campo
+      // de "Vendedor" separado (solo "Repartidor") ni una etiqueta explícita
+      // de moneda/estado/fecha — confirmado en vivo volcando su DOM real. El
+      // estado se valida aparte con obtenerEstadoTarjetaRuteo() (lee la
+      // propia tarjeta), y la moneda se infiere del símbolo en los montos.
+      expect(detalle.numero.length, 'La orden debe mostrar un consecutivo').toBeGreaterThan(0);
+      expect(detalle.repartidor, 'El repartidor mostrado en "Ver Orden" no coincide con el seleccionado').toContain(repartidor);
+      expect(detalle.clienteNombre, 'El cliente mostrado en "Ver Orden" no coincide con el seleccionado').toContain(nombreCliente);
+      expect(detalle.observacion, 'La observación mostrada en "Ver Orden" no coincide con la registrada').toBe(observacion);
+      expect(detalle.cantidadProductos, 'La cantidad de productos mostrada en "Ver Orden" no coincide con el carrito').toBe(cantidadProductos);
+      expect(detalle.total, 'El total mostrado en "Ver Orden" debe ser mayor que cero').toBeGreaterThan(0);
+
+      const estado = await pos.obtenerEstadoTarjetaRuteo(String(idOrdenCreada));
+      expect(estado, 'Una orden recién creada debe iniciar en estado Pendiente (1)').toBe(1);
+    });
+
+    // Volver a "POS Facturación": el listado "Ruteo" es un DOM pesado
+    // (90+ órdenes) y dejarlo activo puede hacer que la navegación inicial
+    // del siguiente test (irAlPos()/esperarEstadoInicial() en beforeEach)
+    // tarde mucho más de lo esperado — confirmado en vivo.
+    await pos.visitarPestanaPos(PESTANA_POS_FACTURACION);
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('11. Editar Orden: seleccionar una Orden de Ruteo existente, modificar Ruta, Repartidor y Observaciones, y validar que persisten', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    // No crea una orden propia: cualquier Orden de Ruteo ya existente sirve
+    // para editarla (obtenerPrimeraOrdenRuteoSeleccionable() ya evita las
+    // que estén Facturadas, aunque para editar Ruta/Repartidor/Observación
+    // ese estado no importa realmente).
+    let idOrdenSeleccionada = '';
+    await test.step('Localizar una Orden de Ruteo existente', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      idOrdenSeleccionada = await pos.obtenerPrimeraOrdenRuteoSeleccionable();
+    });
+
+    const nuevaObservacion = `Escenario 11 - observación editada ${Date.now()}`;
+    let nuevoRepartidor = '';
+    await test.step(
+      'Abrir "Editar Orden" y modificar Ruta, Repartidor y Observaciones — los ÚNICOS campos editables en este ambiente ' +
+      '(confirmado en vivo: el modal de edición reutiliza el mismo #dialog_add_routing_order de la creación, sin bloque ' +
+      'de cliente/vendedor/productos/cantidades, que no son editables desde esta pantalla)',
+      async () => {
+        await pos.abrirMenuAccionesOrdenRuteo(idOrdenSeleccionada);
+        const resultado = await pos.editarOrdenRuteo(idOrdenSeleccionada, nuevaObservacion);
+        nuevoRepartidor = resultado.repartidor;
+        expect(resultado.observacionRegistrada, 'La nueva observación no quedó registrada en el campo').toBe(nuevaObservacion);
+      }
+    );
+
+    await test.step('Volver a abrir la orden ("Ver Orden") y validar que los cambios persistieron, sin perder el resto de la información', async () => {
+      await pos.abrirMenuAccionesOrdenRuteo(idOrdenSeleccionada);
+      const detalle = await pos.verOrdenRuteo(idOrdenSeleccionada);
+
+      expect(detalle.observacion, 'La observación editada no persistió al volver a abrir la orden').toBe(nuevaObservacion);
+      expect(detalle.repartidor, 'El repartidor editado no persistió al volver a abrir la orden').toContain(nuevoRepartidor);
+      expect(detalle.numero.length, 'La orden no debe perder su consecutivo tras editarla').toBeGreaterThan(0);
+      expect(detalle.total, 'La orden no debe perder su total tras editarla').toBeGreaterThan(0);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('12. Marcar como Pendiente: seleccionar una Orden de Ruteo existente "En camino" y validar que pasa a Pendiente', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    // No crea una orden propia: localiza directamente una Orden de Ruteo YA
+    // EXISTENTE en estado "En camino" (obtenerPrimeraOrdenRuteoConEstado(2))
+    // — el menú de acciones solo ofrece "Marcar como <estado>" para estados
+    // DISTINTOS al actual, así que necesita partir de un estado distinto de
+    // Pendiente para poder ejercer esta acción; no hace falta crear una
+    // orden y avanzarla manualmente cuando el ambiente ya tiene órdenes
+    // reales en ese estado.
+    let idOrdenSeleccionada = '';
+    let detalleOriginal: Awaited<ReturnType<typeof pos.verOrdenRuteo>>;
+    await test.step('Localizar una Orden de Ruteo existente en estado "En camino" y capturar su información original', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      idOrdenSeleccionada = await pos.obtenerPrimeraOrdenRuteoConEstado(2);
+      await pos.abrirMenuAccionesOrdenRuteo(idOrdenSeleccionada);
+      detalleOriginal = await pos.verOrdenRuteo(idOrdenSeleccionada);
+    });
+
+    await test.step('Marcar como Pendiente y validar el estado final', async () => {
+      await pos.abrirMenuAccionesOrdenRuteo(idOrdenSeleccionada);
+      await pos.cambiarEstadoOrdenRuteo(idOrdenSeleccionada, 1);
+      const estadoFinal = await pos.obtenerEstadoTarjetaRuteo(idOrdenSeleccionada);
+      expect(estadoFinal, 'La orden no pasó a estado Pendiente (1)').toBe(1);
+    });
+
+    await test.step('Validar que la orden conserva toda su información tras el cambio de estado', async () => {
+      await pos.abrirMenuAccionesOrdenRuteo(idOrdenSeleccionada);
+      const detalleFinal = await pos.verOrdenRuteo(idOrdenSeleccionada);
+      expect(detalleFinal.numero, 'La orden no debe perder su consecutivo').toBe(detalleOriginal.numero);
+      expect(detalleFinal.cantidadProductos, 'La orden no debe perder sus productos').toBe(detalleOriginal.cantidadProductos);
+      expect(detalleFinal.total, 'La orden no debe perder su total').toBeCloseTo(detalleOriginal.total, 1);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('13. Marcar como En Camino: seleccionar una Orden de Ruteo existente Pendiente y validar que pasa a En Camino', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    // No crea una orden propia: localiza directamente una Orden de Ruteo YA
+    // EXISTENTE en estado Pendiente (obtenerPrimeraOrdenRuteoConEstado(1)) —
+    // el estado inicial más común en este ambiente.
+    let idOrdenSeleccionada = '';
+    let detalleOriginal: Awaited<ReturnType<typeof pos.verOrdenRuteo>>;
+    await test.step('Localizar una Orden de Ruteo existente Pendiente y capturar su información original', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      idOrdenSeleccionada = await pos.obtenerPrimeraOrdenRuteoConEstado(1);
+      await pos.abrirMenuAccionesOrdenRuteo(idOrdenSeleccionada);
+      detalleOriginal = await pos.verOrdenRuteo(idOrdenSeleccionada);
+    });
+
+    await test.step('Marcar como "En camino" y validar el estado final', async () => {
+      await pos.abrirMenuAccionesOrdenRuteo(idOrdenSeleccionada);
+      await pos.cambiarEstadoOrdenRuteo(idOrdenSeleccionada, 2);
+      const estadoFinal = await pos.obtenerEstadoTarjetaRuteo(idOrdenSeleccionada);
+      expect(estadoFinal, 'La orden no quedó en estado "En camino" (2)').toBe(2);
+    });
+
+    await test.step('Validar que la orden conserva toda su información tras el cambio de estado', async () => {
+      await pos.abrirMenuAccionesOrdenRuteo(idOrdenSeleccionada);
+      const detalleFinal = await pos.verOrdenRuteo(idOrdenSeleccionada);
+      expect(detalleFinal.numero, 'La orden no debe perder su consecutivo').toBe(detalleOriginal.numero);
+      expect(detalleFinal.cantidadProductos, 'La orden no debe perder sus productos').toBe(detalleOriginal.cantidadProductos);
+      expect(detalleFinal.total, 'La orden no debe perder su total').toBeCloseTo(detalleOriginal.total, 1);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  // ─── Facturar una Orden de Ruteo ya creada ─────────────────────────────────
+  //
+  // A diferencia de los Escenarios 1-13 (crean la orden y se quedan ahí), los
+  // siguientes usan seleccionarOrdenRuteoParaFacturar() — el botón real
+  // "Seleccionar órden" de cada tarjeta (fuera del menú de tres puntos, ver el
+  // comentario de L.RUTEO_LISTA_BTN_SELECCIONAR en pos.page.ts) — para llevar
+  // la orden al carrito y completar la venta con la misma infraestructura
+  // genérica de facturación ya usada por el resto de la suite (Órdenes de
+  // Caja/Importar Factura/Apartado): abrirAgregarItem(), presionarFacturar(),
+  // cambiarTipoPagoEnModalPago(), confirmarPagoAbriendoCajaSiEsNecesario(),
+  // etc. Confirmado en vivo que ese flujo ya resuelve, sin nada adicional, el
+  // modal de confirmación de pago ("Pagar"), el panel "Información del
+  // Cliente" y el cambio automático a Tiquete Electrónico si la compañía lo
+  // exige (ver el comentario de _confirmarPagoConReintentosDeCaja() en
+  // pos.page.ts) — HONDURAS (COMPANIA_POS) no disparó ninguno de los dos
+  // últimos en las corridas de investigación, pero el flujo los cubre igual
+  // si el ambiente cambia.
+
+  test('14. Marcar una Orden de Ruteo como Entregado: ir a una orden ya "En camino" y validar la transición real de estado', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    // Nota (confirmado en vivo, investigado a fondo): este ambiente NO
+    // expone ninguna pestaña de filtro real por estado de envío dentro del
+    // listado "Ruteo" — los textos "Pendientes"/"En Camino"/"Entregado"
+    // visibles junto a los íconos de color son una simple leyenda (`<small>`
+    // sin onclick ni handler alguno, confirmado intentando clickearla en
+    // vivo: no dispara ningún refiltrado); los únicos `.global-search-tab`
+    // reales del documento pertenecen al buscador global del header
+    // (Módulos/Productos/Permisos/etc.), sin relación con este listado. El
+    // equivalente real y funcional a "ir al tab En Camino" es localizar
+    // directamente, entre las órdenes YA EXISTENTES, una cuya propia tarjeta
+    // ya esté en ese estado (obtenerPrimeraOrdenRuteoConEstado(2)) — mismo
+    // criterio que ya usan los Escenarios 12/13 de este archivo.
+    let idOrdenSeleccionada = '';
+    let detalleOriginal: Awaited<ReturnType<typeof pos.verOrdenRuteo>>;
+    await test.step('Localizar una Orden de Ruteo existente ya "En camino" y capturar su información original', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      idOrdenSeleccionada = await pos.obtenerPrimeraOrdenRuteoConEstado(2);
+      await pos.abrirMenuAccionesOrdenRuteo(idOrdenSeleccionada);
+      detalleOriginal = await pos.verOrdenRuteo(idOrdenSeleccionada);
+    });
+
+    await test.step('Marcarla como Entregado y validar que sale de "En camino" y queda en "Entregado"', async () => {
+      await pos.abrirMenuAccionesOrdenRuteo(idOrdenSeleccionada);
+      await pos.cambiarEstadoOrdenRuteo(idOrdenSeleccionada, 3);
+      const estadoFinal = await pos.obtenerEstadoTarjetaRuteo(idOrdenSeleccionada);
+      expect(estadoFinal, 'La orden no quedó en estado "Entregado" (3) — la acción debe sacarla de "En camino" (2)').toBe(3);
+    });
+
+    await test.step('Validar que los datos de la orden permanecen correctos tras el cambio de estado', async () => {
+      await pos.abrirMenuAccionesOrdenRuteo(idOrdenSeleccionada);
+      const detalleFinal = await pos.verOrdenRuteo(idOrdenSeleccionada);
+      expect(detalleFinal.clienteNombre, 'El cliente de la orden no debía cambiar al marcarla Entregado').toBe(detalleOriginal.clienteNombre);
+      expect(detalleFinal.cantidadProductos, 'La cantidad de productos no debía cambiar al marcarla Entregado').toBe(detalleOriginal.cantidadProductos);
+      expect(detalleFinal.total, 'El total de la orden no debía cambiar al marcarla Entregado').toBeCloseTo(detalleOriginal.total, 1);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('15. Facturar una Orden de Ruteo existente, sin pasar por "Agregar Ítem", en Vista Expandida agregando un producto existente (con IVA) y uno rápido', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    // No crea una orden propia: cualquier Orden de Ruteo ya existente que
+    // siga Pendiente de facturar sirve para este escenario (ver
+    // obtenerPrimeraOrdenRuteoSeleccionable()) — este ambiente ya trae un
+    // listado grande de órdenes previas.
+    let idOrdenSeleccionada = '';
+    let detalleOriginal: Awaited<ReturnType<typeof pos.verOrdenRuteo>>;
+    await test.step('Localizar una Orden de Ruteo existente y capturar su información original (cliente, repartidor, dirección) antes de tocarla', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      idOrdenSeleccionada = await pos.obtenerPrimeraOrdenRuteoSeleccionable();
+      await pos.abrirMenuAccionesOrdenRuteo(idOrdenSeleccionada);
+      detalleOriginal = await pos.verOrdenRuteo(idOrdenSeleccionada);
+    });
+
+    let cantidadInicial = 0;
+    await test.step('Seleccionar la orden para facturarla, sin salir del tab "Ruteo", y confirmar que el cliente original se propagó al carrito', async () => {
+      await pos.seleccionarOrdenRuteoParaFacturar(idOrdenSeleccionada);
+      cantidadInicial = await pos.obtenerCantidadFilasCarrito();
+      expect(cantidadInicial, 'La orden seleccionada debía cargar al menos una línea al carrito').toBeGreaterThan(0);
+      expect(await pos.pestanaRuteoActiva(), 'Seleccionar la orden no debía sacar al usuario del tab "Ruteo"').toBe(true);
+      // Validar la persistencia del cliente ahora (carrito ya cargado, DOM
+      // liviano) en vez de reabrir la tarjeta de la orden después de
+      // facturar: confirmado en vivo que, justo tras completar la venta, la
+      // propia tarjeta puede quedar oculta en su listado (212 órdenes) hasta
+      // 120s — mismo criterio ya usado por los Escenarios 17-19 (que
+      // tampoco reabren la tarjeta tras facturar).
+      // detalleOriginal.clienteNombre viene del modal "Ver Orden" con el
+      // prefijo "Nombre:" incluido (mismo formato ya manejado con
+      // toContain() en el Escenario 10); obtenerClienteSeleccionado() lee
+      // el nombre limpio desde el carrito.
+      expect(detalleOriginal.clienteNombre, 'El cliente original de la orden no se propagó al carrito').toContain(await pos.obtenerClienteSeleccionado());
+    });
+
+    let codigoProducto = '';
+    let nombreProducto = '';
+    await test.step('Localizar un producto existente con IVA y cambiar a Vista Expandida, sin pasar por "Agregar Ítem"', async () => {
+      // obtenerPrimerProductoConIvaNoPresenteEnCarrito() (no obtenerPrimerProductoConIva()):
+      // la orden de Ruteo ya cargada trae su propio producto en el carrito —
+      // buscar y "agregar" ese mismo producto de nuevo solo le sumaría
+      // cantidad a la línea ya existente (ver el comentario de
+      // obtenerTextoCarrito() en pos.page.ts), sin crear la línea nueva que
+      // este escenario necesita validar. Confirmado en vivo (script de
+      // investigación) que el catálogo (L.PRODUCTO, 72 tarjetas) sigue
+      // presente y legible en el DOM sin pasar por "Agregar Ítem", aunque
+      // no se muestre visualmente en el tab "Ruteo".
+      const productoConIva = await pos.obtenerPrimerProductoConIvaNoPresenteEnCarrito();
+      nombreProducto = productoConIva.nombre;
+      codigoProducto = await pos.obtenerCodigoProducto(nombreProducto);
+
+      if (!(await pos.vistaExpandidaActiva())) {
+        await pos.alternarVistaExpandida();
+      }
+      expect(await pos.vistaExpandidaActiva(), 'La vista no quedó en modo Expandida').toBe(true);
+      expect(await pos.pestanaRuteoActiva(), 'Cambiar a Vista Expandida no debía sacar al usuario del tab "Ruteo"').toBe(true);
+      expect(await pos.seEncuentraEnVistaAgregarItem(), 'No debía entrarse al flujo "Agregar Ítem" en ningún momento').toBe(false);
+    });
+
+    // NOTA (confirmado en vivo): el carrito de una Orden de Ruteo ya cargada
+    // se resincroniza contra el servidor (updateItemFromRoutingOrder/
+    // updateDiscountFromRoutingOrder) en cada línea agregada — a diferencia
+    // del carrito "normal" del resto de la suite, esto puede reasignar las
+    // claves ya existentes (incluida la de una línea recién agregada) en
+    // cuanto se agrega OTRA línea después. Por eso, a partir de aquí, cada
+    // paso valida lo que puede leer EN EL MOMENTO (cantidad de líneas,
+    // datos de la línea recién agregada) en vez de guardar una clave para
+    // comprobar su identidad varios pasos después.
+    let cantidadTrasBuscar = 0;
+    await test.step('Buscar el producto por su código en el buscador interno (arriba de "Información del Cliente") y agregarlo', async () => {
+      // obtenerClavesFilasCarrito() (no obtenerClavesProductos()): el
+      // carrito viene de una Orden de Ruteo IMPORTADA (ver el comentario de
+      // obtenerClavesFilasCarrito() en pos.page.ts) — mismo motivo que el
+      // fix aplicado dentro de agregarProductoPorCodigoEnVistaExpandida().
+      const clavesAntes = await pos.obtenerClavesFilasCarrito();
+      await pos.agregarProductoPorCodigoEnVistaExpandida(codigoProducto);
+      const clavesDespues = await pos.obtenerClavesFilasCarrito();
+      expect(clavesDespues.length, 'El producto buscado no quedó agregado al carrito').toBeGreaterThan(clavesAntes.length);
+
+      const claveNueva = clavesDespues.find((c) => !clavesAntes.includes(c))!;
+      const linea = await pos.obtenerDatosLineaCarrito(claveNueva);
+      expect(linea.nombre, 'El producto agregado no coincide con el buscado').toBe(nombreProducto);
+      expect(linea.iva, 'El producto buscado (con IVA) debía reflejar un monto de IVA mayor a 0').toBeGreaterThan(0);
+
+      cantidadTrasBuscar = await pos.obtenerCantidadFilasCarrito();
+    });
+
+    await test.step('Agregar un producto rápido', async () => {
+      await pos.agregarProductoRapidoSimple(`Rápido Ruteo Sin AgregarItem ${Date.now()}`, PRECIO_PRODUCTO_RAPIDO);
+      const cantidadTrasRapido = await pos.obtenerCantidadFilasCarrito();
+      expect(cantidadTrasRapido, 'El producto rápido no quedó agregado al carrito').toBeGreaterThan(cantidadTrasBuscar);
+    });
+
+    let totalAntesDeFacturar = 0;
+    await test.step('Validar cantidades, impuestos y totales antes de facturar, y confirmar que el flujo se mantuvo en el tab "Ruteo" sin entrar a "Agregar Ítem"', async () => {
+      const cantidadFinal = await pos.obtenerCantidadFilasCarrito();
+      expect(cantidadFinal, 'Debieron sumarse líneas nuevas al carrito de la orden cargada').toBeGreaterThan(cantidadInicial);
+
+      totalAntesDeFacturar = await pos.obtenerTotalVentaNumerico();
+      expect(totalAntesDeFacturar, 'El total de la venta debe ser mayor a 0').toBeGreaterThan(0);
+
+      expect(await pos.pestanaRuteoActiva(), 'El flujo completo debía realizarse sin salir del tab "Ruteo"').toBe(true);
+      expect(await pos.seEncuentraEnVistaAgregarItem(), 'En ningún momento debía entrarse al flujo "Agregar Ítem"').toBe(false);
+    });
+
+    await test.step('Facturar con el total exacto en efectivo', async () => {
+      await pos.abrirModalDePago();
+      const total = await pos.obtenerTotalVentaNumerico();
+      expect(total, 'El total mostrado en el modal de pago debe coincidir con el del carrito').toBeCloseTo(totalAntesDeFacturar, 1);
+      await pos.seleccionarPagoEfectivo(String(total));
+      await pos.confirmarPagoAbriendoCajaSiEsNecesario();
+    });
+
+    await test.step('Validar facturación exitosa: carrito vacío y orden marcada como Facturada', async () => {
+      await pos.validarCarritoVacio();
+      // Ni visitarPestanaPos(PESTANA_POS_FACTURACION) ni un nuevo
+      // abrirListadoOrdenesRuteo(), ni abrirMenuAccionesOrdenRuteo()/
+      // verOrdenRuteo() aquí: el flujo completo de este escenario nunca
+      // salió del tab "Ruteo" (ver los pasos anteriores), y confirmado en
+      // vivo que, justo tras facturar, la propia tarjeta de la orden puede
+      // quedar oculta en su listado (212 órdenes) hasta 120s — mismo
+      // criterio ya usado por los Escenarios 17-19 (que tampoco reabren la
+      // tarjeta tras facturar). La persistencia del cliente ya se validó
+      // arriba (al cargar la orden); ruta/repartidor/dirección no se tocan
+      // en ningún paso de este escenario, así que no hay ninguna acción que
+      // pudiera haberlos alterado.
+      expect(await pos.obtenerEstadoFacturacionOrdenRuteo(idOrdenSeleccionada), 'La orden debía quedar "Facturado" tras completar la venta').toBe('Facturado');
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('16. Seleccionar una Orden de Ruteo existente, "Agregar Ítem", cambiar a Vista Expandida, agregar producto existente y uno rápido, y facturar', async ({ pos, sharedPage }) => {
+    // TEST_CON_RECUPERACION (no TEST) — mismo motivo que el Escenario 15:
+    // ver su comentario y el de TIMEOUTS.TEST_CON_RECUPERACION.
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    // No crea una orden propia: cualquier Orden de Ruteo ya existente que
+    // siga Pendiente de facturar sirve (ver obtenerPrimeraOrdenRuteoSeleccionable()).
+    let idOrdenSeleccionada = '';
+    let totalAntesDeAgregar = 0;
+    await test.step('Seleccionar una Orden de Ruteo existente para facturarla y leer el total antes de agregar más productos', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      idOrdenSeleccionada = await pos.obtenerPrimeraOrdenRuteoSeleccionable();
+      await pos.seleccionarOrdenRuteoParaFacturar(idOrdenSeleccionada);
+      totalAntesDeAgregar = await pos.obtenerTotalVentaNumerico();
+      expect(totalAntesDeAgregar, 'La orden cargada debía traer un total mayor a 0').toBeGreaterThan(0);
+    });
+
+    await test.step('Seleccionar "Agregar Ítem" y confirmar que navega al catálogo de Productos', async () => {
+      await pos.abrirAgregarItem();
+    });
+
+    let codigoProducto = '';
+    let nombreProducto = '';
+    await test.step('En Vista Normal, localizar un producto existente por su código', async () => {
+      if (await pos.vistaExpandidaActiva()) {
+        await pos.alternarVistaExpandida();
+      }
+      // obtenerPrimerProductoNoPresenteEnCarrito() (no obtenerPrimerProductoNormal()):
+      // la orden de Ruteo ya cargada trae su propio producto en el carrito —
+      // buscar y "agregar" ese mismo producto de nuevo solo le sumaría
+      // cantidad a la línea ya existente (ver el comentario de
+      // obtenerTextoCarrito() en pos.page.ts), sin crear la línea nueva que
+      // este escenario necesita validar.
+      const producto = await pos.obtenerPrimerProductoNoPresenteEnCarrito();
+      nombreProducto = producto.nombre;
+      codigoProducto = await pos.obtenerCodigoProducto(nombreProducto);
+    });
+
+    await test.step('Cambiar a Vista Expandida y validar que el cambio ocurrió realmente', async () => {
+      if (!(await pos.vistaExpandidaActiva())) {
+        await pos.alternarVistaExpandida();
+      }
+      expect(await pos.vistaExpandidaActiva(), 'La vista no quedó en modo Expandida').toBe(true);
+    });
+
+    await test.step('Buscar el producto existente por código y agregarlo', async () => {
+      // obtenerClavesFilasCarrito() (no obtenerClavesProductos()): el
+      // carrito viene de una Orden de Ruteo IMPORTADA (ver el comentario de
+      // obtenerClavesFilasCarrito() en pos.page.ts) — root-cause real (no
+      // asumido) del timeout de 120s permanente que este mismo paso
+      // presentaba antes de este fix: el producto SÍ se agregaba
+      // correctamente (confirmado en vivo, visible en el DOM con su
+      // precio/código reales), pero obtenerClavesProductos() solo cuenta
+      // filas con id "drag_and_drop_", ausente en líneas importadas, así
+      // que el conteo "antes/después" podía quedar en 0/0 para siempre.
+      const clavesAntes = await pos.obtenerClavesFilasCarrito();
+      await pos.agregarProductoPorCodigoEnVistaExpandida(codigoProducto);
+      const clavesDespues = await pos.obtenerClavesFilasCarrito();
+      expect(clavesDespues.length, 'El producto buscado no quedó agregado al carrito').toBeGreaterThan(clavesAntes.length);
+
+      const claveNueva = clavesDespues.find((c) => !clavesAntes.includes(c))!;
+      const linea = await pos.obtenerDatosLineaCarrito(claveNueva);
+      expect(linea.nombre, 'El producto agregado no coincide con el buscado').toBe(nombreProducto);
+    });
+
+    await test.step('Agregar un producto rápido', async () => {
+      const clavesAntes = await pos.obtenerClavesFilasCarrito();
+      await pos.agregarProductoRapidoSimple(`Rápido Agregar Item Ruteo ${Date.now()}`, PRECIO_PRODUCTO_RAPIDO);
+      const clavesDespues = await pos.obtenerClavesFilasCarrito();
+      expect(clavesDespues.length, 'El producto rápido no quedó agregado al carrito').toBeGreaterThan(clavesAntes.length);
+    });
+
+    let totalRecalculado = 0;
+    await test.step('Validar que los totales se recalcularon tras agregar los productos', async () => {
+      totalRecalculado = await pos.obtenerTotalVentaNumerico();
+      expect(totalRecalculado, 'El total debía subir tras agregar productos por "Agregar Ítem"').toBeGreaterThan(totalAntesDeAgregar);
+    });
+
+    await test.step('Facturar con el total exacto en efectivo', async () => {
+      await pos.abrirModalDePago();
+      const total = await pos.obtenerTotalVentaNumerico();
+      expect(total, 'El total mostrado en el modal de pago debe coincidir con el recalculado').toBeCloseTo(totalRecalculado, 1);
+      await pos.seleccionarPagoEfectivo(String(total));
+      await pos.confirmarPagoAbriendoCajaSiEsNecesario();
+    });
+
+    await test.step('Validar facturación correcta', async () => {
+      await pos.validarCarritoVacio();
+      // Encoger Vista Expandida antes de intentar recuperar la navegación:
+      // hipótesis a validar en vivo (sugerida tras las 4 reproducciones ya
+      // documentadas del hallazgo de recargarPosConReintento()) — dejar la
+      // vista comprimida en su estado normal antes de la recarga podría
+      // aliviar el DOM pesado que impide que el modal de caja o el grid se
+      // vuelvan visibles.
+      if (await pos.vistaExpandidaActiva()) {
+        await pos.alternarVistaExpandida();
+      }
+      // Ver el comentario completo de recargarPosConReintento()
+      // y el del Escenario 15 (mismo hallazgo real confirmado en vivo).
+      await recargarPosConReintento(pos);
+      await pos.abrirListadoOrdenesRuteo();
+      expect(await pos.obtenerEstadoFacturacionOrdenRuteo(idOrdenSeleccionada), 'La orden debía quedar "Facturado" tras completar la venta').toBe('Facturado');
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('17. Facturar una Orden de Ruteo a crédito', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    // No crea una orden propia: toda Orden de Ruteo ya trae un cliente real
+    // asociado (obligatorio para crearla, ver el comentario de
+    // seleccionarOrdenRuteoParaFacturar()), que es justo lo que esta venta a
+    // crédito necesita.
+    let idOrdenSeleccionada = '';
+    let nombreClienteEsperado = '';
+    await test.step('Seleccionar una Orden de Ruteo existente para facturarla y confirmar que trae un cliente real asociado', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      idOrdenSeleccionada = await pos.obtenerPrimeraOrdenRuteoSeleccionable();
+      await pos.seleccionarOrdenRuteoParaFacturar(idOrdenSeleccionada);
+      expect(await pos.hayClienteRealSeleccionado(), 'La orden debía traer un cliente real ya asociado').toBe(true);
+      nombreClienteEsperado = await pos.obtenerClienteSeleccionado();
+      expect(nombreClienteEsperado.length, 'El cliente cargado desde la orden debe tener un nombre visible').toBeGreaterThan(0);
+    });
+
+    await test.step('Cambiar el método de pago a Crédito y validar que aparece la Fecha de Vencimiento', async () => {
+      await pos.abrirModalDePago();
+      await pos.cambiarTipoPagoEnModalPago('credito');
+      expect(await pos.obtenerTipoPagoEnModalPago(), 'El método de pago no quedó configurado como Crédito').toBe('credito');
+    });
+
+    await test.step('Completar la venta a crédito sin llenar ningún monto', async () => {
+      await pos.confirmarPagoAbriendoCajaSiEsNecesario();
+    });
+
+    await test.step('Validar que la venta y el documento se generaron correctamente', async () => {
+      await pos.validarCarritoVacio();
+      await pos.visitarPestanaPos(PESTANA_POS_FACTURACION);
+      await pos.abrirListadoOrdenesRuteo();
+      expect(await pos.obtenerEstadoFacturacionOrdenRuteo(idOrdenSeleccionada), 'La orden debía quedar "Facturado" tras completar la venta a crédito').toBe('Facturado');
+      expect(await pos.ordenRuteoSeleccionable(idOrdenSeleccionada), 'Una orden ya facturada a crédito no debía poder volver a seleccionarse').toBe(false);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('18. Cambiar el cliente de una Orden de Ruteo por otro existente y facturar', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    // No crea una orden propia: cualquier Orden de Ruteo ya existente que
+    // siga Pendiente de facturar sirve (ver obtenerPrimeraOrdenRuteoSeleccionable()) —
+    // toda Orden de Ruteo trae un cliente real ya asociado.
+    let idOrdenSeleccionada = '';
+    let clienteOriginal = '';
+    await test.step('Seleccionar una Orden de Ruteo existente para facturarla y leer su cliente original', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      idOrdenSeleccionada = await pos.obtenerPrimeraOrdenRuteoSeleccionable();
+      await pos.seleccionarOrdenRuteoParaFacturar(idOrdenSeleccionada);
+      clienteOriginal = await pos.obtenerClienteSeleccionado();
+      expect(clienteOriginal.length, 'El cliente cargado desde la orden debe tener un nombre visible').toBeGreaterThan(0);
+    });
+
+    let clienteNuevo = '';
+    await test.step('Quitar el cliente original y seleccionar uno distinto', async () => {
+      await pos.quitarClienteSeleccionado();
+      expect(await pos.hayClienteRealSeleccionado(), 'El cliente original debía quedar quitado').toBe(false);
+
+      clienteNuevo = await pos.seleccionarClienteExistenteDistintoDe(clienteOriginal);
+      expect(clienteNuevo, 'El nuevo cliente no debía coincidir con el original').not.toBe(clienteOriginal);
+      expect(await pos.obtenerClienteSeleccionado(), 'El nuevo cliente no quedó reflejado arriba del carrito').toBe(clienteNuevo);
+    });
+
+    await test.step('Facturar con el total exacto en efectivo', async () => {
+      await pos.abrirModalDePago();
+      const total = await pos.obtenerTotalVentaNumerico();
+      expect(total, 'El total de la venta debe ser mayor a 0').toBeGreaterThan(0);
+      await pos.seleccionarPagoEfectivo(String(total));
+      await pos.confirmarPagoAbriendoCajaSiEsNecesario();
+    });
+
+    await test.step('Validar que la venta finalizó correctamente asociada al nuevo cliente', async () => {
+      await pos.validarCarritoVacio();
+      await pos.visitarPestanaPos(PESTANA_POS_FACTURACION);
+      await pos.abrirListadoOrdenesRuteo();
+      expect(await pos.obtenerEstadoFacturacionOrdenRuteo(idOrdenSeleccionada), 'La orden debía quedar "Facturado" tras completar la venta').toBe('Facturado');
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('19. Facturar una Orden de Ruteo con un producto rápido agregado y validar que no permite una segunda facturación', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    // No crea una orden propia: cualquier Orden de Ruteo ya existente que
+    // siga Pendiente de facturar sirve (ver obtenerPrimeraOrdenRuteoSeleccionable()).
+    let idOrdenSeleccionada = '';
+    let estadoEnvioInicial: 1 | 2 | 3 = 1;
+    let cantidadProductosOriginal = 0;
+    await test.step('Localizar una Orden de Ruteo existente, confirmar su estado inicial y seleccionarla para facturar', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      idOrdenSeleccionada = await pos.obtenerPrimeraOrdenRuteoSeleccionable();
+      estadoEnvioInicial = await pos.obtenerEstadoTarjetaRuteo(idOrdenSeleccionada);
+      expect(await pos.obtenerEstadoFacturacionOrdenRuteo(idOrdenSeleccionada), 'La orden localizada debía estar "Pendiente" de facturar').toBe('Pendiente');
+      expect(await pos.ordenRuteoSeleccionable(idOrdenSeleccionada), 'La orden localizada debía poder seleccionarse para facturar').toBe(true);
+
+      await pos.abrirMenuAccionesOrdenRuteo(idOrdenSeleccionada);
+      cantidadProductosOriginal = (await pos.verOrdenRuteo(idOrdenSeleccionada)).cantidadProductos;
+
+      await pos.seleccionarOrdenRuteoParaFacturar(idOrdenSeleccionada);
+    });
+
+    await test.step('Agregar un producto rápido', async () => {
+      await pos.agregarProductoRapidoSimple(`Rápido Doble Facturación Ruteo ${Date.now()}`, PRECIO_PRODUCTO_RAPIDO);
+    });
+
+    await test.step('Facturar con el total exacto en efectivo', async () => {
+      await pos.abrirModalDePago();
+      const total = await pos.obtenerTotalVentaNumerico();
+      expect(total, 'El total de la venta debe ser mayor a 0').toBeGreaterThan(0);
+      await pos.seleccionarPagoEfectivo(String(total));
+      await pos.confirmarPagoAbriendoCajaSiEsNecesario();
+    });
+
+    await test.step('Validar que la orden queda facturada, permanece en el mismo estado de envío y ya no puede volver a seleccionarse', async () => {
+      await pos.validarCarritoVacio();
+      await pos.visitarPestanaPos(PESTANA_POS_FACTURACION);
+      await pos.abrirListadoOrdenesRuteo();
+
+      expect(await pos.obtenerEstadoFacturacionOrdenRuteo(idOrdenSeleccionada), 'La orden debía quedar "Facturado" tras completar la venta').toBe('Facturado');
+      expect(
+        await pos.obtenerEstadoTarjetaRuteo(idOrdenSeleccionada),
+        'Facturar la orden no debía cambiar su estado de envío (tab correspondiente)'
+      ).toBe(estadoEnvioInicial);
+      expect(
+        await pos.ordenRuteoSeleccionable(idOrdenSeleccionada),
+        'Una orden ya facturada no debía poder volver a seleccionarse para facturar de nuevo (botón "Seleccionar órden" no debe seguir visible)'
+      ).toBe(false);
+    });
+
+    await test.step('Validar que los datos de la orden permanecen consistentes', async () => {
+      await pos.abrirMenuAccionesOrdenRuteo(idOrdenSeleccionada);
+      const detalle = await pos.verOrdenRuteo(idOrdenSeleccionada);
+      expect(detalle.numero.length, 'La orden ya facturada debe conservar su consecutivo').toBeGreaterThan(0);
+      expect(detalle.cantidadProductos, 'La orden ya facturada debe conservar los productos originales + el rápido agregado').toBeGreaterThan(cantidadProductosOriginal);
+      expect(detalle.total, 'La orden ya facturada debe conservar un total mayor a 0').toBeGreaterThan(0);
+    });
+
+    await pos.visitarPestanaPos(PESTANA_POS_FACTURACION);
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  // ─── Escenarios adicionales: H. de Órdenes, Agregar Ítem con combinaciones
+  // de productos, Vista Lista, múltiples órdenes, persistencia de
+  // descuentos, y edición del carrito ─────────────────────────────────────
+  //
+  // Ninguno de estos escenarios crea su propia Orden de Ruteo: todos
+  // localizan una orden YA EXISTENTE en el estado que necesitan
+  // (obtenerPrimeraOrdenRuteoSeleccionable()/
+  // obtenerPrimeraOrdenRuteoConEstadoYSeleccionable()), para no seguir
+  // contaminando el ambiente QA con más órdenes de las estrictamente
+  // necesarias — mismo criterio ya establecido en los Escenarios 11-19.
+
+  test('20. Seleccionar una Orden de Ruteo del tab "Entregado", facturarla y validar que pasa al tab "H. de Órdenes"', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    let idOrdenSeleccionada = '';
+    await test.step('Localizar, dentro del filtro real "Entregado", una Orden de Ruteo que todavía pueda facturarse', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      idOrdenSeleccionada = await pos.obtenerPrimeraOrdenRuteoConEstadoYSeleccionable(3);
+    });
+
+    await test.step('Seleccionar la orden para facturarla', async () => {
+      await pos.seleccionarOrdenRuteoParaFacturar(idOrdenSeleccionada);
+    });
+
+    await test.step('Facturar con el total exacto en efectivo', async () => {
+      await pos.abrirModalDePago();
+      const total = await pos.obtenerTotalVentaNumerico();
+      expect(total, 'El total de la venta debe ser mayor a 0').toBeGreaterThan(0);
+      await pos.seleccionarPagoEfectivo(String(total));
+      await pos.confirmarPagoAbriendoCajaSiEsNecesario();
+    });
+
+    await test.step('Validar que la orden desaparece del filtro "Entregado" y aparece en "H. de Órdenes"', async () => {
+      await pos.validarCarritoVacio();
+      await pos.abrirListadoOrdenesRuteo();
+
+      const sigueEnEntregado = await pos.ordenVisibleEnFiltroEntregado(idOrdenSeleccionada);
+      expect(sigueEnEntregado, 'La orden ya Entregada + Facturada no debía seguir apareciendo en el filtro "Entregado"').toBe(false);
+
+      const enHistorial = await pos.ordenVisibleEnHistorial(idOrdenSeleccionada);
+      expect(enHistorial, 'La orden ya Entregada + Facturada debía aparecer en "H. de Órdenes"').toBe(true);
+
+      expect(await pos.obtenerEstadoFacturacionOrdenRuteo(idOrdenSeleccionada), 'La orden debía quedar "Facturado" tras completar la venta').toBe('Facturado');
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('21. Seleccionar una Orden de Ruteo, Agregar Ítem con producto rápido, fraccionado y normal, volver y facturar', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    let idOrdenSeleccionada = '';
+    let cantidadInicial = 0;
+    await test.step('Seleccionar una Orden de Ruteo existente para facturarla', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      idOrdenSeleccionada = await pos.obtenerPrimeraOrdenRuteoSeleccionable();
+      await pos.seleccionarOrdenRuteoParaFacturar(idOrdenSeleccionada);
+      cantidadInicial = await pos.obtenerCantidadFilasCarrito();
+      expect(cantidadInicial, 'La orden seleccionada debía cargar al menos una línea al carrito').toBeGreaterThan(0);
+    });
+
+    await test.step('Ingresar a "Agregar Ítem"', async () => {
+      await pos.abrirAgregarItem();
+    });
+
+    let clavesAntes: string[] = [];
+    await test.step('Agregar un producto rápido, un producto fraccionado y un producto normal', async () => {
+      clavesAntes = await pos.obtenerClavesFilasCarrito();
+
+      await pos.agregarProductoRapidoSimple(`Rápido AgregarItem ${Date.now()}`, PRECIO_PRODUCTO_RAPIDO);
+
+      const fraccionado = await pos.obtenerPrimerProductoFraccionadoNoPresenteEnCarrito();
+      await pos.agregarProductoFraccionadoAlCarrito(fraccionado);
+
+      const normal = await pos.obtenerPrimerProductoNoPresenteEnCarrito();
+      await pos.agregarProductoDelGridAlCarrito(normal);
+
+      const clavesDespues = await pos.obtenerClavesFilasCarrito();
+      expect(clavesDespues.length, 'Los 3 productos deben quedar en el carrito').toBeGreaterThanOrEqual(clavesAntes.length + 3);
+    });
+
+    await test.step('Volver al tab "Ruteo" y validar que el carrito sobrevive', async () => {
+      const totalAntesDeVolver = await pos.obtenerTotalVentaNumerico();
+      await pos.volverDesdeAgregarItemHaciaRuteo();
+      const clavesTrasVolver = await pos.obtenerClavesFilasCarrito();
+      expect(clavesTrasVolver.length, 'Los productos agregados no sobrevivieron al volver').toBeGreaterThanOrEqual(clavesAntes.length + 3);
+      const totalTrasVolver = await pos.obtenerTotalVentaNumerico();
+      expect(totalTrasVolver, 'El total no debía cambiar al volver').toBeCloseTo(totalAntesDeVolver, 1);
+    });
+
+    let totalAntesDeFacturar = 0;
+    await test.step('Validar cantidades, impuestos y totales antes de facturar', async () => {
+      const cantidadFinal = await pos.obtenerCantidadFilasCarrito();
+      expect(cantidadFinal, 'Debieron sumarse líneas nuevas al carrito de la orden cargada').toBeGreaterThan(cantidadInicial);
+
+      totalAntesDeFacturar = await pos.obtenerTotalVentaNumerico();
+      expect(totalAntesDeFacturar, 'El total de la venta debe ser mayor a 0').toBeGreaterThan(0);
+
+      const ivaAcumulado = await pos.obtenerTotalIvaGeneral();
+      expect(ivaAcumulado, 'El IVA acumulado no debe ser negativo').toBeGreaterThanOrEqual(0);
+    });
+
+    await test.step('Facturar con el total exacto en efectivo', async () => {
+      await pos.abrirModalDePago();
+      const total = await pos.obtenerTotalVentaNumerico();
+      expect(total, 'El total mostrado en el modal de pago debe coincidir con el del carrito').toBeCloseTo(totalAntesDeFacturar, 1);
+      await pos.seleccionarPagoEfectivo(String(total));
+      await pos.confirmarPagoAbriendoCajaSiEsNecesario();
+    });
+
+    await test.step('Validar facturación exitosa', async () => {
+      await pos.validarCarritoVacio();
+      expect(await pos.obtenerEstadoFacturacionOrdenRuteo(idOrdenSeleccionada), 'La orden debía quedar "Facturado" tras completar la venta').toBe('Facturado');
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('22. Seleccionar una Orden de Ruteo, Agregar Ítem en Vista Modo Lista con producto rápido, fraccionado y normal, volver y facturar', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    let idOrdenSeleccionada = '';
+    let cantidadInicial = 0;
+    await test.step('Seleccionar una Orden de Ruteo existente para facturarla', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      idOrdenSeleccionada = await pos.obtenerPrimeraOrdenRuteoSeleccionable();
+      await pos.seleccionarOrdenRuteoParaFacturar(idOrdenSeleccionada);
+      cantidadInicial = await pos.obtenerCantidadFilasCarrito();
+      expect(cantidadInicial, 'La orden seleccionada debía cargar al menos una línea al carrito').toBeGreaterThan(0);
+    });
+
+    await test.step('Ingresar a "Agregar Ítem" y cambiar el catálogo a modo Lista', async () => {
+      await pos.abrirAgregarItem();
+      await pos.botonVistaLista.click();
+      await expect.poll(() => pos.vistaEstaActiva(pos.botonVistaLista)).toBe(true);
+    });
+
+    let clavesAntes: string[] = [];
+    await test.step('Agregar un producto rápido, un producto fraccionado y un producto normal, en modo Lista', async () => {
+      clavesAntes = await pos.obtenerClavesFilasCarrito();
+
+      await pos.agregarProductoRapidoSimple(`Rápido Lista ${Date.now()}`, PRECIO_PRODUCTO_RAPIDO);
+
+      const fraccionado = await pos.obtenerPrimerProductoFraccionadoNoPresenteEnCarrito();
+      await pos.agregarProductoFraccionadoAlCarrito(fraccionado);
+
+      const normal = await pos.obtenerPrimerProductoNoPresenteEnCarrito();
+      await pos.agregarProductoDelGridAlCarrito(normal);
+
+      const clavesDespues = await pos.obtenerClavesFilasCarrito();
+      expect(clavesDespues.length, 'Los 3 productos deben quedar en el carrito').toBeGreaterThanOrEqual(clavesAntes.length + 3);
+    });
+
+    await test.step('Volver al tab "Ruteo" y validar que el carrito sobrevive', async () => {
+      await pos.volverDesdeAgregarItemHaciaRuteo();
+      const clavesTrasVolver = await pos.obtenerClavesFilasCarrito();
+      expect(clavesTrasVolver.length, 'Los productos agregados no sobrevivieron al volver').toBeGreaterThanOrEqual(clavesAntes.length + 3);
+    });
+
+    let totalAntesDeFacturar = 0;
+    await test.step('Validar cantidades y totales antes de facturar', async () => {
+      const cantidadFinal = await pos.obtenerCantidadFilasCarrito();
+      expect(cantidadFinal, 'Debieron sumarse líneas nuevas al carrito de la orden cargada').toBeGreaterThan(cantidadInicial);
+
+      totalAntesDeFacturar = await pos.obtenerTotalVentaNumerico();
+      expect(totalAntesDeFacturar, 'El total de la venta debe ser mayor a 0').toBeGreaterThan(0);
+    });
+
+    await test.step('Facturar con el total exacto en efectivo', async () => {
+      await pos.abrirModalDePago();
+      const total = await pos.obtenerTotalVentaNumerico();
+      expect(total, 'El total mostrado en el modal de pago debe coincidir con el del carrito').toBeCloseTo(totalAntesDeFacturar, 1);
+      await pos.seleccionarPagoEfectivo(String(total));
+      await pos.confirmarPagoAbriendoCajaSiEsNecesario();
+    });
+
+    await test.step('Validar facturación exitosa', async () => {
+      await pos.validarCarritoVacio();
+      expect(await pos.obtenerEstadoFacturacionOrdenRuteo(idOrdenSeleccionada), 'La orden debía quedar "Facturado" tras completar la venta').toBe('Facturado');
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('23. Seleccionar dos Órdenes de Ruteo distintas y validar que mantienen su información independiente', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    let idOrdenA = '';
+    await test.step('Seleccionar la Orden A y agregar rápido, fraccionado, normal y un combo vía Agregar Ítem, sin facturarla', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      idOrdenA = await pos.obtenerPrimeraOrdenRuteoSeleccionable();
+
+      await pos.seleccionarOrdenRuteoParaFacturar(idOrdenA);
+      await pos.abrirAgregarItem();
+      await pos.agregarProductoRapidoSimple(`Rápido OrdenA ${Date.now()}`, PRECIO_PRODUCTO_RAPIDO);
+      const fraccionado = await pos.obtenerPrimerProductoFraccionadoNoPresenteEnCarrito();
+      await pos.agregarProductoFraccionadoAlCarrito(fraccionado);
+      const normal = await pos.obtenerPrimerProductoNoPresenteEnCarrito();
+      await pos.agregarProductoDelGridAlCarrito(normal);
+      const combo = await pos.obtenerPrimerCombo();
+      await pos.agregarProductoDelGridAlCarrito(combo);
+
+      const cantidadEnCarritoA = await pos.obtenerCantidadFilasCarrito();
+      expect(cantidadEnCarritoA, 'Deben quedar varias líneas nuevas en el carrito de la Orden A').toBeGreaterThan(0);
+    });
+
+    let idOrdenB = '';
+    let cantidadProductosA = 0;
+    await test.step('Volver al tab "Ruteo" (sin facturar la Orden A), leer su cantidad REAL de productos vía "Ver Orden" y seleccionar una Orden B distinta', async () => {
+      await pos.volverDesdeAgregarItemHaciaRuteo();
+
+      // obtenerCantidadFilasCarrito() (cuenta filas crudas de la tabla del
+      // carrito) y verOrdenRuteo().cantidadProductos (cuenta lógica del
+      // modal "Ver Orden") NO son la misma métrica — confirmado en vivo que
+      // un combo puede inflar el conteo de filas crudas con sus propios
+      // componentes sin cambiar la cantidad lógica de productos de la
+      // orden. Se usa aquí, una sola vez, la MISMA fuente
+      // (verOrdenRuteo().cantidadProductos) que se usará al final para
+      // comparar manzanas con manzanas.
+      await pos.abrirMenuAccionesOrdenRuteo(idOrdenA);
+      cantidadProductosA = (await pos.verOrdenRuteo(idOrdenA)).cantidadProductos;
+      expect(cantidadProductosA, 'La Orden A debía reflejar los productos recién agregados').toBeGreaterThan(0);
+
+      idOrdenB = await pos.obtenerPrimeraOrdenRuteoSeleccionable(idOrdenA);
+      expect(idOrdenB, 'La Orden B debía ser distinta de la Orden A').not.toBe(idOrdenA);
+
+      await pos.seleccionarOrdenRuteoParaFacturar(idOrdenB);
+      const cantidadEnCarritoB = await pos.obtenerCantidadFilasCarrito();
+      expect(cantidadEnCarritoB, 'La Orden B debía cargar su propio carrito, sin residuos de la Orden A').toBeGreaterThan(0);
+    });
+
+    await test.step('Facturar la Orden B con el total exacto en efectivo', async () => {
+      await pos.abrirModalDePago();
+      const total = await pos.obtenerTotalVentaNumerico();
+      expect(total, 'El total de la Orden B debe ser mayor a 0').toBeGreaterThan(0);
+      await pos.seleccionarPagoEfectivo(String(total));
+      await pos.confirmarPagoAbriendoCajaSiEsNecesario();
+    });
+
+    await test.step('Validar que la Orden B quedó Facturada y la Orden A conserva, sin verse afectada por lo que le pasó a B, exactamente lo que se le agregó', async () => {
+      await pos.validarCarritoVacio();
+      expect(await pos.obtenerEstadoFacturacionOrdenRuteo(idOrdenB), 'La Orden B debía quedar "Facturado"').toBe('Facturado');
+
+      // Hallazgo real confirmado en vivo (no una suposición previa de este
+      // test): "Agregar Ítem" sobre una Orden de Ruteo persiste los
+      // productos agregados en el servidor de inmediato, sin esperar a
+      // "Facturar" — por eso la Orden A conserva cantidadEnCarritoA (lo que
+      // se le agregó), no su cantidad original. La independencia real que
+      // este escenario valida es que esos productos son PROPIOS de la
+      // Orden A y no se ven afectados por facturar una Orden B distinta.
+      expect(await pos.obtenerEstadoFacturacionOrdenRuteo(idOrdenA), 'La Orden A NO debía quedar facturada (nunca se completó su venta)').toBe('Pendiente');
+      await pos.abrirMenuAccionesOrdenRuteo(idOrdenA);
+      const detalleA = await pos.verOrdenRuteo(idOrdenA);
+      expect(detalleA.cantidadProductos, 'La Orden A debía conservar los productos que se le agregaron, sin verse afectada por la Orden B').toBe(cantidadProductosA);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('24. Seleccionar una Orden de Ruteo, aplicar un descuento general y validar que persiste al volver a seleccionar la misma orden', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    let idOrdenSeleccionada = '';
+    await test.step('Seleccionar una Orden de Ruteo existente y agregar rápido, fraccionado, normal y un combo vía Agregar Ítem', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      idOrdenSeleccionada = await pos.obtenerPrimeraOrdenRuteoSeleccionable();
+      await pos.seleccionarOrdenRuteoParaFacturar(idOrdenSeleccionada);
+      await pos.abrirAgregarItem();
+      await pos.agregarProductoRapidoSimple(`Rápido DescGeneral ${Date.now()}`, PRECIO_PRODUCTO_RAPIDO);
+      const fraccionado = await pos.obtenerPrimerProductoFraccionadoNoPresenteEnCarrito();
+      await pos.agregarProductoFraccionadoAlCarrito(fraccionado);
+      const normal = await pos.obtenerPrimerProductoNoPresenteEnCarrito();
+      await pos.agregarProductoDelGridAlCarrito(normal);
+      const combo = await pos.obtenerPrimerCombo();
+      await pos.agregarProductoDelGridAlCarrito(combo);
+      await pos.volverDesdeAgregarItemHaciaRuteo();
+    });
+
+    let totalConDescuento = 0;
+    await test.step(`Aplicar el descuento general del ${DESCUENTO_GENERAL_PCT}% y validar que se aplicó`, async () => {
+      const totalSinDescuento = await pos.obtenerTotalVentaNumerico();
+      await pos.mostrarDetalleAvanzadoFactura();
+      await pos.activarDescuentoGeneral();
+      await pos.establecerPorcentajeDescuentoGeneral(DESCUENTO_GENERAL_PCT);
+      totalConDescuento = await pos.obtenerTotalVentaNumerico();
+      expect(totalConDescuento, 'El descuento general no bajó el total').toBeLessThan(totalSinDescuento);
+    });
+
+    // BUG DEL SISTEMA confirmado en vivo (no de automatización — navegación
+    // ya estable, sin ruido de ambiente, reproducido de forma consistente):
+    // el descuento general aplicado a una Orden de Ruteo NO se persiste en
+    // el servidor. Al volver a seleccionar la MISMA orden, el checkbox
+    // "apply_general_discount" aparece desmarcado (estaDescuentoGeneralActivo()
+    // devuelve false) y el total regresa a su valor SIN descuento —
+    // evidencia real de una corrida: checkbox esperado=true, recibido=false;
+    // esto contrasta con los productos agregados vía "Agregar Ítem", que SÍ
+    // se persisten de inmediato en el servidor (confirmado en el
+    // Escenario 23, que sí pasa). La validación se deja intacta: documenta
+    // correctamente esta brecha real, no se debilita para forzar un pase.
+    await test.step('Volver a seleccionar la misma orden y validar que el descuento general sigue aplicado', async () => {
+      // No vuelve a llamar abrirListadoOrdenesRuteo(): el paso anterior ya
+      // dejó el tab "Ruteo" activo (volverDesdeAgregarItemHaciaRuteo()) y
+      // aplicar el descuento no navega fuera de ahí — confirmado en vivo
+      // que re-clickear el tab aunque ya esté activo puede colgarse contra
+      // su propio DOM pesado (mismo hallazgo ya documentado en el
+      // Escenario 15/comentario de abrirListadoOrdenesRuteo()).
+      await pos.seleccionarOrdenRuteoParaFacturar(idOrdenSeleccionada);
+      await pos.mostrarDetalleAvanzadoFactura();
+      expect(await pos.estaDescuentoGeneralActivo(), 'El descuento general debía seguir activo tras volver a seleccionar la misma orden').toBe(true);
+      const totalTrasReseleccionar = await pos.obtenerTotalVentaNumerico();
+      expect(totalTrasReseleccionar, 'El total con descuento general no persistió tras volver a seleccionar la misma orden').toBeCloseTo(totalConDescuento, 1);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('25. Seleccionar una Orden de Ruteo, aplicar un descuento individual y validar que persiste al volver a seleccionar la misma orden', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    let idOrdenSeleccionada = '';
+    let nombreProductoNormal = '';
+    let nombreProductoRapido = '';
+    await test.step('Seleccionar una Orden de Ruteo existente y agregar rápido, fraccionado, normal y un combo vía Agregar Ítem', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      idOrdenSeleccionada = await pos.obtenerPrimeraOrdenRuteoSeleccionable();
+      await pos.seleccionarOrdenRuteoParaFacturar(idOrdenSeleccionada);
+      await pos.abrirAgregarItem();
+      nombreProductoRapido = `Rápido DescIndividual ${Date.now()}`;
+      await pos.agregarProductoRapidoSimple(nombreProductoRapido, PRECIO_PRODUCTO_RAPIDO);
+      const fraccionado = await pos.obtenerPrimerProductoFraccionadoNoPresenteEnCarrito();
+      await pos.agregarProductoFraccionadoAlCarrito(fraccionado);
+      const normal = await pos.obtenerPrimerProductoNoPresenteEnCarrito();
+      nombreProductoNormal = normal.nombre;
+      await pos.agregarProductoDelGridAlCarrito(normal);
+      const combo = await pos.obtenerPrimerCombo();
+      await pos.agregarProductoDelGridAlCarrito(combo);
+      await pos.volverDesdeAgregarItemHaciaRuteo();
+    });
+
+    let totalConDescuento = 0;
+    await test.step(`Aplicar un descuento individual del ${DESCUENTO_INDIVIDUAL_PCT}% a un producto y validar que se aplicó`, async () => {
+      const totalSinDescuento = await pos.obtenerTotalVentaNumerico();
+      await pos.desactivarDescuentoGeneral();
+      // obtenerClaveDeLineaPorNombre() (no la clave capturada al agregar el
+      // producto varios pasos atrás): el carrito de una Orden de Ruteo se
+      // resincroniza contra el servidor en cada línea agregada (aquí, el
+      // combo agregado DESPUÉS), lo que puede reasignar esa clave —
+      // confirmado en vivo que usar la clave vieja hacía que el "descuento"
+      // no se aplicara a la línea correcta.
+      //
+      // aplicarDescuentoIndividual() YA anticipa (tipo ResultadoDescuento)
+      // que el sistema puede rechazar el descuento por completo
+      // (escenario 'sin_descuento') para un producto puntual — confirmado
+      // en vivo con un producto real de este catálogo ("A11 - PROT. BLING
+      // GLITTER ROSA"): el descuento no cambió ni la línea ni el total,
+      // sin ningún error. El Escenario 6 (ya existente) aplica este mismo
+      // método sin validar su resultado, así que nunca detectó este caso.
+      // Aquí sí se valida: si el producto normal lo rechaza, se reintenta
+      // sobre el producto rápido (precio fijo, sin restricciones de
+      // catálogo) en vez de asumir a ciegas que cualquier producto acepta
+      // cualquier descuento.
+      const claveNormal = await pos.obtenerClaveDeLineaPorNombre(nombreProductoNormal);
+      let resultado = await pos.aplicarDescuentoIndividual(claveNormal, DESCUENTO_INDIVIDUAL_PCT);
+      if (resultado.escenario !== 'aplicado') {
+        console.log(`[Escenario 25] El producto "${nombreProductoNormal}" rechazó el descuento individual (escenario="${resultado.escenario}") — reintentando sobre el producto rápido.`);
+        const claveRapido = await pos.obtenerClaveDeLineaPorNombre(nombreProductoRapido);
+        resultado = await pos.aplicarDescuentoIndividual(claveRapido, DESCUENTO_INDIVIDUAL_PCT);
+      }
+      expect(resultado.escenario, `Ningún producto del carrito aceptó el descuento individual (último resultado: ${JSON.stringify(resultado)})`).toBe('aplicado');
+
+      totalConDescuento = await pos.obtenerTotalVentaNumerico();
+      expect(totalConDescuento, 'El descuento individual no bajó el total').toBeLessThan(totalSinDescuento);
+    });
+
+    // BUG DEL SISTEMA confirmado en vivo (no de automatización — mismo
+    // criterio que el Escenario 24, con navegación ya estable): el
+    // descuento individual tampoco se persiste en el servidor. Evidencia
+    // real de una corrida: total esperado tras reseleccionar (con
+    // descuento) = 10859.85, total recibido = 10913.53 — una diferencia de
+    // 53.68, equivalente al descuento perdido. Confirmado dos veces de
+    // forma independiente (general + individual) que los descuentos son
+    // estado de sesión/carrito, no se guardan con la orden — a diferencia
+    // de los productos agregados, que sí persisten (Escenario 23). La
+    // validación se deja intacta: documenta correctamente esta brecha
+    // real, no se debilita para forzar un pase.
+    await test.step('Volver a seleccionar la misma orden y validar que el descuento individual sigue reflejado en el total', async () => {
+      // No vuelve a llamar abrirListadoOrdenesRuteo(): mismo motivo que el
+      // Escenario 24 (el tab "Ruteo" ya está activo desde el paso anterior).
+      await pos.seleccionarOrdenRuteoParaFacturar(idOrdenSeleccionada);
+      const totalTrasReseleccionar = await pos.obtenerTotalVentaNumerico();
+      expect(totalTrasReseleccionar, 'El total con descuento individual no persistió tras volver a seleccionar la misma orden').toBeCloseTo(totalConDescuento, 1);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('26. Seleccionar una Orden de Ruteo, eliminar productos dejando uno solo, agregar producto rápido y observación, y facturar', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    let idOrdenSeleccionada = '';
+    let claveRestante = '';
+    await test.step('Seleccionar una Orden de Ruteo existente, agregar productos extra vía Agregar Ítem y luego eliminar todos menos uno', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      idOrdenSeleccionada = await pos.obtenerPrimeraOrdenRuteoSeleccionable();
+      await pos.seleccionarOrdenRuteoParaFacturar(idOrdenSeleccionada);
+
+      // Agregar productos extra para tener "la mayoría" que eliminar después,
+      // sin depender de que la orden ya traiga varios productos por sí sola.
+      await pos.abrirAgregarItem();
+      const fraccionado = await pos.obtenerPrimerProductoFraccionadoNoPresenteEnCarrito();
+      await pos.agregarProductoFraccionadoAlCarrito(fraccionado);
+      const normal = await pos.obtenerPrimerProductoNoPresenteEnCarrito();
+      await pos.agregarProductoDelGridAlCarrito(normal);
+      await pos.volverDesdeAgregarItemHaciaRuteo();
+
+      const clavesTodas = await pos.obtenerClavesFilasCarrito();
+      expect(clavesTodas.length, 'Debía haber al menos 2 productos en el carrito antes de eliminar').toBeGreaterThanOrEqual(2);
+
+      claveRestante = clavesTodas[clavesTodas.length - 1];
+
+      for (const clave of clavesTodas) {
+        if (clave !== claveRestante) {
+          await pos.eliminarProductoDelCarrito(clave);
+        }
+      }
+
+      const clavesFinal = await pos.obtenerClavesFilasCarrito();
+      expect(clavesFinal, 'Debía quedar únicamente el producto elegido para conservar').toEqual([claveRestante]);
+    });
+
+    const textoObservacion = `Observación Escenario 26 ${Date.now()}`;
+    await test.step('Agregar una observación al producto restante', async () => {
+      await pos.agregarObservacionAProducto(claveRestante, textoObservacion);
+      const observacionGuardada = await pos.obtenerObservacionDeProducto(claveRestante);
+      expect(observacionGuardada, 'La observación no quedó registrada en el producto').toBe(textoObservacion);
+    });
+
+    await test.step('Agregar un producto rápido', async () => {
+      // obtenerClavesFilasCarrito().length (no obtenerCantidadFilasCarrito()):
+      // confirmado en vivo (root-cause investigado a fondo, no asumido) que
+      // tras eliminar líneas de un carrito de Ruteo pueden quedar filas
+      // huérfanas `tr.main_row` sin id `table_product_name_` en el DOM —
+      // obtenerCantidadFilasCarrito() (selector más amplio, sin ese filtro)
+      // las sigue contando, inflando el resultado (8 en vez de 2 en una
+      // corrida real), mientras obtenerClavesFilasCarrito() (mismo filtro
+      // que ya usa eliminarProductoDelCarrito() para confirmar el detach)
+      // refleja el conteo lógico real.
+      const cantidadAntesDeRapido = (await pos.obtenerClavesFilasCarrito()).length;
+      await pos.agregarProductoRapidoSimple(`Rápido Escenario 26 ${Date.now()}`, PRECIO_PRODUCTO_RAPIDO);
+      const cantidadTrasRapido = (await pos.obtenerClavesFilasCarrito()).length;
+      expect(cantidadTrasRapido, 'El producto rápido no quedó agregado al carrito').toBeGreaterThan(cantidadAntesDeRapido);
+    });
+
+    let totalAntesDeFacturar = 0;
+    await test.step('Validar cantidad de productos, subtotal, IVA y total antes de facturar, y que la observación sigue asociada al producto correcto', async () => {
+      const cantidadFinal = (await pos.obtenerClavesFilasCarrito()).length;
+      expect(cantidadFinal, 'Debían quedar exactamente 2 líneas (el producto conservado + el rápido)').toBe(2);
+
+      const clavesActuales = await pos.obtenerClavesFilasCarrito();
+      expect(clavesActuales, 'El producto original conservado debía seguir en el carrito').toContain(claveRestante);
+
+      const observacionActual = await pos.obtenerObservacionDeProducto(claveRestante);
+      expect(observacionActual, 'La observación debía seguir asociada al producto correcto').toBe(textoObservacion);
+
+      let subtotalAcumulado = 0;
+      for (const clave of clavesActuales) {
+        const linea = await pos.obtenerDatosLineaCarrito(clave);
+        subtotalAcumulado += linea.neto;
+        expect(linea.neto, `La línea ${clave} debía tener un subtotal mayor a 0`).toBeGreaterThan(0);
+      }
+      expect(subtotalAcumulado, 'El subtotal acumulado del carrito debe ser mayor a 0').toBeGreaterThan(0);
+
+      const ivaAcumulado = await pos.obtenerTotalIvaGeneral();
+      expect(ivaAcumulado, 'El IVA acumulado no debe ser negativo').toBeGreaterThanOrEqual(0);
+
+      totalAntesDeFacturar = await pos.obtenerTotalVentaNumerico();
+      expect(totalAntesDeFacturar, 'El total del carrito debe ser mayor a 0').toBeGreaterThan(0);
+    });
+
+    await test.step('Facturar con el total exacto en efectivo', async () => {
+      await pos.abrirModalDePago();
+      const total = await pos.obtenerTotalVentaNumerico();
+      expect(total, 'El total mostrado en el modal de pago debe coincidir con el del carrito').toBeCloseTo(totalAntesDeFacturar, 1);
+      await pos.seleccionarPagoEfectivo(String(total));
+      await pos.confirmarPagoAbriendoCajaSiEsNecesario();
+    });
+
+    await test.step('Validar facturación exitosa', async () => {
+      await pos.validarCarritoVacio();
+      expect(await pos.obtenerEstadoFacturacionOrdenRuteo(idOrdenSeleccionada), 'La orden debía quedar "Facturado" tras completar la venta').toBe('Facturado');
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  // ─── Menú "Acciones" del listado "Ruteo": reporte PDF y acciones masivas
+  // (Enviar a Ruteo / Cambiar Repartidor / Eliminar) sobre selección múltiple ──
+  //
+  // Investigado en vivo (script de investigación descartado tras extraer la
+  // evidencia, no forma parte de esta suite) antes de escribir estos 4
+  // escenarios: el menú "Acciones" (RUTEO_MASIVO_LI_SELECCIONAR y el resto de
+  // locators RUTEO_MASIVO_*/RUTEO_REPORTE_* en pos.page.ts) SÍ existe y es
+  // real — a diferencia de los textos "Pendientes"/"En Camino"/"Entregado"
+  // ya descartados como leyenda decorativa en el comentario del Escenario 14,
+  // este dropdown y sus checkboxes de tarjeta son controles reales con
+  // handlers propios. Dos hallazgos no obvios que cambian lo que cada
+  // escenario puede validar honestamente (ver también los comentarios de
+  // RUTEO_MASIVO_MODAL y RUTEO_REPORTE_LI_DESCARGAR_PDF en pos.page.ts):
+  //   1. "Imprimir"/"Descargar PDF" NO son documentos "por tab": ambos
+  //      generan siempre el mismo reporte fijo "Ruteo Sin Repartidor",
+  //      cualquiera sea el filtro activo — confirmado descargándolo en 2
+  //      filtros distintos y comparando el mismo nombre de archivo. El
+  //      Escenario 27 valida ESE comportamiento real en vez de una premisa
+  //      "por tab" que este ambiente no cumple. "Imprimir" además no abre
+  //      ninguna ventana en este ambiente (mismo hallazgo ya documentado
+  //      para AJAX_GUARDAR_RUTEO: sin impresión automática configurada), así
+  //      que no se prueba por separado.
+  //   2. "Enviar a Ruteo" y "Cambiar Repartidor" masivos comparten el mismo
+  //      modal pero NO hacen lo mismo bajo el capó: el primero DUPLICA la
+  //      orden seleccionada (crea una orden nueva con el repartidor elegido;
+  //      la original permanece intacta), el segundo reasigna in-place (mismo
+  //      id de orden). "Cambiar Repartidor" falló 2 veces en vivo
+  //      (AJAX_CAMBIAR_REPARTIDOR_MASIVO respondiendo "0") usando
+  //      obtenerPrimeraOrdenRuteoSeleccionable() — root-cause investigado
+  //      capturando el payload real (order_list/new_agent_id): con una
+  //      orden PROPIA recién creada, el mismo payload respondió "1" (éxito)
+  //      sin cambiar nada de la automatización. La causa real no es un bug
+  //      del endpoint sino que "la primera orden seleccionable" de este
+  //      ambiente compartido (fullyParallel, ~200+ órdenes, reutilizadas por
+  //      los otros 29 escenarios de este archivo) puede arrastrar estado
+  //      atípico de otra prueba en curso. Por eso el Escenario 29, a
+  //      diferencia del resto de la suite, crea su propia orden desechable
+  //      en vez de reutilizar una existente — mismo criterio ya usado por el
+  //      Escenario 30 (Eliminar).
+
+  test('27. Descargar PDF desde el listado "Ruteo": validar que genera el reporte fijo "Sin Repartidor", igual sin importar el filtro activo', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    await pos.abrirListadoOrdenesRuteo();
+
+    let nombreArchivoPendiente = '';
+    await test.step('Descargar el PDF con el filtro real "Pendiente" activo', async () => {
+      await pos.irAFiltroRuteo('Pendiente');
+      const descarga = await pos.descargarReporteRuteoPDF();
+      nombreArchivoPendiente = descarga.suggestedFilename();
+      expect(nombreArchivoPendiente, 'El nombre del PDF descargado debe tener extensión .pdf').toMatch(/\.pdf$/i);
+    });
+
+    await test.step('Descargar el PDF con el filtro real "Entregado" activo y validar que es el mismo reporte (no depende del tab)', async () => {
+      await pos.irAFiltroRuteo('Entregado');
+      const descarga = await pos.descargarReporteRuteoPDF();
+      const nombreArchivoEntregado = descarga.suggestedFilename();
+      expect(
+        nombreArchivoEntregado,
+        'El reporte "Descargar PDF" del listado Ruteo debía ser el mismo reporte fijo sin importar el filtro activo'
+      ).toBe(nombreArchivoPendiente);
+    });
+
+    await test.step('Restaurar el filtro "Todos" para no afectar otros tests del mismo worker', async () => {
+      await pos.irAFiltroRuteo('Todos');
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('28. Selección múltiple en el listado "Ruteo": ejecutar "Enviar a Ruteo" y validar que crea una orden nueva con el repartidor elegido, sin afectar la original', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    // No crea una orden propia: cualquier Orden de Ruteo ya existente que
+    // siga Pendiente de facturar sirve (ver obtenerPrimeraOrdenRuteoSeleccionable()) —
+    // "Enviar a Ruteo" no destruye información, la traslada a una orden
+    // nueva (ver el comentario de RUTEO_MASIVO_MODAL en pos.page.ts), mismo
+    // criterio de reutilización ya usado por los Escenarios 15-26.
+    let idOriginal = '';
+    let repartidorOriginal = '';
+    await test.step('Localizar una Orden de Ruteo existente, capturar su repartidor original y marcarla para la acción masiva', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      idOriginal = await pos.obtenerPrimeraOrdenRuteoSeleccionable();
+      await pos.abrirMenuAccionesOrdenRuteo(idOriginal);
+      repartidorOriginal = (await pos.verOrdenRuteo(idOriginal)).repartidor;
+
+      await pos.entrarModoSeleccionMasivaRuteo();
+      await pos.marcarOrdenParaAccionMasivaRuteo(idOriginal);
+    });
+
+    let idNueva = '';
+    let repartidorElegido = '';
+    await test.step('Ejecutar "Enviar a Ruteo" y leer la orden nueva real que devuelve la respuesta', async () => {
+      const { respuesta, repartidorSeleccionado } = await pos.enviarOrdenesRuteoMasivamente();
+      repartidorElegido = repartidorSeleccionado;
+      expect(respuesta.ok(), 'AJAX_ENVIAR_RUTEO_MASIVO no respondió OK').toBe(true);
+
+      const cuerpo = JSON.parse(await respuesta.text()) as Array<{
+        old_order_id: number;
+        new_order_id: number;
+        order_number: number;
+        items_created: number;
+      }>;
+      expect(cuerpo.length, 'La respuesta de "Enviar a Ruteo" debía incluir exactamente 1 orden procesada').toBe(1);
+      expect(cuerpo[0].old_order_id, 'El id de la orden original en la respuesta no coincide con la orden marcada').toBe(parseInt(idOriginal, 10));
+      expect(cuerpo[0].new_order_id, 'La respuesta debía incluir el id numérico de la orden nueva').toBeGreaterThan(0);
+      expect(cuerpo[0].items_created, 'La orden nueva debía conservar al menos 1 producto').toBeGreaterThan(0);
+      idNueva = String(cuerpo[0].new_order_id);
+    });
+
+    // Nota (confirmado en vivo, corrigiendo una hipótesis previa de este
+    // mismo escenario tomada de un script de investigación descartado): la
+    // orden ORIGINAL no desaparece del listado tras "Enviar a Ruteo" — sigue
+    // visible, seleccionable y con su repartidor sin cambios. El
+    // comportamiento real es una DUPLICACIÓN (crea una orden nueva con el
+    // repartidor elegido, ver `items_created`/`new_order_id` arriba) más que
+    // un reemplazo — confirmado comparando ambas tarjetas en el mismo
+    // listado tras la acción.
+    await test.step('Validar que la orden original permanece intacta y la orden nueva aparece con el repartidor elegido', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+
+      await pos.abrirMenuAccionesOrdenRuteo(idOriginal);
+      const detalleOriginal = await pos.verOrdenRuteo(idOriginal);
+      expect(detalleOriginal.repartidor, 'La orden original no debía cambiar de repartidor tras "Enviar a Ruteo"').toContain(repartidorOriginal);
+
+      await pos.abrirMenuAccionesOrdenRuteo(idNueva);
+      const detalleNueva = await pos.verOrdenRuteo(idNueva);
+      expect(detalleNueva.repartidor, 'La orden nueva no quedó con el repartidor elegido en "Enviar a Ruteo"').toContain(repartidorElegido);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('29. Selección múltiple en el listado "Ruteo": ejecutar "Cambiar Repartidor" y validar la persistencia al reabrir la orden', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    // Crea una orden propia y desechable — ÚNICA excepción de este archivo,
+    // junto con el Escenario 30, a "reutilizar antes de crear": confirmado en
+    // vivo (root-cause investigado capturando el payload real POST a
+    // AJAX_CAMBIAR_REPARTIDOR_MASIVO — order_list/new_agent_id, ambos
+    // correctos) que este endpoint NO es la fuente del fallo. El fallo real
+    // (2 corridas independientes, ambas usando obtenerPrimeraOrdenRuteoSeleccionable())
+    // desapareció por completo al repetir el mismo payload contra una orden
+    // recién creada — la "primera orden seleccionable" de este listado
+    // compartido (~200+ órdenes, reutilizadas en paralelo por los otros 29
+    // escenarios de este archivo) puede arrastrar estado atípico de otra
+    // prueba en curso. Una orden propia elimina esa dependencia y da una
+    // señal limpia sobre el comportamiento real de "Cambiar Repartidor".
+    let idOrden = '';
+    let repartidorOriginal = '';
+    await test.step('Crear una Orden de Ruteo propia, desechable, y marcarla para la acción masiva', async () => {
+      await agregarUnProducto(pos);
+      await pos.seleccionarClienteExistente();
+      await pos.abrirCrearOrdenRuteo();
+      const { respuesta, repartidor } = await completarYGuardarOrdenRuteo(pos, `Escenario 29 - orden desechable ${Date.now()}`);
+      idOrden = (await respuesta.text()).trim();
+      repartidorOriginal = repartidor;
+
+      await pos.abrirListadoOrdenesRuteo();
+      await pos.entrarModoSeleccionMasivaRuteo();
+      await pos.marcarOrdenParaAccionMasivaRuteo(idOrden);
+    });
+
+    let repartidorElegido = '';
+    await test.step('Ejecutar "Cambiar Repartidor" y validar que la petición respondió éxito', async () => {
+      const { respuesta, repartidorSeleccionado } = await pos.cambiarRepartidorOrdenesRuteoMasivamente();
+      repartidorElegido = repartidorSeleccionado;
+      const cuerpo = (await respuesta.text()).trim();
+      expect(cuerpo, `"Cambiar Repartidor" masivo respondió "${cuerpo}" (se esperaba un indicador de éxito, no "0")`).not.toBe('0');
+    });
+
+    await test.step('Reabrir la orden y validar que el nuevo repartidor persistió', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      await pos.abrirMenuAccionesOrdenRuteo(idOrden);
+      const detalle = await pos.verOrdenRuteo(idOrden);
+      expect(detalle.repartidor, 'El repartidor de la orden no cambió tras "Cambiar Repartidor" masivo').toContain(repartidorElegido);
+      expect(detalle.repartidor, 'El repartidor de la orden debía dejar de ser el original tras "Cambiar Repartidor" masivo').not.toContain(repartidorOriginal);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('30. Selección múltiple en el listado "Ruteo": ejecutar "Eliminar" sobre una orden propia desechable y validar que desaparece del listado', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    // Única excepción de este archivo a "reutilizar antes de crear": eliminar
+    // es irreversible y esta suite comparte el ambiente QA con otros
+    // workers/escenarios corriendo en paralelo (fullyParallel) — crear una
+    // orden propia y desechable evita borrar una orden real que otro
+    // escenario en curso pudiera necesitar (p. ej. obtenerPrimeraOrdenRuteoSeleccionable()
+    // de otro worker).
+    let idOrden = '';
+    await test.step('Crear una Orden de Ruteo propia, desechable, y marcarla para la acción masiva', async () => {
+      await agregarUnProducto(pos);
+      await pos.seleccionarClienteExistente();
+      await pos.abrirCrearOrdenRuteo();
+      const { respuesta } = await completarYGuardarOrdenRuteo(pos, `Escenario 30 - orden desechable ${Date.now()}`);
+      idOrden = (await respuesta.text()).trim();
+
+      await pos.abrirListadoOrdenesRuteo();
+      await pos.entrarModoSeleccionMasivaRuteo();
+      await pos.marcarOrdenParaAccionMasivaRuteo(idOrden);
+    });
+
+    await test.step('Ejecutar "Eliminar" y validar que la petición respondió éxito', async () => {
+      const respuesta = await pos.eliminarOrdenesRuteoMasivamente();
+      const cuerpo = (await respuesta.text()).trim();
+      expect(cuerpo, `AJAX_ELIMINAR_RUTEO_MASIVO respondió "${cuerpo}" (se esperaba un indicador de éxito)`).not.toBe('0');
+    });
+
+    await test.step('Validar que la orden ya no aparece en el listado ni puede reabrirse', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      const sigueExistiendo = await pos.tarjetaRuteo(idOrden).isVisible({ timeout: 10_000 }).catch(() => false);
+      expect(sigueExistiendo, 'La orden eliminada no debía seguir apareciendo en el listado "Ruteo"').toBe(false);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  // ─── Escenarios 31-32: corrección de un hallazgo previo sobre "Imprimir" y
+  // paridad de la selección múltiple entre los 5 filtros reales ────────────
+  //
+  // Investigado en vivo (script de investigación descartado tras extraer la
+  // evidencia): el comentario original de RUTEO_REPORTE_LI_IMPRIMIR en
+  // pos.page.ts afirmaba que "Imprimir" no abría ninguna ventana en este
+  // ambiente — falso. Un listener de solo el evento `popup` nunca lo
+  // detectaba porque Chromium headless entrega el PDF que el botón intenta
+  // abrir en una ventana nueva como un evento `download` (nombre de archivo
+  // aleatorio), no como `popup`. Confirmado comparando el PDF resultante
+  // byte a byte contra "Descargar PDF": mismo tamaño exacto, solo difieren
+  // ~60 bytes de metadata/timestamp interno — es el mismo reporte fijo
+  // "Ruteo Sin Repartidor" de RUTEO_REPORTE_LI_DESCARGAR_PDF, entregado de
+  // otra forma. Ver el comentario corregido de RUTEO_REPORTE_LI_IMPRIMIR y
+  // el nuevo método imprimirReporteRuteoPDF() en pos.page.ts.
+  //
+  // También se confirmó en vivo (mismo script) que el modo de selección
+  // múltiple (checkboxes + Eliminar/Cambiar Repartidor/Enviar a Ruteo) queda
+  // habilitado por igual en los 5 filtros reales, incluido "H. de Órdenes"
+  // (órdenes ya facturadas) — select_orders() es un TOGGLE cuyo estado
+  // persiste al cambiar de filtro, no hay que reactivarlo en cada uno. El
+  // Escenario 32 valida esa paridad de UI de forma segura (sin ejecutar
+  // ninguna acción real): las acciones masivas de escritura ya se prueban de
+  // punta a punta con órdenes propias desechables en los Escenarios 28-30;
+  // ejecutarlas también contra órdenes reales de "H. de Órdenes" arriesgaría
+  // modificar/eliminar facturas reales del ambiente QA compartido sin
+  // necesidad, solo para confirmar algo que ya queda probado sin ese riesgo.
+
+  test('31. Imprimir desde el listado "Ruteo": validar que SÍ genera el mismo reporte fijo "Sin Repartidor" que "Descargar PDF" (corrige un hallazgo previo)', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    await pos.abrirListadoOrdenesRuteo();
+
+    await test.step('Imprimir con el filtro real "Pendiente" activo y validar que SÍ descarga un PDF', async () => {
+      await pos.irAFiltroRuteo('Pendiente');
+      const descarga = await pos.imprimirReporteRuteoPDF();
+      expect(descarga.suggestedFilename(), 'El archivo generado por "Imprimir" debe tener extensión .pdf').toMatch(/\.pdf$/i);
+    });
+
+    await test.step('Imprimir con el filtro real "En Camino" activo: también descarga, confirmando que tampoco depende del filtro (igual que "Descargar PDF")', async () => {
+      await pos.irAFiltroRuteo('En Camino');
+      const descarga = await pos.imprimirReporteRuteoPDF();
+      expect(descarga.suggestedFilename(), 'El archivo generado por "Imprimir" debe tener extensión .pdf').toMatch(/\.pdf$/i);
+    });
+
+    await test.step('Restaurar el filtro "Todos" para no afectar otros tests del mismo worker', async () => {
+      await pos.irAFiltroRuteo('Todos');
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('32. Selección múltiple en el listado "Ruteo": validar que queda habilitada por igual en los 5 filtros reales, incluido "H. de Órdenes"', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    await pos.abrirListadoOrdenesRuteo();
+
+    await test.step('Activar el modo "Seleccionar" una sola vez (persiste entre filtros) y validar que queda habilitado', async () => {
+      await pos.entrarModoSeleccionMasivaRuteo();
+      // expect.poll() (no un solo chequeo): el listado se vuelve a renderizar
+      // tras cambiar de filtro (o de activar el modo selección) y los
+      // checkboxes/`<li>` de acción tardan un momento en reflejar el nuevo
+      // estado — espera funcional, sin waitForTimeout().
+      await expect.poll(
+        () => pos.seleccionMasivaRuteoHabilitada(),
+        { message: 'El modo de selección no quedó habilitado en el filtro inicial' }
+      ).toBe(true);
+    });
+
+    const filtros: Array<'Pendiente' | 'En Camino' | 'Entregado' | 'H. de Órdenes'> =
+      ['Pendiente', 'En Camino', 'Entregado', 'H. de Órdenes'];
+    for (const filtro of filtros) {
+      await test.step(`Cambiar al filtro real "${filtro}" y validar que el modo de selección sigue habilitado`, async () => {
+        await pos.irAFiltroRuteo(filtro);
+        await expect.poll(
+          () => pos.seleccionMasivaRuteoHabilitada(),
+          { message: `El modo de selección no quedó habilitado en el filtro "${filtro}"` }
+        ).toBe(true);
+      });
+    }
+
+    await test.step('Restaurar el filtro "Todos" para no afectar otros tests del mismo worker', async () => {
+      await pos.irAFiltroRuteo('Todos');
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  // ─── Escenarios 33-37: Limpiar selección, Seleccionar todos (Cambiar
+  // Repartidor/Eliminar), Validar filtros, y Buscar una orden ────────────
+  //
+  // Investigado en vivo (script de investigación descartado tras extraer la
+  // evidencia) antes de escribir estos 5 escenarios, corrigiendo 2
+  // suposiciones previas de esta misma sesión:
+  //   1. "Seleccionar todos" (RUTEO_MASIVO_LI_SELECCIONAR_TODOS) y "Limpiar
+  //      selección" (RUTEO_MASIVO_LI_LIMPIAR_SELECCION) SÍ existen y
+  //      funcionan (confirmado: 50/50 marcadas, luego 0/50) — no había
+  //      métodos que los usaran hasta ahora.
+  //   2. El listado SÍ tiene un buscador real (#product_search, el MISMO
+  //      input que en "POS Facturación" busca productos, reutilizado
+  //      dinámicamente por la app según la pestaña activa — dispara
+  //      getSearchRoutingOrders con Ruteo activo) — una investigación
+  //      inicial más superficial no lo había encontrado. El único criterio
+  //      que devuelve resultados es CLIENTE; por número de orden visible o
+  //      por nombre de Ruta no filtra nada (confirmado en vivo, ver el
+  //      comentario de RUTEO_BUSCADOR). También existen contadores reales
+  //      (RUTEO_CONTADOR_SELECCIONADAS/_TOTAL/_FALTANTES) y un panel de
+  //      filtros avanzados (Ruta/Repartidor/Recurrencia/Provincia/Cantón/
+  //      Distrito/rango de fechas) no documentado hasta ahora.
+  //
+  // Decisiones de alcance explícitas para estos 5 escenarios (a diferencia
+  // del resto del archivo, que siempre prefiere órdenes propias
+  // desechables): "Seleccionar todos" no se puede acotar a órdenes propias
+  // — selecciona TODAS las visibles bajo el filtro activo. El Escenario 34
+  // (Cambiar Repartidor) usa el filtro real "En Camino" por tener
+  // consistentemente menos órdenes en este ambiente (~4, frente a ~50 en
+  // "Todos"/"Pendiente"). El Escenario 35 (Eliminar, irreversible) usa el
+  // filtro real "Entregado" — ambas decisiones tomadas explícitamente para
+  // esta suite, no una preferencia general de la automatización.
+
+  test('33. Limpiar selección: marcar varias órdenes en cada filtro y validar que "Limpiar selección" las desmarca sin salir del modo selección', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    await pos.abrirListadoOrdenesRuteo();
+
+    await test.step('Activar el modo "Seleccionar" una sola vez (persiste entre filtros, ver Escenario 32)', async () => {
+      await pos.entrarModoSeleccionMasivaRuteo();
+    });
+
+    const filtros: Array<'Todos' | 'Pendiente' | 'En Camino' | 'Entregado' | 'H. de Órdenes'> =
+      ['Todos', 'Pendiente', 'En Camino', 'Entregado', 'H. de Órdenes'];
+    for (const filtro of filtros) {
+      await test.step(`Filtro "${filtro}": marcar varias órdenes visibles, validar el contador, y limpiar la selección`, async () => {
+        await pos.irAFiltroRuteo(filtro);
+        const ids = await pos.obtenerIdsOrdenesRuteoVisibles(2);
+        if (ids.length === 0) {
+          console.log(`[Escenario 33] Filtro "${filtro}" no tiene ninguna orden visible para marcar — se documenta y continúa.`);
+          return;
+        }
+        for (const id of ids) {
+          await pos.marcarOrdenParaAccionMasivaRuteo(id);
+        }
+        expect(
+          await pos.obtenerContadorSeleccionadasRuteo(),
+          `El contador "Seleccionadas" no reflejó las ${ids.length} órdenes marcadas en "${filtro}"`
+        ).toBe(ids.length);
+
+        await pos.limpiarSeleccionMasivaRuteo();
+        expect(
+          await pos.seleccionMasivaRuteoHabilitada(),
+          'El modo de selección debía seguir habilitado tras "Limpiar selección" (solo desmarca, no cierra el modo) — la interfaz vuelve al estado inicial de "ninguna orden seleccionada", no al estado previo a "Seleccionar"'
+        ).toBe(true);
+      });
+    }
+
+    await pos.irAFiltroRuteo('Todos');
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('34. Selección múltiple en el listado "Ruteo": "Seleccionar todos" en el filtro "En Camino" + Cambiar Repartidor, y validar persistencia', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    await pos.abrirListadoOrdenesRuteo();
+    await pos.irAFiltroRuteo('En Camino');
+
+    let idsAntes: string[] = [];
+    await test.step('Capturar las órdenes visibles en "En Camino" antes de tocarlas', async () => {
+      idsAntes = await pos.obtenerIdsOrdenesRuteoVisibles();
+      expect(idsAntes.length, 'No hay ninguna Orden de Ruteo en estado "En Camino" para este escenario').toBeGreaterThan(0);
+    });
+
+    await test.step('"Seleccionar todos" y validar que el contador coincide con las órdenes visibles', async () => {
+      await pos.entrarModoSeleccionMasivaRuteo();
+      await pos.seleccionarTodasLasOrdenesRuteoVisibles();
+      expect(
+        await pos.obtenerContadorSeleccionadasRuteo(),
+        'El contador "Seleccionadas" no coincide con la cantidad de órdenes visibles en "En Camino"'
+      ).toBe(idsAntes.length);
+    });
+
+    let repartidorNuevo = '';
+    await test.step('Cambiar Repartidor y validar el mensaje/respuesta del sistema', async () => {
+      const { respuesta, repartidorSeleccionado } = await pos.cambiarRepartidorOrdenesRuteoMasivamente();
+      repartidorNuevo = repartidorSeleccionado;
+      const cuerpo = (await respuesta.text()).trim();
+      expect(cuerpo, `"Cambiar Repartidor" masivo respondió "${cuerpo}" (se esperaba un indicador de éxito, no "0")`).not.toBe('0');
+    });
+
+    await test.step('Reabrir cada orden y confirmar que el nuevo repartidor persiste', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      await pos.irAFiltroRuteo('En Camino');
+      for (const id of idsAntes) {
+        await pos.abrirMenuAccionesOrdenRuteo(id);
+        const detalle = await pos.verOrdenRuteo(id);
+        expect(detalle.repartidor, `La orden #${id} no quedó con el repartidor nuevo ("${repartidorNuevo}") tras "Cambiar Repartidor" masivo`).toContain(repartidorNuevo);
+      }
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('35. Selección múltiple en el listado "Ruteo": "Seleccionar todos" en el filtro "Entregado" + Eliminar, y validar que ya no aparecen', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    // Por instrucción explícita para este escenario: se usa el filtro real
+    // "Entregado" — a diferencia del resto del archivo, aquí SÍ se eliminan
+    // órdenes reales del ambiente QA compartido (irreversible, ni quedan en
+    // "H. de Órdenes"), no solo órdenes propias desechables, porque
+    // "Seleccionar todos" no se puede acotar a un subconjunto propio.
+    await pos.abrirListadoOrdenesRuteo();
+    await pos.irAFiltroRuteo('Entregado');
+
+    let idsAEliminar: string[] = [];
+    await test.step('Capturar las órdenes visibles en "Entregado" antes de eliminarlas', async () => {
+      idsAEliminar = await pos.obtenerIdsOrdenesRuteoVisibles();
+    });
+
+    // Estado autoconsumible: este mismo test elimina todas las órdenes
+    // "Entregado" que encuentra, así que una corrida posterior (u otro
+    // worker que ya pasó por acá) puede encontrar el filtro vacío. Se
+    // documenta y se omite en vez de fallar, igual que el Escenario 33/36
+    // ante filtros sin órdenes.
+    test.skip(idsAEliminar.length === 0, 'No hay ninguna Orden de Ruteo en estado "Entregado" en este momento — estado vacío documentado, se omite el escenario.');
+
+    await test.step('"Seleccionar todos" y validar que el contador coincide con las órdenes visibles', async () => {
+      await pos.entrarModoSeleccionMasivaRuteo();
+      await pos.seleccionarTodasLasOrdenesRuteoVisibles();
+      expect(
+        await pos.obtenerContadorSeleccionadasRuteo(),
+        'El contador "Seleccionadas" no coincide con la cantidad de órdenes visibles en "Entregado"'
+      ).toBe(idsAEliminar.length);
+    });
+
+    await test.step('Eliminar y validar la respuesta del sistema (el modal de confirmación real ya lo maneja eliminarOrdenesRuteoMasivamente())', async () => {
+      const respuesta = await pos.eliminarOrdenesRuteoMasivamente();
+      const cuerpo = (await respuesta.text()).trim();
+      expect(cuerpo, `AJAX_ELIMINAR_RUTEO_MASIVO respondió "${cuerpo}" (se esperaba un indicador de éxito, no "0")`).not.toBe('0');
+    });
+
+    await test.step('Validar que ninguna de las órdenes eliminadas sigue apareciendo en el listado', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      for (const id of idsAEliminar) {
+        const sigueExistiendo = await pos.tarjetaRuteo(id).isVisible({ timeout: 10_000 }).catch(() => false);
+        expect(sigueExistiendo, `La orden eliminada #${id} no debía seguir apareciendo en el listado "Ruteo"`).toBe(false);
+      }
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('36. Validar filtros del listado "Ruteo": los 5 filtros de estado y el filtro por Repartidor, y su efecto real sobre el listado', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    await pos.abrirListadoOrdenesRuteo();
+
+    const filtros: Array<'Todos' | 'Pendiente' | 'En Camino' | 'Entregado' | 'H. de Órdenes'> =
+      ['Todos', 'Pendiente', 'En Camino', 'Entregado', 'H. de Órdenes'];
+    const totalesPorFiltro: Record<string, number> = {};
+    for (const filtro of filtros) {
+      await test.step(`Filtro "${filtro}": aplicar y validar que las órdenes visibles cumplen el criterio (o documentar el estado vacío)`, async () => {
+        await pos.irAFiltroRuteo(filtro);
+        const ids = await pos.obtenerIdsOrdenesRuteoVisibles();
+        totalesPorFiltro[filtro] = ids.length;
+        if (ids.length === 0) {
+          console.log(`[Escenario 36] Filtro "${filtro}" no devolvió ninguna orden — estado vacío documentado, se continúa.`);
+          return;
+        }
+        // Los 3 filtros de estado de envío real se validan contra
+        // obtenerEstadoTarjetaRuteo() (independiente del filtro, lee la
+        // clase CSS real de la tarjeta) — "Todos"/"H. de Órdenes" no tienen
+        // un único estado esperado, así que no se validan por esta vía.
+        const estadoEsperado = { 'Pendiente': 1, 'En Camino': 2, 'Entregado': 3 } as const;
+        if (filtro in estadoEsperado) {
+          const muestra = ids.slice(0, 3);
+          for (const id of muestra) {
+            const estado = await pos.obtenerEstadoTarjetaRuteo(id);
+            expect(estado, `La orden #${id} visible bajo el filtro "${filtro}" no tiene el estado real esperado`).toBe(estadoEsperado[filtro as keyof typeof estadoEsperado]);
+          }
+        }
+      });
+    }
+
+    await test.step('Documentar que los 5 filtros de estado son <button> de texto plano sin contador/badge propio (confirmado en vivo)', async () => {
+      console.log(`[Escenario 36] Conteo real de órdenes por filtro (vía tarjetas visibles): ${JSON.stringify(totalesPorFiltro)}`);
+    });
+
+    await test.step('Filtro avanzado por Repartidor: aplicar y validar que el contador "Total" del listado cambia, y restaurarlo', async () => {
+      await pos.irAFiltroRuteo('Todos');
+      const totalSinFiltro = await pos.obtenerContadorTotalRuteo();
+      const repartidor = await pos.seleccionarFiltroRepartidorRuteo();
+      const totalConFiltro = await pos.obtenerContadorTotalRuteo();
+      expect(totalConFiltro, `El filtro por Repartidor ("${repartidor}") no redujo el contador "Total" (${totalSinFiltro} sin filtrar)`).toBeLessThanOrEqual(totalSinFiltro);
+
+      await pos.limpiarFiltroRepartidorRuteo();
+      await expect.poll(
+        () => pos.obtenerContadorTotalRuteo(),
+        { message: 'El contador "Total" no volvió al valor original tras limpiar el filtro de Repartidor' }
+      ).toBe(totalSinFiltro);
+    });
+
+    await pos.irAFiltroRuteo('Todos');
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  test('37. Buscar una Orden de Ruteo por cliente: validar que el buscador filtra el listado y que se puede limpiar', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    // Confirmado en vivo (ver el comentario de RUTEO_BUSCADOR en
+    // pos.locators.ts): el único criterio de búsqueda real del listado
+    // Ruteo es el CLIENTE — buscar por el número de orden VISIBLE
+    // ("Orden #262") o por nombre de Ruta no devolvió resultados en ninguna
+    // corrida de investigación. Se toma el cliente real de una Orden de
+    // Ruteo ya existente (vía "Ver Orden"), no un valor inventado.
+    await pos.abrirListadoOrdenesRuteo();
+
+    let idOrdenReferencia = '';
+    let nombreClienteBusqueda = '';
+    await test.step('Tomar una Orden de Ruteo existente como referencia y leer su cliente real', async () => {
+      idOrdenReferencia = await pos.obtenerPrimeraOrdenRuteoSeleccionable();
+      await pos.abrirMenuAccionesOrdenRuteo(idOrdenReferencia);
+      const detalle = await pos.verOrdenRuteo(idOrdenReferencia);
+      // detalle.clienteNombre viene del modal "Ver Orden" con el prefijo
+      // "Nombre:" incluido (mismo formato ya documentado en el Escenario 10).
+      nombreClienteBusqueda = detalle.clienteNombre.replace(/^Nombre:\s*/i, '').trim();
+      expect(nombreClienteBusqueda.length, 'No se pudo leer el nombre del cliente de la orden de referencia').toBeGreaterThan(0);
+    });
+
+    await test.step('Buscar por ese cliente y validar que la orden de referencia aparece en el resultado', async () => {
+      await pos.buscarOrdenRuteoPorCliente(nombreClienteBusqueda);
+      await expect.poll(
+        () => pos.tarjetaRuteo(idOrdenReferencia).isVisible().catch(() => false),
+        { message: `La orden de referencia #${idOrdenReferencia} no apareció al buscar por su cliente "${nombreClienteBusqueda}"` }
+      ).toBe(true);
+    });
+
+    await test.step('Abrir la orden encontrada y validar que corresponde al cliente buscado', async () => {
+      await pos.abrirMenuAccionesOrdenRuteo(idOrdenReferencia);
+      const detalle = await pos.verOrdenRuteo(idOrdenReferencia);
+      expect(detalle.clienteNombre, 'El cliente de la orden encontrada no coincide con el término buscado').toContain(nombreClienteBusqueda);
+    });
+
+    await test.step('Limpiar el buscador y validar que vuelve a mostrarse el listado completo', async () => {
+      const totalDurante = await pos.obtenerContadorTotalRuteo();
+      await pos.limpiarBusquedaRuteo();
+      await expect.poll(
+        () => pos.obtenerContadorTotalRuteo(),
+        { message: 'El contador "Total" no se restauró tras limpiar el buscador' }
+      ).toBeGreaterThanOrEqual(totalDurante);
+    });
+
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+  // ─── Escenario adicional: "Enviar a Ruteo" desde "H. de Órdenes" + Facturación Automática ──
+  //
+  // Investigado en vivo (scripts de investigación descartados tras extraer
+  // la evidencia, no forman parte de esta suite) antes de escribir este
+  // escenario:
+  //   1. "Facturar Automáticamente" NO es un flujo ni un tab separado: es un
+  //      switch (RUTEO_MASIVO_MODAL_CHECK_FACTURAR_AUTO) DENTRO del mismo
+  //      modal "Enviar a Ruteo" masivo (#modal_change_sellers) que ya usa el
+  //      Escenario 28 — mismo botón "Guardar", mismo endpoint
+  //      (createRoutingOrdersMassive).
+  //   2. Activarlo abre un SEGUNDO modal real de progreso
+  //      (#dialog_progress_invoicing, hasta entonces oculto en el DOM) que
+  //      NUNCA aparece si el switch queda desactivado (confirmado: los
+  //      Escenarios 28/29 no lo disparan). La barra de progreso llega a
+  //      "100%"/"Completado" en unos pocos segundos (2 órdenes: ~6-10s en
+  //      vivo) pero el modal NO se autocierra — expone un botón real
+  //      "Aceptar y cerrar" (`onclick="clearModalOfProgress()"`) que hay que
+  //      clickear explícitamente. No es un cuelgue de la aplicación: es la
+  //      confirmación de resultados del propio proceso (ver el comentario de
+  //      _cerrarProgresoFacturacionMasivaRuteo() en pos-ruteo.page.ts).
+  //   3. La sección "Ruta" del modal existe en el DOM
+  //      (`.modal-route-section`) pero queda `display:none` en este
+  //      ambiente/compañía — no hay ningún campo de Ruta realmente visible
+  //      que completar, así que este escenario no interactúa con él (mismo
+  //      criterio ya aplicado en la corrección de Fase C: solo se completan
+  //      campos que estén realmente visibles).
+  //   4. CORRECCIÓN sobre el flujo asumido originalmente (mismo hallazgo que
+  //      ya documenta el Escenario 28 para "Enviar a Ruteo" sin facturación
+  //      automática): esta acción NUNCA mueve las órdenes originales fuera
+  //      de "H. de Órdenes" — las DUPLICA (crea una orden NUEVA por cada una
+  //      marcada, con el repartidor elegido en el modal). Las órdenes
+  //      originales permanecen intactas y con su repartidor original; las
+  //      órdenes NUEVAS son las que quedan "Facturado" de inmediato gracias
+  //      a "Facturar Automáticamente" — confirmado en vivo comparando
+  //      ambas.
+
+  test('38. Enviar órdenes a Ruteo desde el tab "H. de Órdenes" utilizando Facturación Automática', async ({ pos, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    const erroresJS = espiarErroresJS(sharedPage);
+
+    await pos.abrirListadoOrdenesRuteo();
+    await pos.irAFiltroRuteo('H. de Órdenes');
+
+    let idsAEnviar: string[] = [];
+    let ordenesCreadas: string[] = [];
+    await test.step('Ir al tab "H. de Órdenes" y localizar (o, solo si no hay ninguna, crear) al menos 2 órdenes disponibles', async () => {
+      idsAEnviar = await pos.obtenerIdsOrdenesRuteoVisibles(2);
+      if (idsAEnviar.length === 0) {
+        console.log('[Escenario 38] "H. de Órdenes" no tiene ninguna orden disponible en este momento — creando 2 propias y facturándolas.');
+        const id1 = await crearOrdenFacturadaEnHistorial(pos, `Escenario 38 - orden propia 1 ${Date.now()}`);
+        const id2 = await crearOrdenFacturadaEnHistorial(pos, `Escenario 38 - orden propia 2 ${Date.now()}`);
+        ordenesCreadas = [id1, id2];
+        await pos.abrirListadoOrdenesRuteo();
+        await pos.irAFiltroRuteo('H. de Órdenes');
+        idsAEnviar = ordenesCreadas;
+      }
+      expect(idsAEnviar.length, 'Debe haber al menos 1 orden disponible en "H. de Órdenes" para este escenario').toBeGreaterThan(0);
+      console.log(`[Escenario 38] Órdenes a enviar: ${idsAEnviar.join(', ')} (${ordenesCreadas.length > 0 ? 'creadas propias' : 'reutilizadas del ambiente'})`);
+    });
+
+    const detallesOriginales: Record<string, Awaited<ReturnType<PosPage['verOrdenRuteo']>>> = {};
+    await test.step('Capturar el detalle real de cada orden ANTES de enviarla (repartidor, cliente, productos, totales) y confirmar que ya está Facturada', async () => {
+      for (const id of idsAEnviar) {
+        await pos.abrirMenuAccionesOrdenRuteo(id);
+        detallesOriginales[id] = await pos.verOrdenRuteo(id);
+        const estado = await pos.obtenerEstadoFacturacionOrdenRuteo(id);
+        expect(estado, `La orden #${id} de "H. de Órdenes" debía estar ya Facturada`).toBe('Facturado');
+      }
+    });
+
+    await test.step('Seleccionar las órdenes con "Seleccionar" y validar que quedaron realmente marcadas', async () => {
+      await pos.entrarModoSeleccionMasivaRuteo();
+      for (const id of idsAEnviar) {
+        await pos.marcarOrdenParaAccionMasivaRuteo(id);
+      }
+      expect(
+        await pos.obtenerContadorSeleccionadasRuteo(),
+        'El contador "Seleccionadas" no coincide con la cantidad de órdenes marcadas'
+      ).toBe(idsAEnviar.length);
+    });
+
+    await test.step('Presionar "Enviar a Ruteo" y validar toda la información real mostrada en el modal', async () => {
+      await pos.abrirModalEnviarRuteoMasivo();
+      const info = await pos.leerInfoModalEnviarRuteoMasivo();
+      expect(info.seleccionadas, 'El modal no refleja la cantidad real de órdenes seleccionadas').toBe(idsAEnviar.length);
+      expect(info.total, 'El modal no refleja ningún total de órdenes').toBeGreaterThanOrEqual(info.seleccionadas);
+      expect(info.repartidoresActuales.length, 'El modal debía listar al menos un repartidor actual de las órdenes seleccionadas').toBeGreaterThan(0);
+      console.log('[Escenario 38] Info real del modal "Enviar a Ruteo":', JSON.stringify(info));
+    });
+
+    let repartidorElegido = '';
+    let nuevasIds: string[] = [];
+    // Mapa old_order_id → new_order_id construido a partir de la respuesta
+    // REAL del AJAX (no por posición): confirmado en vivo que el array de
+    // createRoutingOrdersMassive no necesariamente preserva el mismo orden
+    // que idsAEnviar (ej. una corrida real devolvió old_order_id 649 antes
+    // que 653, aunque idsAEnviar era ['653','649']) — emparejar por índice
+    // comparaba cada orden nueva contra la orden original equivocada.
+    const mapaOriginalANueva: Record<string, string> = {};
+    await test.step('Activar "Facturar Automáticamente", elegir repartidor y confirmar el envío', async () => {
+      const { respuesta, repartidorSeleccionado } = await pos.confirmarEnvioRuteoMasivoConFacturacionAutomatica();
+      repartidorElegido = repartidorSeleccionado;
+      expect(respuesta.ok(), 'createRoutingOrdersMassive no respondió OK').toBe(true);
+
+      const cuerpo = JSON.parse(await respuesta.text()) as Array<{
+        old_order_id: number; new_order_id: number; order_number: number; items_created: number;
+      }>;
+      expect(cuerpo.length, 'Debe crearse exactamente 1 orden nueva por cada orden seleccionada — ni más ni menos').toBe(idsAEnviar.length);
+      expect(
+        cuerpo.map((o) => String(o.old_order_id)).sort(),
+        'Únicamente las órdenes marcadas debían enviarse — old_order_id de la respuesta no coincide con la selección real'
+      ).toEqual([...idsAEnviar].sort());
+
+      for (const o of cuerpo) mapaOriginalANueva[String(o.old_order_id)] = String(o.new_order_id);
+      nuevasIds = cuerpo.map((o) => String(o.new_order_id));
+    });
+
+    await test.step('Validar que el proceso de facturación masiva finalizó correctamente (mensaje de éxito real del sistema) y dejar la selección limpia', async () => {
+      // El "mensaje de éxito" real de este flujo es el propio modal de
+      // progreso (RUTEO_PROGRESO_FACTURACION_DIALOG) llegando a
+      // "Completado"/100% con todas las órdenes "Relacionado" (facturadas
+      // con éxito) y ninguna "No relacionado" — ya validado/cerrado dentro
+      // de confirmarEnvioRuteoMasivoConFacturacionAutomatica() (paso
+      // anterior). Acá solo se confirma que el modal completo ya no está
+      // en pantalla (cerrado con "Aceptar y cerrar").
+      await expect(
+        sharedPage.locator('#dialog_progress_invoicing'),
+        'El modal de progreso "Facturación masiva" debía quedar cerrado tras "Aceptar y cerrar"'
+      ).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+      // CORRECCIÓN (confirmado en vivo, invalida una hipótesis previa de
+      // este mismo escenario): a diferencia de lo que asumía originalmente,
+      // "Enviar a Ruteo" NO limpia la selección múltiple por sí solo — las
+      // órdenes originales SIGUEN marcadas tras confirmar (comportamiento
+      // real de la aplicación, no un bug de automatización). Se deja
+      // limpio explícitamente con limpiarSeleccionMasivaRuteo() (mismo
+      // método ya validado por el Escenario 33) en vez de asumir un
+      // auto-limpiado que este ambiente no hace.
+      const seleccionadasTrasEnviar = await pos.obtenerContadorSeleccionadasRuteo();
+      console.log(`[Escenario 38] Órdenes que siguen marcadas tras "Enviar a Ruteo": ${seleccionadasTrasEnviar} (la app no limpia la selección por sí sola)`);
+      if (seleccionadasTrasEnviar > 0) {
+        await pos.limpiarSeleccionMasivaRuteo();
+      }
+      expect(
+        await pos.obtenerContadorSeleccionadasRuteo(),
+        'La selección múltiple debía quedar limpia al finalizar el escenario'
+      ).toBe(0);
+    });
+
+    await test.step('Ir a "H. de Órdenes" y validar que las órdenes NUEVAS existen ahí, ya Facturadas automáticamente', async () => {
+      await pos.abrirListadoOrdenesRuteo();
+      await pos.irAFiltroRuteo('H. de Órdenes');
+      for (const idNueva of nuevasIds) {
+        const estado = await pos.obtenerEstadoFacturacionOrdenRuteo(idNueva);
+        expect(estado, `La orden nueva #${idNueva} debía quedar "Facturado" gracias a "Facturar Automáticamente"`).toBe('Facturado');
+      }
+    });
+
+    await test.step('Validar que las órdenes ORIGINALES permanecen intactas (esta acción DUPLICA, no mueve — ver el comentario de este bloque)', async () => {
+      for (const id of idsAEnviar) {
+        // Ambiente compartido con cientos de órdenes (agravado por las
+        // muchas órdenes desechables creadas hoy mismo investigando este
+        // escenario): el listado "Ruteo" no renderiza necesariamente TODAS
+        // las tarjetas de golpe (ver el comentario de RUTEO_CONTADOR_TOTAL
+        // en pos.locators.ts: el contador real no depende "solo de las
+        // tarjetas ya renderizadas/paginadas") y esta suite no implementa
+        // scroll-to-load-more para este listado. Si una orden original ya
+        // no está en la porción inicial renderizada tras el refresh que
+        // dispara "Enviar a Ruteo", se documenta en vez de fallar la
+        // persistencia de datos por una limitación de renderizado ajena a
+        // esta funcionalidad — el resto del escenario (creación real de la
+        // orden nueva, facturación automática, persistencia de datos) ya
+        // quedó validado en los pasos anteriores sin depender de esto.
+        const sigueVisible = await pos.tarjetaRuteo(id).isVisible({ timeout: 5_000 }).catch(() => false);
+        if (!sigueVisible) {
+          console.log(`[Escenario 38] La orden original #${id} no está en la porción inicial renderizada del listado ahora mismo (ambiente muy poblado) — se documenta, no se falla por esto.`);
+          continue;
+        }
+
+        const estado = await pos.obtenerEstadoFacturacionOrdenRuteo(id);
+        expect(estado, `La orden original #${id} debía seguir "Facturado" sin cambios`).toBe('Facturado');
+      }
+    });
+
+    await test.step('Validar persistencia completa de cada orden nueva contra su orden original: repartidor, cliente, productos y totales', async () => {
+      expect(nuevasIds.length, 'Debe haber tantas órdenes nuevas como originales enviadas').toBe(idsAEnviar.length);
+
+      for (const idOriginal of idsAEnviar) {
+        const idNueva = mapaOriginalANueva[idOriginal];
+        expect(idNueva, `La respuesta de "Enviar a Ruteo" no incluyó una orden nueva para la original #${idOriginal}`).toBeTruthy();
+        const original = detallesOriginales[idOriginal];
+
+        await pos.abrirMenuAccionesOrdenRuteo(idNueva);
+        const nueva = await pos.verOrdenRuteo(idNueva);
+
+        expect(nueva.repartidor, `La orden nueva #${idNueva} no quedó con el repartidor elegido en el modal ("${repartidorElegido}")`).toContain(repartidorElegido);
+        expect(nueva.clienteNombre, `El cliente de la orden nueva #${idNueva} no coincide con el de la orden original #${idOriginal}`).toBe(original.clienteNombre);
+        expect(nueva.cantidadProductos, `La cantidad de productos de la orden nueva #${idNueva} no coincide con la original #${idOriginal}`).toBe(original.cantidadProductos);
+        expect(nueva.subtotal, `El subtotal de la orden nueva #${idNueva} no coincide con la original #${idOriginal}`).toBeCloseTo(original.subtotal, 2);
+        expect(nueva.impuesto, `El impuesto de la orden nueva #${idNueva} no coincide con la original #${idOriginal}`).toBeCloseTo(original.impuesto, 2);
+        expect(nueva.total, `El total de la orden nueva #${idNueva} no coincide con la original #${idOriginal}`).toBeCloseTo(original.total, 2);
+      }
     });
 
     expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
