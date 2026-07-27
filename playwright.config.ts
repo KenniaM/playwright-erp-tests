@@ -51,6 +51,14 @@ export default defineConfig({
   },
 
   {
+    name: 'firefox',
+    use: {
+      storageState: 'playwright/.auth/admin.json',
+    },
+    dependencies: ['setup'],
+  },
+
+  {
     name: 'chromium',
     use: {
       ...devices['Desktop Chrome'],
@@ -71,14 +79,6 @@ export default defineConfig({
       launchOptions: {},
     },
     dependencies: ['setup-super-admin'],
-  },
-
-  {
-    name: 'firefox',
-    use: {
-      storageState: 'playwright/.auth/admin.json',
-    },
-    dependencies: ['setup'],
   },
 
   {
