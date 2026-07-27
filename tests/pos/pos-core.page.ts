@@ -222,6 +222,17 @@ export class PosCore {
 
 
   /**
+   * Cierra el modal "Búsqueda Rápida" (`L.DASHBOARD_MODAL_BUSQUEDA_GLOBAL`) si
+   * aparece — ver el comentario del locator para la evidencia completa (se
+   * abre solo, sin interacción, mostrando notas de versión para cuentas que
+   * no las han visto). Mismo mecanismo genérico que moneda/Setup Inicial.
+   */
+  async _cerrarModalBusquedaGlobalSiAparece() {
+    await this._cerrarOverlayDashboardSiAparece(this.page.locator(L.DASHBOARD_MODAL_BUSQUEDA_GLOBAL));
+  }
+
+
+  /**
    * Cierra un modal del Dashboard (moneda o Setup Inicial) si está visible,
    * reintentando el click de cierre en vez de esperar una sola vez.
    *
@@ -432,6 +443,7 @@ export class PosCore {
       await this.cerrarModalNotificacionesSiAparece();
       await this._cerrarModalMonedaSiAparece();
       await this._cerrarModalSetupInicialSiAparece();
+      await this._cerrarModalBusquedaGlobalSiAparece();
       clickRealizado = await linkIrAPos.evaluate((el: HTMLElement) => el.click()).then(() => true).catch(() => false);
     }
     expect(clickRealizado, `El link real hacia POS no se pudo clickear tras ${MAX_INTENTOS_CLICK} intentos`).toBe(true);
@@ -464,6 +476,23 @@ export class PosCore {
         );
       }
 
+      // Igual que el link "Crear factura" y los modales de moneda/Setup
+      // Inicial, el modal "Búsqueda Rápida" (L.DASHBOARD_MODAL_BUSQUEDA_GLOBAL)
+      // puede aparecer de forma asíncrona justo en la ventana entre que este
+      // modal de compañía queda visible y el click sobre la opción real —
+      // confirmado en vivo (cuenta Super Administrador nueva, ver
+      // super-admin.setup.ts). _cerrarModalBusquedaGlobalSiAparece() ya trae
+      // su propio reintento acotado (_cerrarOverlayDashboardSiAparece), así
+      // que una sola llamada aquí, justo antes del único click real, alcanza.
+      //
+      // El click en sí NO lleva un timeout corto propio: confirmado en vivo
+      // que, al disparar una navegación real, la fase interna de Playwright
+      // "waiting for scheduled navigations to finish" puede tardar más de
+      // 5s en este ambiente — un timeout corto ahí interrumpía un click que
+      // SÍ había tenido éxito (el propio log mostraba "click action done"),
+      // dejando el reintento siguiente sin el modal original (la app ya
+      // había navegado), reintentando contra un locator que ya no existe.
+      await this._cerrarModalBusquedaGlobalSiAparece();
       await opcionCompania.click();
       await this.page.waitForURL(/pointOfSale/, { timeout: TIMEOUTS.NAVIGATE });
     } else if (resultado === null) {

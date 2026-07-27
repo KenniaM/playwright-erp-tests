@@ -39,6 +39,17 @@ export default defineConfig({
     testMatch: /auth\.setup\.ts/,
   },
 
+  // Segunda sesión de la suite (cuenta Super Administrador, compañía TALLER
+  // ALPHA PREMIUM) — ver tests/auth/super-admin.setup.ts. Proyecto de setup
+  // separado (en vez de ampliar el 'setup' de arriba) porque genera un
+  // storageState DISTINTO (super-admin.json, no admin.json): un único
+  // proyecto 'setup' no puede producir dos storageState distintos sin que
+  // los specs regulares tengan forma de pedir uno u otro.
+  {
+    name: 'setup-super-admin',
+    testMatch: /super-admin\.setup\.ts/,
+  },
+
   {
     name: 'chromium',
     use: {
@@ -47,6 +58,19 @@ export default defineConfig({
       launchOptions: {},
     },
     dependencies: ['setup'],
+  },
+
+  // Variante de 'chromium' autenticada como Super Administrador
+  // (TALLER ALPHA PREMIUM) en vez de la cuenta admin por defecto — los specs
+  // que necesiten esta sesión corren con --project=chromium-super-admin.
+  {
+    name: 'chromium-super-admin',
+    use: {
+      ...devices['Desktop Chrome'],
+      storageState: 'playwright/.auth/super-admin.json',
+      launchOptions: {},
+    },
+    dependencies: ['setup-super-admin'],
   },
 
   {

@@ -65,6 +65,15 @@ export const L = {
   // elegida después.
   DASHBOARD_MODAL_SETUP_INICIAL: '#setupInitialModal',
 
+  // Dashboard — modal "Búsqueda Rápida" (Ctrl/Cmd+B): además de la búsqueda
+  // global, este mismo modal muestra notas de versión ("Actualización
+  // General del Sistema") para cuentas que todavía no las vieron — confirmado
+  // en vivo (cuenta Super Administrador nueva, ver super-admin.setup.ts) que
+  // puede abrirse SOLO, sin ninguna interacción, y quedar físicamente encima
+  // de cualquier otro modal del Dashboard (incluido el de selección de
+  // compañía), interceptando sus clicks.
+  DASHBOARD_MODAL_BUSQUEDA_GLOBAL: '#dialog_global_search',
+
   // Dashboard — link real que abre el flujo de selección de compañía/POS
   // (onclick="get_company_pos_select(1)", texto visible "Crear factura" —
   // el "1" coincide con pos_type_option=1, confirmado en vivo en
