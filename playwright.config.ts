@@ -14,6 +14,13 @@ import { defineConfig, devices } from '@playwright/test';
 // ÚNICAMENTE en Firefox (+ su dependencia 'setup'), no en los 5 proyectos
 // que existían antes por defecto (firefox/chromium/chromium-super-admin/
 // chromium-restaurant/webkit, cada uno corriendo la suite completa).
+// Única excepción: 'firefox-super-admin' (+ su dependencia
+// 'setup-super-admin') también entra al arreglo por defecto, pero acotado
+// vía `testMatch` a contabilidad-navegacion.spec.ts — ese submódulo necesita
+// la sesión Super Administrador, así que sin este proyecto en el arreglo por
+// defecto quedaría sin ningún proyecto que lo cubra (ver el comentario junto
+// a 'firefox-super-admin' más abajo). No cambia las credenciales ni la
+// sesión que usa el resto de la suite bajo 'firefox'.
 //
 // Playwright no tiene una opción nativa de "proyecto por defecto": con
 // `--project` ausente corre TODOS los proyectos del arreglo `projects` tal
@@ -23,10 +30,11 @@ import { defineConfig, devices } from '@playwright/test';
 // `--project webkit`, `--project=setup` para regenerar solo la sesión,
 // etc.): si lo pidió, se le entrega el arreglo COMPLETO (para que Playwright
 // pueda encontrar y filtrar por ese nombre); si no lo pidió, se le entrega
-// solo `['setup', 'firefox']` — 'setup' tiene que seguir presente porque
-// 'firefox' depende de él (`dependencies: ['setup']`) y Playwright resuelve
-// esa dependencia buscando el proyecto por nombre DENTRO del arreglo que
-// recibe, no fuera de él.
+// solo `['setup', 'firefox', 'setup-super-admin', 'firefox-super-admin']` —
+// 'setup'/'setup-super-admin' tienen que seguir presentes porque
+// 'firefox'/'firefox-super-admin' dependen de ellos (`dependencies: [...]`)
+// y Playwright resuelve esa dependencia buscando el proyecto por nombre
+// DENTRO del arreglo que recibe, no fuera de él.
 //
 // Este archivo se reevalúa de nuevo en cada proceso worker que Playwright
 // levanta para correr los tests (no una sola vez en el proceso principal) —
@@ -105,6 +113,11 @@ const TODOS_LOS_PROYECTOS = [
       storageState: 'playwright/.auth/admin.json',
     },
     dependencies: ['setup'],
+    // contabilidad-navegacion.spec.ts corre exclusivamente bajo la sesión
+    // Super Administrador (proyecto 'firefox-super-admin' más abajo) — se
+    // excluye aquí para que no corra dos veces (una por cada sesión) en una
+    // corrida por defecto.
+    testIgnore: /contabilidad-navegacion\.spec\.ts/,
   },
 
   {
@@ -118,21 +131,48 @@ const TODOS_LOS_PROYECTOS = [
   },
 
   // Variante de 'firefox' autenticada como Super Administrador
-  // (TALLER ALPHA PREMIUM) en vez de la cuenta admin por defecto — los specs
-  // que necesiten esta sesión corren con --project=firefox-super-admin.
+  // (TALLER ALPHA PREMIUM) en vez de la cuenta admin por defecto.
   // Renombrado de 'chromium-super-admin' (usaba ...devices['Desktop Chrome'])
   // a 'firefox-super-admin' junto con Firefox como navegador por defecto de
   // todo el proyecto: mantener el nombre viejo mientras corre en Firefox
   // habría quedado tan engañoso como el bug real que tenía el project
   // 'firefox' (nombrado así pero corriendo en Chromium por faltarle
   // ...devices['Desktop Firefox']).
+  // Acotado (testMatch) a contabilidad-navegacion.spec.ts: ese submódulo
+  // necesita la sesión Super Administrador, así que este proyecto entra en
+  // el arreglo por defecto (junto con su dependencia 'setup-super-admin',
+  // ver seEspecificoProyectoExplicito más abajo) únicamente para cubrir ese
+  // spec en cualquier corrida sin --project explícito, sin duplicar ni
+  // afectar el resto de la suite (que sigue corriendo solo bajo
+  // 'firefox'/admin.json, con las MISMAS credenciales de siempre).
+  //
+  // Intento previo de este mismo cambio quedó revertido porque agregaba
+  // testMatch/testIgnore sin sumar 'firefox-super-admin' (ni su dependencia
+  // 'setup-super-admin') al arreglo filtrado de más abajo: el archivo
+  // quedaba excluido de 'firefox' pero el único proyecto que sí lo cubría
+  // nunca llegaba a correr en una corrida sin --project, produciendo
+  // "No tests found in the selected file or folder". Esta vez el filtro de
+  // abajo sí incluye ambos nombres.
   {
     name: 'firefox-super-admin',
+    // El test.setTimeout(TIMEOUTS.TEST) que fija cada test de
+    // contabilidad-navegacion.spec.ts (contabilidad.page.ts, 60_000) corre
+    // DENTRO del cuerpo del test, después de que la fixture `page` ya quedó
+    // creada — no cubre la fase de setup de fixtures en sí. Confirmado en
+    // vivo: bajo corrida paralela (4 workers levantando contexto de Firefox
+    // a la vez con el mismo storageState), esa fase ocasionalmente superó el
+    // default de Playwright (30_000ms) con "Test timeout of 30000ms exceeded
+    // while setting up 'page'" — el `timeout` de proyecto cubre TODA la
+    // duración del test (fixtures + cuerpo) desde el inicio, así que se fija
+    // aquí al mismo presupuesto de 60_000 que el módulo ya declara, en vez de
+    // depender únicamente del setTimeout interno del cuerpo del test.
+    timeout: 60_000,
     use: {
       ...devices['Desktop Firefox'],
       storageState: 'playwright/.auth/super-admin.json',
     },
     dependencies: ['setup-super-admin'],
+    testMatch: /contabilidad-navegacion\.spec\.ts/,
   },
 
   // Variante de 'firefox' autenticada contra el ambiente qa_restaurant
@@ -189,7 +229,9 @@ export default defineConfig({
   /* Configure projects for major browsers */
   projects: seEspecificoProyectoExplicito
     ? TODOS_LOS_PROYECTOS
-    : TODOS_LOS_PROYECTOS.filter((p) => p.name === 'setup' || p.name === 'firefox'),
+    : TODOS_LOS_PROYECTOS.filter((p) =>
+        ['setup', 'firefox', 'setup-super-admin', 'firefox-super-admin'].includes(p.name),
+      ),
   /* Run your local dev server before starting the tests */
   // webServer: {
   //   command: 'npm run start',
