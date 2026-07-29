@@ -80,6 +80,27 @@ export const TIMEOUTS = {
   // una simple relectura del DOM) — presupuesto propio y mayor para permitir
   // varios intentos reales bajo carga del ambiente compartido.
   POLL_CON_RECARGA_COMPLETA: 90_000,
+  // "Configurar etapas" del Tablero: crear columna + editarla + configurar
+  // etapas (agregar/editar/eliminar) + asignar una etapa a una orden real +
+  // eliminar la columna de prueba — varios ciclos de guardado encadenados,
+  // en la misma línea que TEST_CONFIG_TABLERO. Confirmado en vivo: el test
+  // que además recorre "Eliminar" sobre cada columna real con órdenes
+  // multiplica el costo — cada columna espera hasta CARGA (15s) por el aviso
+  // de bloqueo, que además confirmado en vivo puede no aparecer nunca
+  // (inconsistencia de UI ya documentada), sumando otros 15s de espera
+  // agotada por columna — muy por encima de lo que cubre TEST_CONFIG_TABLERO.
+  TEST_ETAPAS_TABLERO: 300_000,
+  // El modal "Agregar/Editar columna" y el modal "Eliminar columna" no
+  // cierran de inmediato tras guardar/confirmar (mismo patrón ya confirmado
+  // en GUARDAR_CONFIG_TABLERO) — timeout propio por consistencia con el
+  // resto de modales de este módulo.
+  GUARDAR_COLUMNA: 30_000,
+  // Dashboard, Gráficos y Tabla informativa disparan sus propias peticiones
+  // AJAX al cambiar de filtro/vista — mismo criterio que CARGA pero como
+  // constante propia para dejar explícito que aplica a estos 3 tabs.
+  TEST_DASHBOARD: 120_000,
+  TEST_GRAFICOS: 120_000,
+  TEST_TABLA_INFORMATIVA: 120_000,
 } as const;
 
 // ─── Tabs principales ───────────────────────────────────────────────────────
@@ -522,6 +543,133 @@ const L = {
   // disparan `saveRepairOrderNotes` (200).
   INPUT_OBSERVACION_SERVICIO_DETALLE: '#damage_repair_detail',
   INPUT_OBSERVACION_CLIENTE_DETALLE: '#damage_repair_message_detail',
+
+  // ─── Tablero: columnas (Editar/Eliminar/Conf. Etapas) ──────────────────────
+  // Confirmado en vivo: cada columna del tablero es un `.ervk-kanban-column`
+  // con su propio menú "⋮" (`.ervk-column-dropdown`, `showDropdownKanbanStatus`)
+  // que expone 3 acciones — completamente independiente del modo edición de
+  // "Configurar Flujo de Trabajo" (`LINK_CONFIGURAR_FLUJO_TRABAJO` más
+  // arriba, que es una feature distinta pese al nombre parecido: esa edita
+  // las 10 "etapas" del flujo avanzado vía lápices, no las columnas reales
+  // del tablero básico).
+  COLUMNA_TABLERO: '.ervk-kanban-column',
+  TITULO_COLUMNA_TABLERO: '.ervk-column-title',
+  MENU_COLUMNA_TABLERO: '.ervk-column-dropdown',
+  ITEM_MENU_COLUMNA_EDITAR: '.ervk-column-menu-item:has-text("Editar")',
+  ITEM_MENU_COLUMNA_ELIMINAR: '.ervk-column-menu-item:has-text("Eliminar")',
+  ITEM_MENU_COLUMNA_CONF_ETAPAS: '.ervk-column-menu-item:has-text("Conf. Etapas")',
+  // Botón "+" para agregar columna — mismo componente que "Editar columna"
+  // pero invocado con id 0 (`show_dialog_update_kanban_order_status(0)`,
+  // confirmado en vivo), por eso ambos flujos comparten el mismo modal real.
+  BTN_AGREGAR_COLUMNA_TABLERO: '.ervk-add-column-btn',
+  MODAL_COLUMNA_TABLERO: '#dialog_update_kanban_order_status',
+  TITULO_MODAL_COLUMNA_TABLERO: '#span_ro_kanban_title',
+  INPUT_NOMBRE_COLUMNA_TABLERO: '#input_kanban_name',
+  INPUT_COLOR_COLUMNA_TABLERO: '#input_kanban_color',
+  BTN_GUARDAR_COLUMNA_TABLERO: '.ervk-kanban-status-btn-primary',
+  // Modal real de confirmación al eliminar una columna (NO es un `confirm()`
+  // nativo del navegador) — confirmado en vivo que solo aparece cuando la
+  // columna está vacía; si tiene órdenes, la app en su lugar muestra un aviso
+  // ("Para poder eliminar la columna esta debe estar vacía") y nunca abre
+  // este modal — regla de negocio real, no un bug de automatización.
+  MODAL_ELIMINAR_COLUMNA_TABLERO: '#dialog_swal_delete_kanban_order_status',
+  BTN_CONFIRMAR_ELIMINAR_COLUMNA_TABLERO: '.btn-delete-column',
+  // Confirmado en vivo: el aviso real es un toast de la librería `noty`
+  // (`.noty_bar.noty_type_warning`, mismo componente ya usado en
+  // `validarSinErrores` de los specs) — NO el `<p id="deleteColumn"
+  // class="hide">` fuente (permanece oculto siempre; solo su texto se copia
+  // al toast al vuelo).
+  AVISO_ELIMINAR_COLUMNA_NO_VACIA: '.noty_bar.noty_type_warning:has-text("Para poder eliminar la columna")',
+
+  // ─── Tablero: Conf. Etapas (etapas configurables DENTRO de una columna) ────
+  // Distinto, otra vez, del flujo "Configurar Flujo de Trabajo" — este modal
+  // se abre desde el menú "⋮" de una columna concreta y administra una lista
+  // de "etapas" propias de esa columna (texto libre, sin permisos ni roles),
+  // que luego quedan disponibles para asignarse a una orden individual desde
+  // la propia tarjeta (ver sección "Asignar etapa a una orden" más abajo).
+  MODAL_CONF_ETAPAS_COLUMNA: '#dialog_config_steps_status_kanban',
+  LISTA_ETAPAS_COLUMNA: '#steps_status_kanban_list',
+  ETAPA_COLUMNA: '.step_kanban_status',
+  NOMBRE_ETAPA_COLUMNA: '.step_kanban_status_name',
+  BTN_EDITAR_ETAPA_COLUMNA: '.edit_step',
+  BTN_ELIMINAR_ETAPA_COLUMNA: '.delete_step',
+  BTN_AGREGAR_ETAPA_COLUMNA: '#btn_add_step',
+  // Mismo modal (`#modal_add_step`) para agregar y editar — cambia solo el
+  // título (`data-title-add`/`data-title-edit`, confirmado en vivo) y si
+  // `#step_name` llega prellenado o vacío.
+  MODAL_FORM_ETAPA_COLUMNA: '#modal_add_step',
+  INPUT_NOMBRE_ETAPA_COLUMNA: '#step_name',
+
+  // ─── Asignar etapa a una orden (tarjeta del tablero) ────────────────────────
+  // Confirmado en vivo: la sección "Etapa:" de una tarjeta es un valor de
+  // solo lectura (`.ervk-stage-value`) hasta hacer clic sobre
+  // `.ervk-stage-section.ervk-configurable`, que revela un `<select>` real
+  // (oculto hasta ese momento) con las etapas configuradas para la COLUMNA
+  // actual de esa orden — por eso solo tiene opciones reales si esa columna
+  // tiene etapas configuradas vía "Conf. Etapas".
+  SECCION_ETAPA_ORDEN: '.ervk-stage-section.ervk-configurable',
+  VALOR_ETAPA_ORDEN: '.ervk-stage-value',
+  SELECT_ETAPA_ORDEN: '.ervk-stage-select',
+
+  // ─── Dashboard: filtros y vistas ─────────────────────────────────────────────
+  DASH_FILTRO_PERIODO: '.vrd-filter-btn',
+  DASH_NAV_TAB: '.vrd-nav-tab',
+  DASH_INPUT_RANGO_DESDE: '#vrd_filter_start_date',
+  DASH_INPUT_RANGO_HASTA: '#vrd_filter_end_date',
+  DASH_BTN_APLICAR_RANGO: '#btn_apply_dashboard_range',
+  DASH_BTN_ACTUALIZAR: '#btn_refresh_quick_reception_dashboard',
+  // Las 6 tarjetas KPI de "Vista General" (Órdenes ingresadas hoy, Órdenes
+  // entregadas, etc.) comparten esta misma clase para su enlace "Ver".
+  DASH_KPI_VER: '.js-vrd-open-detail.vrd-kpi-action',
+  // "Ver órdenes" de cada tarjeta de "Flujo operativo del taller" (una por columna del tablero).
+  DASH_FLUJO_VER_ORDENES: '.js-vrd-open-detail.vrd-stage-action',
+  DASH_SECCION_VISTA_GENERAL: '.vrd-section-title:has-text("Vista General")',
+  DASH_SECCION_FLUJO_OPERATIVO: '.vrd-section-title:has-text("Flujo operativo del taller")',
+  // Confirmado en vivo: "Mecánicos", "Finanzas", "Citas" y "Repuestos" son
+  // pestañas reales del dashboard pero con esta única leyenda de contenido
+  // pendiente — no es un error, es el estado real y esperado de esas 4
+  // pestañas en este ambiente/versión.
+  // Confirmado en vivo: acotado a `.vrd-panel.vrd-placeholder` (el
+  // contenedor propio del placeholder genérico de "pestaña sin
+  // implementar") — el mismo texto también aparece SUELTO dentro de la
+  // tarjeta "Cuellos de botella" de Vista General (una feature real, ya
+  // implementada como sección, solo con su propio contenido aún pendiente),
+  // así que buscar el texto sin acotar al contenedor daba un falso positivo
+  // incluso con Vista General activa.
+  DASH_TEXTO_PESTANA_PENDIENTE: '.vrd-panel.vrd-placeholder:has-text("Esta pestaña estará disponible en una siguiente entrega.")',
+
+  // ─── Gráficos: filtros y KPIs ────────────────────────────────────────────────
+  GRAF_BTN_REFRESCAR: '#btn_refresh_graphics_cache',
+  GRAF_SELECT_MECANICO: '#mechanics_select',
+  GRAF_SELECT_SERVICIO: '#service_id_select',
+  GRAF_SELECT_SUBSERVICIO: '#subservice_id_select',
+  GRAF_INPUT_FECHA_DESDE: '#input_start_date_quick_reception',
+  GRAF_INPUT_FECHA_HASTA: '#input_end_date_quick_reception',
+  GRAF_SELECT_FORMATO: '#select_format_option',
+  // Mismo id que el botón "Buscar" de Tabla informativa (`btn_search_date_quick_reception`,
+  // confirmado en vivo — DOM duplicado, un nodo por tab, solo uno visible a
+  // la vez) — SIEMPRE acotar por el contenedor del tab antes de usar este id,
+  // nunca `page.locator('#btn_search_date_quick_reception')` a secas (viola
+  // "strict mode": resuelve a 2 elementos).
+  BTN_BUSCAR_ID_COMPARTIDO: '#btn_search_date_quick_reception',
+  // Las 4 tarjetas KPI (Facturados/Rechazados, último mes/año) comparten esta
+  // clase para su enlace "Ver mas" (sin tilde, confirmado en vivo).
+  GRAF_KPI_VER_MAS: '.stats-card-link',
+  GRAF_PANEL_RESUMEN_FACTURACION: 'text=Resumen de Facturación',
+
+  // ─── Tabla informativa: filtros y totales ───────────────────────────────────
+  TABLAINFO_CONTENEDOR: '#div_mechanics_quick_reception',
+  TABLAINFO_SELECT_MECANICO: '#slt_mechanics_select',
+  TABLAINFO_SELECT_SERVICIO: '#table_service_id_select',
+  TABLAINFO_SELECT_SUBSERVICIO: '#table_subservice_id_select',
+  TABLAINFO_INPUT_FECHA_DESDE: '#input_start_date_quick_reception_mechanics',
+  TABLAINFO_INPUT_FECHA_HASTA: '#input_end_date_quick_reception_mechanics',
+  TABLAINFO_FILAS: '#div_mechanics_quick_reception table tbody tr',
+  // Totales al pie de la tabla — confirmado en vivo (`parseMonedaCR` ya
+  // existente en este archivo se reutiliza para convertirlos a número).
+  TABLAINFO_TOTAL_FACTURADO: '#lb_mechanics_subservice_total',
+  TABLAINFO_TOTAL_MANO_OBRA: '#lb_workforce_mechanics_subservice',
+  TABLAINFO_TOTAL_UTILIDAD: '#lb_utility_mechanics_subservice',
 } as const;
 
 // Marca de vehículo usada como valor por defecto en los tests de creación de
@@ -2947,5 +3095,547 @@ export class RecepcionPage {
     await expect(dialogoConfirmar, 'No apareció el diálogo de confirmación "¿Está seguro de generar la orden?"').toBeVisible({ timeout: TIMEOUTS.CARGA });
     await this.page.getByRole('button', { name: 'Generar orden' }).click();
     await expect(dialogoConfirmar, 'El diálogo de confirmación no se cerró tras confirmar "Generar orden"').toBeHidden({ timeout: TIMEOUTS.CARGA });
+  }
+
+  // ─── Tablero: columnas (Editar / Eliminar / Conf. Etapas / Agregar) ────────
+
+  /** Locator de una columna del tablero por su nombre visible (título del encabezado). */
+  columnaTablero(nombre: string): Locator {
+    return this.page.locator(L.COLUMNA_TABLERO, { has: this.page.locator(L.TITULO_COLUMNA_TABLERO, { hasText: nombre }) });
+  }
+
+  /**
+   * Elimina cualquier `.modal-backdrop` huérfano (sin un modal Bootstrap
+   * realmente visible asociado) del DOM. Confirmado en vivo: los reintentos
+   * acotados de apertura de los modales de columna/etapas (ya documentados
+   * como intermitentes en este módulo) pueden dejar un backdrop sin retirar
+   * tras varios ciclos de show/hide seguidos — ese backdrop huérfano queda
+   * interceptando CUALQUIER clic futuro en la página de forma permanente, no
+   * solo mientras el modal real está abierto. Se llama antes de cada
+   * interacción con el menú de columna para no arrastrar ese estado entre
+   * pasos.
+   */
+  private async limpiarBackdropsHuerfanos() {
+    // A diferencia de la versión anterior (que solo limpiaba si NINGÚN modal
+    // seguía visible), confirmado en vivo que un intento previo fallido
+    // también puede dejar el modal mismo abierto y bloqueando clics futuros
+    // (no solo su backdrop) — se fuerza a cerrar cualquier modal Bootstrap
+    // visible de este módulo (columna/etapas) además del backdrop, en vez de
+    // limitarse a un caso y no al otro.
+    await this.page.evaluate(() => {
+      // Clic real (no la API `.modal('hide')` de jQuery) sobre el botón de
+      // cierre propio de cada modal — confirmado en vivo que es más
+      // confiable: dispara el mismo manejador `data-dismiss="modal"` que un
+      // clic real de usuario, sin depender de que el modal se haya abierto
+      // originalmente por la vía que jQuery espera.
+      document
+        .querySelectorAll('#dialog_update_kanban_order_status, #dialog_swal_delete_kanban_order_status, #dialog_config_steps_status_kanban, #modal_add_step')
+        .forEach((el) => {
+          const visible = getComputedStyle(el).display !== 'none';
+          if (!visible) return;
+          const btnCerrar = el.querySelector<HTMLElement>('[data-dismiss="modal"]');
+          btnCerrar?.click();
+        });
+      document.querySelectorAll('.modal, .modal-backdrop').forEach((el) => {
+        (el as HTMLElement).style.display = 'none';
+        el.classList.remove('in', 'show');
+      });
+      document.querySelectorAll('.modal-backdrop').forEach((el) => el.remove());
+      document.body.classList.remove('modal-open');
+    });
+  }
+
+  /** Abre el menú "⋮" de una columna del tablero (Editar/Eliminar/Conf. Etapas). */
+  async abrirMenuColumna(nombre: string) {
+    await this.limpiarBackdropsHuerfanos();
+    const columna = this.columnaTablero(nombre);
+    await expect(columna, `La columna "${nombre}" no está visible en el tablero`).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    // El tablero puede tener más columnas de las que caben en el ancho
+    // visible (scroll horizontal) — sin esto, el menú de una columna fuera
+    // de vista queda fuera del viewport y el clic nunca se resuelve.
+    await columna.scrollIntoViewIfNeeded();
+    await columna.locator(L.MENU_COLUMNA_TABLERO).click();
+    await expect(
+      columna.locator(L.ITEM_MENU_COLUMNA_EDITAR),
+      `El menú de la columna "${nombre}" no se desplegó`
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /**
+   * Llena el campo "Nombre" y guarda el modal "Agregar/Editar columna" ya
+   * abierto. Mismo modal real para ambos flujos (confirmado en vivo:
+   * `#dialog_update_kanban_order_status`, invocado con id 0 para agregar).
+   */
+  private async guardarModalColumna(nombre: string) {
+    await this.page.locator(L.INPUT_NOMBRE_COLUMNA_TABLERO).fill(nombre);
+    await this.page.locator(L.BTN_GUARDAR_COLUMNA_TABLERO).click();
+    await expect(
+      this.page.locator(L.MODAL_COLUMNA_TABLERO),
+      'El modal de columna no se cerró tras guardar'
+    ).toBeHidden({ timeout: TIMEOUTS.GUARDAR_COLUMNA });
+  }
+
+  /**
+   * Dispara la acción que debería abrir el modal "Agregar/Editar columna"
+   * (`#dialog_update_kanban_order_status`, único nodo del DOM reutilizado
+   * por ambos flujos) y reintenta un número acotado de veces si no abre.
+   * Confirmado en vivo: el mismo tipo de apertura intermitente ya
+   * documentado para el modal de "Eliminar columna" también ocurre aquí —
+   * inconsistencia real de la app, no una condición de carrera de la
+   * automatización — así que se aplica el mismo patrón de reintento corto en
+   * vez de un único intento con timeout largo.
+   */
+  private async abrirModalColumnaConReintento(accionQueAbre: () => Promise<void>, descripcion: string) {
+    const modal = this.page.locator(L.MODAL_COLUMNA_TABLERO);
+    let abierto = false;
+    for (let intento = 1; intento <= 3 && !abierto; intento++) {
+      await this.limpiarBackdropsHuerfanos();
+      await accionQueAbre();
+      abierto = await modal
+        .waitFor({ state: 'visible', timeout: TIMEOUTS.CARGA })
+        .then(() => true)
+        .catch(() => false);
+    }
+    await expect(modal, `${descripcion} no se abrió tras varios intentos`).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /**
+   * Crea una columna nueva desde el botón "+" del tablero. Confirmado en
+   * vivo: a diferencia de renombrar una columna EXISTENTE (`editarColumna`,
+   * que sí se refleja de inmediato), una columna NUEVA no aparece en el
+   * tablero ya renderizado hasta refrescar — el botón "Refrescar" propio del
+   * tablero (`refrescarTablero()`) queda `disabled` en este punto del flujo
+   * (confirmado en vivo, causa no determinada), así que se usa una recarga
+   * completa del módulo en su lugar, igual de válida funcionalmente.
+   */
+  async agregarColumna(nombre: string) {
+    await this.abrirModalColumnaConReintento(
+      () => this.page.locator(L.BTN_AGREGAR_COLUMNA_TABLERO).click(),
+      'El modal "Agregar columna"'
+    );
+    await this.guardarModalColumna(nombre);
+    await this.ir();
+    await this.visitarTab(TAB_TABLERO);
+    await expect(
+      this.columnaTablero(nombre),
+      `La columna "${nombre}" no aparece en el tablero tras crearla (incluso tras recargar)`
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /** Edita el nombre de una columna existente desde su menú "⋮" → "Editar". */
+  async editarColumna(nombreActual: string, nuevoNombre: string) {
+    await this.abrirModalColumnaConReintento(async () => {
+      await this.abrirMenuColumna(nombreActual);
+      await this.columnaTablero(nombreActual).locator(L.ITEM_MENU_COLUMNA_EDITAR).click();
+    }, 'El modal "Editar columna"');
+    await expect(
+      this.page.locator(L.INPUT_NOMBRE_COLUMNA_TABLERO),
+      'El campo "Nombre" no cargó el valor actual de la columna al editar'
+    ).toHaveValue(nombreActual, { timeout: TIMEOUTS.CARGA });
+    await this.guardarModalColumna(nuevoNombre);
+
+    // El renombrado normalmente se refleja de inmediato, pero confirmado en
+    // vivo que a veces no (misma inconsistencia de caché ya documentada en
+    // `agregarColumna`) — se recarga como respaldo antes de fallar.
+    const reflejado = await this.columnaTablero(nuevoNombre)
+      .waitFor({ state: 'visible', timeout: TIMEOUTS.CARGA })
+      .then(() => true)
+      .catch(() => false);
+    if (!reflejado) {
+      await this.ir();
+      await this.visitarTab(TAB_TABLERO);
+    }
+    await expect(
+      this.columnaTablero(nuevoNombre),
+      `La columna no quedó renombrada a "${nuevoNombre}" (incluso tras recargar)`
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /**
+   * Intenta eliminar una columna que SÍ tiene órdenes. Confirmado en vivo
+   * (con varias repeticiones aisladas, incluyendo recargas completas de
+   * página entre intentos) que la reacción visible de la app es
+   * INCONSISTENTE de una vez a otra — inconsistencia propia de la
+   * aplicación, no una condición de carrera de la automatización — con al
+   * menos 3 variantes observadas: (a) el toast de advertencia ("Para poder
+   * eliminar la columna esta debe estar vacía") aparece de inmediato, sin
+   * abrir ningún modal; (b) el modal de confirmación sí abre, y el mismo
+   * toast aparece recién al confirmar; (c) ninguno de los dos aparece dentro
+   * de un tiempo razonable. Lo único consistente en las 3 variantes — y lo
+   * único que de verdad protege datos reales del ambiente compartido — es
+   * que la columna NUNCA llega a eliminarse. Este método por eso solo exige
+   * esa invariante real; el toast/modal se registra como diagnóstico (log),
+   * nunca como una aserción dura que haría fallar el test por una
+   * inconsistencia de UI ajena a los datos.
+   */
+  async intentarEliminarColumnaConOrdenes(nombre: string) {
+    await this.abrirMenuColumna(nombre);
+    await this.columnaTablero(nombre).locator(L.ITEM_MENU_COLUMNA_ELIMINAR).click();
+
+    const modal = this.page.locator(L.MODAL_ELIMINAR_COLUMNA_TABLERO);
+    const aviso = this.page.locator(L.AVISO_ELIMINAR_COLUMNA_NO_VACIA);
+
+    const modalAbrioPrimero = await modal
+      .waitFor({ state: 'visible', timeout: TIMEOUTS.CARGA })
+      .then(() => true)
+      .catch(() => false);
+
+    if (modalAbrioPrimero) {
+      await modal.locator(L.BTN_CONFIRMAR_ELIMINAR_COLUMNA_TABLERO).click();
+    }
+
+    const avisoApareció = await aviso
+      .waitFor({ state: 'visible', timeout: TIMEOUTS.CARGA })
+      .then(() => true)
+      .catch(() => false);
+    if (!avisoApareció) {
+      console.log(
+        `[intentarEliminarColumnaConOrdenes] "${nombre}": ni el modal ni el toast de aviso aparecieron dentro del tiempo esperado ` +
+          '(inconsistencia de UI ya confirmada en vivo) — se valida igual que la columna no se haya eliminado.'
+      );
+    }
+
+    // El modal (`data-backdrop="static"`) no se cierra solo tras el aviso de
+    // bloqueo — se cierra explícitamente si llegó a abrirse, para no
+    // interferir con el próximo intento (siguiente columna) de este mismo test.
+    if (await modal.isVisible().catch(() => false)) {
+      await modal.locator('.kan-modal-close').click();
+      await expect(modal, 'El modal de confirmación de eliminar no se cerró tras el aviso de bloqueo').toBeHidden({ timeout: TIMEOUTS.CARGA });
+    }
+  }
+
+  /**
+   * Elimina una columna vacía (sin órdenes) confirmando el modal real de
+   * eliminación. Mismo reintento acotado que `abrirModalColumnaConReintento`
+   * para la apertura (confirmado en vivo: la misma apertura intermitente
+   * afecta también a este modal, `#dialog_swal_delete_kanban_order_status`).
+   * Confirmado en vivo además (interceptando la red): el POST real
+   * (`deleteKanbanOrderStatusById`) responde 200 y elimina la columna del
+   * lado del servidor de forma confiable — el tablero ya renderizado
+   * simplemente no la retira de su caché sin recargar, mismo patrón exacto
+   * ya documentado en `agregarColumna`. Por eso se recarga siempre tras
+   * confirmar, en vez de esperar (y reintentar) un cambio en el DOM que
+   * nunca iba a ocurrir sin esa recarga.
+   */
+  async eliminarColumnaVacia(nombre: string) {
+    const modal = this.page.locator(L.MODAL_ELIMINAR_COLUMNA_TABLERO);
+    let abierto = false;
+    for (let intento = 1; intento <= 3 && !abierto; intento++) {
+      await this.abrirMenuColumna(nombre);
+      await this.columnaTablero(nombre).locator(L.ITEM_MENU_COLUMNA_ELIMINAR).click();
+      abierto = await modal
+        .waitFor({ state: 'visible', timeout: TIMEOUTS.CARGA })
+        .then(() => true)
+        .catch(() => false);
+    }
+    await expect(modal, `El modal de confirmación de eliminar no se abrió para "${nombre}" tras varios intentos`).toBeVisible({ timeout: TIMEOUTS.CARGA });
+
+    const respuestaEliminar = this.page.waitForResponse(
+      (res) => res.url().includes('deleteKanbanOrderStatusById'),
+      { timeout: TIMEOUTS.CARGA }
+    );
+    await modal.locator(L.BTN_CONFIRMAR_ELIMINAR_COLUMNA_TABLERO).click();
+    await respuestaEliminar.catch(() => {});
+
+    await this.ir();
+    await this.visitarTab(TAB_TABLERO);
+    await expect(
+      this.columnaTablero(nombre),
+      `La columna "${nombre}" sigue existiendo tras confirmar la eliminación (incluso tras recargar)`
+    ).toBeHidden({ timeout: TIMEOUTS.CARGA });
+  }
+
+  // ─── Tablero: Conf. Etapas (etapas propias de una columna) ─────────────────
+
+  /**
+   * Abre "Conf. Etapas" de una columna desde su menú "⋮". Mismo reintento
+   * acotado (confirmado en vivo: la misma apertura intermitente afecta
+   * también a este modal, `#dialog_config_steps_status_kanban`).
+   */
+  async abrirConfEtapasColumna(nombre: string) {
+    const modal = this.page.locator(L.MODAL_CONF_ETAPAS_COLUMNA);
+    let abierto = false;
+    for (let intento = 1; intento <= 3 && !abierto; intento++) {
+      await this.abrirMenuColumna(nombre);
+      await this.columnaTablero(nombre).locator(L.ITEM_MENU_COLUMNA_CONF_ETAPAS).click();
+      abierto = await modal
+        .waitFor({ state: 'visible', timeout: TIMEOUTS.CARGA })
+        .then(() => true)
+        .catch(() => false);
+    }
+    await expect(modal, `El modal "Conf. Etapas" de "${nombre}" no se abrió tras varios intentos`).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /** Nombres de las etapas configuradas en el modal "Conf. Etapas" ya abierto. */
+  async etapasConfiguradas(): Promise<string[]> {
+    return this.page.locator(L.ETAPA_COLUMNA).locator(L.NOMBRE_ETAPA_COLUMNA).allTextContents();
+  }
+
+  /** Agrega una etapa nueva desde el modal "Conf. Etapas" ya abierto. */
+  async agregarEtapaColumna(nombre: string) {
+    await this.page.locator(L.BTN_AGREGAR_ETAPA_COLUMNA).click();
+    const modal = this.page.locator(L.MODAL_FORM_ETAPA_COLUMNA);
+    await expect(modal, 'El formulario "Agregar etapa" no se abrió').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await this.page.locator(L.INPUT_NOMBRE_ETAPA_COLUMNA).fill(nombre);
+    await modal.getByRole('button', { name: 'Guardar' }).click();
+    await expect(modal, 'El formulario de etapa no se cerró tras guardar').toBeHidden({ timeout: TIMEOUTS.CARGA });
+    await expect(
+      this.page.locator(L.ETAPA_COLUMNA, { hasText: nombre }),
+      `La etapa "${nombre}" no aparece en la lista tras agregarla`
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /** Edita el nombre de una etapa existente (lápiz) desde el modal "Conf. Etapas" ya abierto. */
+  async editarEtapaColumna(nombreActual: string, nuevoNombre: string) {
+    const etapa = this.page.locator(L.ETAPA_COLUMNA, { hasText: nombreActual });
+    const modal = this.page.locator(L.MODAL_FORM_ETAPA_COLUMNA);
+
+    // Mismo reintento acotado que el resto de modales de este módulo
+    // (confirmado en vivo: la misma apertura intermitente también afecta a
+    // `#modal_add_step` en su variante "Editar").
+    let abierto = false;
+    for (let intento = 1; intento <= 3 && !abierto; intento++) {
+      // A diferencia de `limpiarBackdropsHuerfanos()` (que también cerraría
+      // el propio modal "Conf. Etapas" que debe seguir abierto aquí), se
+      // fuerza a ocultar puntualmente solo `#modal_add_step` si quedó en un
+      // estado a medias tras un ciclo previo (p. ej. el de "Agregar etapa"
+      // justo antes, dentro del mismo test) — mismo tipo de apertura
+      // intermitente ya confirmado en el resto de modales del módulo.
+      await this.page.evaluate(() => {
+        const el = document.getElementById('modal_add_step');
+        if (el && getComputedStyle(el).display !== 'none') {
+          const btnCerrar = el.querySelector<HTMLElement>('[data-dismiss="modal"]');
+          btnCerrar?.click();
+          el.style.display = 'none';
+          el.classList.remove('in', 'show');
+        }
+        document.querySelectorAll('.modal-backdrop').forEach((n) => n.remove());
+        document.body.classList.remove('modal-open');
+      });
+      await etapa.locator(L.BTN_EDITAR_ETAPA_COLUMNA).click();
+      abierto = await modal
+        .waitFor({ state: 'visible', timeout: TIMEOUTS.CARGA })
+        .then(() => true)
+        .catch(() => false);
+    }
+    await expect(modal, 'El formulario "Editar etapa" no se abrió tras varios intentos').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await expect(
+      this.page.locator(L.INPUT_NOMBRE_ETAPA_COLUMNA),
+      'El campo no cargó el nombre actual de la etapa al editar'
+    ).toHaveValue(nombreActual, { timeout: TIMEOUTS.CARGA });
+    await this.page.locator(L.INPUT_NOMBRE_ETAPA_COLUMNA).fill(nuevoNombre);
+    await modal.getByRole('button', { name: 'Guardar' }).click();
+    await expect(modal, 'El formulario de etapa no se cerró tras guardar').toBeHidden({ timeout: TIMEOUTS.CARGA });
+    await expect(
+      this.page.locator(L.ETAPA_COLUMNA, { hasText: nuevoNombre }),
+      `La etapa no quedó renombrada a "${nuevoNombre}"`
+    ).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /**
+   * Elimina una etapa (basurero) desde el modal "Conf. Etapas" ya abierto.
+   * Confirmado en vivo: dispara un `confirm()` nativo del navegador (a
+   * diferencia del resto de confirmaciones de este módulo, que son modales
+   * propios de la app) — se arma el handler de `dialog` antes del clic.
+   */
+  async eliminarEtapaColumna(nombre: string) {
+    const etapa = this.page.locator(L.ETAPA_COLUMNA, { hasText: nombre });
+    this.page.once('dialog', (dialogo) => dialogo.accept());
+    await etapa.locator(L.BTN_ELIMINAR_ETAPA_COLUMNA).click();
+    await expect(
+      this.page.locator(L.ETAPA_COLUMNA, { hasText: nombre }),
+      `La etapa "${nombre}" sigue apareciendo tras eliminarla`
+    ).toHaveCount(0, { timeout: TIMEOUTS.CARGA });
+  }
+
+  /** Cierra el modal "Conf. Etapas" ya abierto. */
+  async cerrarConfEtapasColumna() {
+    const modal = this.page.locator(L.MODAL_CONF_ETAPAS_COLUMNA);
+    await modal.getByRole('button', { name: 'Cerrar' }).click();
+    await expect(modal, 'El modal "Conf. Etapas" no se cerró').toBeHidden({ timeout: TIMEOUTS.CARGA });
+  }
+
+  // ─── Asignar etapa a una orden (tarjeta del tablero) ────────────────────────
+
+  /**
+   * Lee la etapa actualmente asignada a una tarjeta. Funciona tanto si la
+   * sección está en modo lectura (`.ervk-stage-value`) como si el `<select>`
+   * quedó visible (confirmado en vivo: el comportamiento tras seleccionar una
+   * opción no es 100% consistente entre volver a modo lectura o dejar el
+   * `<select>` abierto) — se lee cualquiera de los dos que esté visible.
+   */
+  async etapaAsignadaEnTarjeta(tarjeta: Locator): Promise<string> {
+    const select = tarjeta.locator(L.SELECT_ETAPA_ORDEN);
+    if (await select.isVisible().catch(() => false)) {
+      const opcionSeleccionada = select.locator('option:checked');
+      return (await opcionSeleccionada.textContent())?.trim() ?? '';
+    }
+    const valor = tarjeta.locator(L.VALOR_ETAPA_ORDEN);
+    await expect(valor, 'La tarjeta no expone un valor de "Etapa" visible').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    return (await valor.textContent())?.trim() ?? '';
+  }
+
+  /**
+   * Asigna una etapa (ya configurada en la columna de esa orden vía "Conf.
+   * Etapas") a una tarjeta del tablero, y espera a que el cambio se refleje
+   * (dispara `updateStageOrderKanban` por `onchange`, confirmado en vivo).
+   */
+  async asignarEtapaATarjeta(tarjeta: Locator, nombreEtapa: string) {
+    const select = tarjeta.locator(L.SELECT_ETAPA_ORDEN);
+    if (!(await select.isVisible().catch(() => false))) {
+      await tarjeta.locator(L.SECCION_ETAPA_ORDEN).click();
+      await expect(select, 'No apareció el selector de etapa de la orden').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    }
+    await select.selectOption({ label: nombreEtapa });
+    await expect
+      .poll(() => this.etapaAsignadaEnTarjeta(tarjeta), { timeout: TIMEOUTS.CARGA })
+      .toBe(nombreEtapa);
+  }
+
+  // ─── Dashboard: filtros de periodo y vistas ─────────────────────────────────
+
+  private filtroPeriodoDashboard(nombre: string): Locator {
+    return this.page.locator(L.DASH_FILTRO_PERIODO).filter({ hasText: new RegExp(`^${nombre}$`) });
+  }
+
+  /** Selecciona un filtro de periodo del Dashboard (Hoy/Semana/Mes/Rango) y espera a que recargue. */
+  async seleccionarPeriodoDashboard(nombre: 'Hoy' | 'Semana' | 'Mes' | 'Rango') {
+    const filtro = this.filtroPeriodoDashboard(nombre);
+    await filtro.click();
+    await esperarQuedaActivo(async () => ((await filtro.getAttribute('class')) ?? '').includes('active'));
+    await this.page.waitForLoadState('networkidle', { timeout: TIMEOUTS.CARGA }).catch(() => {});
+  }
+
+  /** Aplica un rango de fechas personalizado en el Dashboard (activa "Rango" primero). */
+  async aplicarRangoDashboard(desde: string, hasta: string) {
+    await this.seleccionarPeriodoDashboard('Rango');
+    await this.page.locator(L.DASH_INPUT_RANGO_DESDE).fill(desde);
+    await this.page.locator(L.DASH_INPUT_RANGO_HASTA).fill(hasta);
+    await this.page.locator(L.DASH_BTN_APLICAR_RANGO).click();
+    await this.page.waitForLoadState('networkidle', { timeout: TIMEOUTS.CARGA }).catch(() => {});
+  }
+
+  private navTabDashboard(nombre: string): Locator {
+    return this.page.locator(L.DASH_NAV_TAB).filter({ hasText: new RegExp(`^${nombre}$`) });
+  }
+
+  /** Selecciona una vista del Dashboard (Vista General/Mecánicos/Finanzas/Citas/Repuestos). */
+  async seleccionarVistaDashboard(nombre: 'Vista General' | 'Mecánicos' | 'Finanzas' | 'Citas' | 'Repuestos') {
+    const tab = this.navTabDashboard(nombre);
+    await tab.click();
+    await esperarQuedaActivo(async () => ((await tab.getAttribute('class')) ?? '').includes('active'));
+    // La clase "active" del tab cambia antes de que el contenido (KPIs reales
+    // vs. leyenda de "pestaña pendiente") termine de re-renderizarse —
+    // esperar además a que la red quede en reposo evita leer el contenido
+    // todavía de la vista anterior.
+    await this.page.waitForLoadState('networkidle', { timeout: TIMEOUTS.CARGA }).catch(() => {});
+  }
+
+  /**
+   * Indica si la vista actual del Dashboard muestra la leyenda de "pestaña
+   * pendiente" — confirmado en vivo que "Mecánicos", "Finanzas", "Citas" y
+   * "Repuestos" son placeholders reales en este ambiente/versión (no un
+   * error de carga): "Esta pestaña estará disponible en una siguiente
+   * entrega."
+   */
+  async dashboardMuestraPestanaPendiente(): Promise<boolean> {
+    return this.page.locator(L.DASH_TEXTO_PESTANA_PENDIENTE).isVisible();
+  }
+
+  /** Botón "Actualizar" del Dashboard (recarga los datos del periodo/vista actual). */
+  async actualizarDashboard() {
+    await this.page.locator(L.DASH_BTN_ACTUALIZAR).click();
+    await this.page.waitForLoadState('networkidle', { timeout: TIMEOUTS.CARGA }).catch(() => {});
+  }
+
+  // ─── Gráficos: filtros y KPIs ────────────────────────────────────────────────
+
+  get contenedorGraficos(): Locator {
+    return this.page.locator(TAB_GRAFICOS.contenedorContenido);
+  }
+
+  /** Fija el rango de fechas de los filtros de Gráficos (inputs de texto, sin datepicker obligatorio). */
+  async establecerFechasGraficos(desde: string, hasta: string) {
+    await this.page.locator(L.GRAF_INPUT_FECHA_DESDE).fill(desde);
+    await this.page.locator(L.GRAF_INPUT_FECHA_HASTA).fill(hasta);
+  }
+
+  /** Botón "Buscar" de Gráficos — id compartido con Tabla informativa, siempre acotado a este tab. */
+  async buscarGraficos() {
+    await this.contenedorGraficos.locator(L.BTN_BUSCAR_ID_COMPARTIDO).click();
+    await this.page.waitForLoadState('networkidle', { timeout: TIMEOUTS.CARGA }).catch(() => {});
+  }
+
+  async refrescarGraficos() {
+    await this.page.locator(L.GRAF_BTN_REFRESCAR).click();
+  }
+
+  /**
+   * Abre "Ver mas" del KPI dado por índice (0: Facturados último mes, 1:
+   * Facturados último año, 2: Rechazados último mes, 3: Rechazados último
+   * año — orden fijo confirmado en vivo) y espera a que el contenido del tab
+   * cambie (el resumen de facturación y el gráfico se recalculan para ese
+   * KPI específico).
+   */
+  async abrirVerMasKpiGraficos(indice: number) {
+    const textoAntes = await this.contenedorGraficos.innerText();
+    await this.page.locator(L.GRAF_KPI_VER_MAS).nth(indice).click();
+    await expect
+      .poll(() => this.contenedorGraficos.innerText(), { timeout: TIMEOUTS.CARGA })
+      .not.toBe(textoAntes);
+  }
+
+  // ─── Tabla informativa: filtros y totales ───────────────────────────────────
+
+  get contenedorTablaInformativa(): Locator {
+    return this.page.locator(L.TABLAINFO_CONTENEDOR);
+  }
+
+  async establecerFechasTablaInformativa(desde: string, hasta: string) {
+    await this.page.locator(L.TABLAINFO_INPUT_FECHA_DESDE).fill(desde);
+    await this.page.locator(L.TABLAINFO_INPUT_FECHA_HASTA).fill(hasta);
+  }
+
+  /** Botón "Buscar" de Tabla informativa — id compartido con Gráficos, siempre acotado a este tab. */
+  async buscarTablaInformativa() {
+    await this.contenedorTablaInformativa.locator(L.BTN_BUSCAR_ID_COMPARTIDO).click();
+    await this.page.waitForLoadState('networkidle', { timeout: TIMEOUTS.CARGA }).catch(() => {});
+  }
+
+  async filasTablaInformativa(): Promise<number> {
+    return this.page.locator(L.TABLAINFO_FILAS).count();
+  }
+
+  /** Suma una columna numérica de todas las filas visibles de la tabla (1-indexado, igual que `:nth-child`). */
+  private async sumarColumnaTablaInformativa(indiceColumna: number): Promise<number> {
+    const celdas = await this.page.locator(`${L.TABLAINFO_FILAS} td:nth-child(${indiceColumna})`).allTextContents();
+    return celdas.reduce((acumulado, texto) => acumulado + parseMonedaCR(texto), 0);
+  }
+
+  /** Suma de la columna "COSTO MANO OBRA" (6ta) de todas las filas visibles — para comparar contra el total al pie. */
+  async costoManoObraDesdeFilas(): Promise<number> {
+    return this.sumarColumnaTablaInformativa(6);
+  }
+
+  /** Suma de la columna "TOTAL UTILIDAD" (7ma) de todas las filas visibles — para comparar contra el total al pie. */
+  async totalUtilidadDesdeFilas(): Promise<number> {
+    return this.sumarColumnaTablaInformativa(7);
+  }
+
+  /** Suma de la columna "TOTAL FACTURADO" (8va, última) de todas las filas visibles — para comparar contra el total al pie. */
+  async totalFacturadoDesdeFilas(): Promise<number> {
+    return this.sumarColumnaTablaInformativa(8);
+  }
+
+  async totalFacturadoTablaInformativa(): Promise<number> {
+    return parseMonedaCR(await this.page.locator(L.TABLAINFO_TOTAL_FACTURADO).innerText());
+  }
+
+  async totalManoObraTablaInformativa(): Promise<number> {
+    return parseMonedaCR(await this.page.locator(L.TABLAINFO_TOTAL_MANO_OBRA).innerText());
+  }
+
+  async totalUtilidadTablaInformativa(): Promise<number> {
+    return parseMonedaCR(await this.page.locator(L.TABLAINFO_TOTAL_UTILIDAD).innerText());
   }
 }

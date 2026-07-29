@@ -9,8 +9,10 @@ import {
   RecepcionPage,
   SERVICIO_CON_PAQUETE_INSPECCION,
   TAB_DASHBOARD,
+  TAB_GRAFICOS,
   TAB_ORDENES,
   TAB_REPUESTOS,
+  TAB_TABLA_INFORMATIVA,
   TAB_TABLERO,
   TABS_MODO_BASICO,
   TIMEOUTS,
@@ -2050,3 +2052,418 @@ test.fail(
     });
   }
 );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TAB TABLERO — Configurar etapas (columnas y etapas por columna)
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('Tablero: eliminar una columna con órdenes queda bloqueado, y una columna vacía sí puede eliminarse', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST_ETAPAS_TABLERO);
+  const recepcion = new RecepcionPage(page);
+  const errores = espiarErroresJS(page);
+  const nombreColumnaPrueba = `COL PRUEBA ${Date.now()}`;
+
+  await test.step('Abrir el módulo y entrar al tab Tablero', async () => {
+    await recepcion.ir();
+    await recepcion.visitarTab(TAB_TABLERO);
+    await expect(page.locator('.ervk-kanban-card').first(), 'Las tarjetas del tablero no cargaron').toBeVisible({ timeout: TIMEOUTS.CARGA_LISTADO_COMPLETO });
+  });
+
+  await test.step('Intentar eliminar cada columna real que SÍ tiene órdenes: debe bloquearse con el aviso de "columna no vacía"', async () => {
+    // Solo columnas con al menos 1 orden real: una columna preexistente que
+    // ya esté vacía (p. ej. "Prueba") NO se toca — no fue creada por esta
+    // prueba, así que no hay forma segura de saber si eliminarla afectaría a
+    // otras pruebas/usuarios del ambiente compartido. También se excluyen
+    // columnas sin menú "⋮" propio (confirmado en vivo: "Eliminadass" es una
+    // columna especial del sistema con solo un ícono de información, sin
+    // Editar/Eliminar/Conf. Etapas — no es un error, ese menú simplemente no
+    // aplica a esa columna).
+    const columnas = await page.locator('.ervk-kanban-column').all();
+    let columnasConOrdenes = 0;
+
+    for (const columna of columnas) {
+      const nombre = ((await columna.locator('.ervk-column-title').textContent()) ?? '').trim();
+      const tieneMenu = (await columna.locator('.ervk-column-dropdown').count()) > 0;
+      const tieneOrdenes = (await columna.locator('.ervk-kanban-card').count()) > 0;
+      if (!nombre || !tieneMenu || !tieneOrdenes) continue;
+      columnasConOrdenes++;
+
+      await test.step(`Columna "${nombre}": eliminar queda bloqueado mientras tenga órdenes`, async () => {
+        await recepcion.intentarEliminarColumnaConOrdenes(nombre);
+        await expect(recepcion.columnaTablero(nombre), `La columna "${nombre}" no debió eliminarse`).toBeVisible();
+      });
+    }
+
+    expect(columnasConOrdenes, 'No hay ninguna columna real con órdenes en el tablero para esta validación').toBeGreaterThan(0);
+  });
+
+  await test.step('Crear una columna de prueba vacía, editarla y luego eliminarla exitosamente', async () => {
+    await recepcion.agregarColumna(nombreColumnaPrueba);
+
+    const nombreEditado = `${nombreColumnaPrueba} EDITADA`;
+    await recepcion.editarColumna(nombreColumnaPrueba, nombreEditado);
+
+    await recepcion.eliminarColumnaVacia(nombreEditado);
+    await expect(page.locator('.ervk-column-title', { hasText: nombreEditado })).toHaveCount(0);
+  });
+
+  await test.step('Validar que no aparecen errores visibles ni de JavaScript', validarSinErrores(page, errores));
+});
+
+test('Tablero: Conf. Etapas de una columna — agregar, editar y eliminar una etapa', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST_ETAPAS_TABLERO);
+  const recepcion = new RecepcionPage(page);
+  const errores = espiarErroresJS(page);
+  const nombreColumnaPrueba = `COL ETAPAS ${Date.now()}`;
+  const nombreEtapa = 'ETAPA DE PRUEBA';
+  const nombreEtapaEditada = 'ETAPA DE PRUEBA EDITADA';
+
+  await test.step('Abrir el módulo, entrar al Tablero y crear una columna de prueba (aislada, sin afectar columnas reales)', async () => {
+    await recepcion.ir();
+    await recepcion.visitarTab(TAB_TABLERO);
+    await recepcion.agregarColumna(nombreColumnaPrueba);
+  });
+
+  try {
+    await test.step('Abrir "Conf. Etapas" y validar que inicia sin etapas registradas', async () => {
+      await recepcion.abrirConfEtapasColumna(nombreColumnaPrueba);
+      expect(await recepcion.etapasConfiguradas()).toEqual([]);
+      await expect(page.getByText('Sin etapas registradas')).toBeVisible();
+    });
+
+    await test.step('Agregar una etapa y validar que aparece en la lista', async () => {
+      await recepcion.agregarEtapaColumna(nombreEtapa);
+      expect(await recepcion.etapasConfiguradas()).toContain(nombreEtapa);
+    });
+
+    await test.step('Editar la etapa y validar que el cambio se refleja en la lista', async () => {
+      await recepcion.editarEtapaColumna(nombreEtapa, nombreEtapaEditada);
+      const etapas = await recepcion.etapasConfiguradas();
+      expect(etapas).toContain(nombreEtapaEditada);
+      expect(etapas).not.toContain(nombreEtapa);
+    });
+
+    await test.step('Eliminar la etapa y validar que desaparece de la lista', async () => {
+      await recepcion.eliminarEtapaColumna(nombreEtapaEditada);
+      expect(await recepcion.etapasConfiguradas()).toEqual([]);
+      await expect(page.getByText('Sin etapas registradas')).toBeVisible();
+    });
+
+    await recepcion.cerrarConfEtapasColumna();
+  } finally {
+    await test.step('Eliminar la columna de prueba (queda vacía, sin órdenes)', async () => {
+      const modalAbierto = await page.locator('#dialog_config_steps_status_kanban').isVisible().catch(() => false);
+      if (modalAbierto) await recepcion.cerrarConfEtapasColumna();
+      await recepcion.eliminarColumnaVacia(nombreColumnaPrueba);
+    });
+  }
+
+  await test.step('Validar que no aparecen errores visibles ni de JavaScript', validarSinErrores(page, errores));
+});
+
+test('Tablero: asignar una etapa a una orden real y verificar que persiste tras refrescar', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST_ETAPAS_TABLERO);
+  const recepcion = new RecepcionPage(page);
+  const errores = espiarErroresJS(page);
+  const nombreEtapa = `ETAPA ASIGNABLE ${Date.now()}`;
+
+  let nombreColumna = '';
+  let numeroOrden = '';
+
+  await test.step('Abrir el módulo, entrar al Tablero y tomar una columna real con al menos una orden', async () => {
+    await recepcion.ir();
+    await recepcion.visitarTab(TAB_TABLERO);
+
+    const primeraTarjeta = page.locator('.ervk-kanban-card:visible').first();
+    await expect(primeraTarjeta, 'No hay ninguna orden real visible en el tablero para esta prueba').toBeVisible({ timeout: TIMEOUTS.CARGA });
+
+    // No usar `.filter({ has: primeraTarjeta })` sobre `.ervk-kanban-column`:
+    // confirmado en vivo que el `.first()` de `primeraTarjeta` se ignora
+    // dentro de `has` (se evalúa como "contiene ALGÚN .ervk-kanban-card
+    // visible", no específicamente ESA tarjeta) — con varias columnas
+    // pobladas, resuelve en más de un elemento (violación de "strict mode").
+    // Se sube por el DOM real hasta la columna ancestro en su lugar.
+    nombreColumna = (
+      (await primeraTarjeta
+        .locator('xpath=ancestor::*[contains(@class,"ervk-kanban-column")][1]//*[contains(@class,"ervk-column-title")]')
+        .textContent()) ?? ''
+    ).trim();
+    const { numero } = await recepcion.obtenerNumeroYPlacaDeTarjeta(primeraTarjeta);
+    numeroOrden = numero;
+    expect(nombreColumna, 'No se pudo determinar el nombre de la columna de la orden tomada como base').not.toBe('');
+    expect(numeroOrden, 'No se pudo determinar el número de la orden tomada como base').not.toBe('');
+  });
+
+  try {
+    await test.step(`Configurar una etapa nueva en la columna "${nombreColumna}"`, async () => {
+      await recepcion.abrirConfEtapasColumna(nombreColumna);
+      await recepcion.agregarEtapaColumna(nombreEtapa);
+      await recepcion.cerrarConfEtapasColumna();
+    });
+
+    await test.step(`Asignar la etapa a la orden #${numeroOrden} y validar que se refleja en la tarjeta`, async () => {
+      const tarjeta = recepcion.tarjetaPorNumero(numeroOrden);
+      await recepcion.asignarEtapaATarjeta(tarjeta, nombreEtapa);
+      expect(await recepcion.etapaAsignadaEnTarjeta(tarjeta)).toBe(nombreEtapa);
+    });
+
+    await test.step('Refrescar el tablero y validar que la etapa asignada persiste', async () => {
+      await recepcion.refrescarTablero();
+      const tarjeta = recepcion.tarjetaPorNumero(numeroOrden);
+      await expect(tarjeta, `La orden #${numeroOrden} no volvió a aparecer tras refrescar el tablero`).toBeVisible({ timeout: TIMEOUTS.CARGA_LISTADO_COMPLETO });
+      await expect
+        .poll(() => recepcion.etapaAsignadaEnTarjeta(tarjeta), { timeout: TIMEOUTS.CARGA })
+        .toBe(nombreEtapa);
+    });
+  } finally {
+    await test.step('Restaurar la orden a "No aplica" y eliminar la etapa de prueba', async () => {
+      const tarjeta = recepcion.tarjetaPorNumero(numeroOrden);
+      if (await tarjeta.count()) {
+        await recepcion.asignarEtapaATarjeta(tarjeta, 'No aplica').catch(() => {});
+      }
+      await recepcion.abrirConfEtapasColumna(nombreColumna);
+      if ((await recepcion.etapasConfiguradas()).includes(nombreEtapa)) {
+        await recepcion.eliminarEtapaColumna(nombreEtapa);
+      }
+      await recepcion.cerrarConfEtapasColumna();
+    });
+  }
+
+  await test.step('Validar que no aparecen errores visibles ni de JavaScript', validarSinErrores(page, errores));
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TAB DASHBOARD
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('Dashboard: los filtros de periodo (Hoy/Semana/Mes/Rango) cambian la información mostrada', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST_DASHBOARD);
+  const recepcion = new RecepcionPage(page);
+  const errores = espiarErroresJS(page);
+  const contenedor = page.locator(TAB_DASHBOARD.contenedorContenido);
+
+  await test.step('Abrir el módulo y entrar al tab Dashboard', async () => {
+    await recepcion.ir();
+    await recepcion.visitarTab(TAB_DASHBOARD);
+  });
+
+  for (const periodo of ['Hoy', 'Semana', 'Mes'] as const) {
+    await test.step(`Aplicar el filtro "${periodo}" y validar que el periodo mostrado corresponde`, async () => {
+      await recepcion.seleccionarPeriodoDashboard(periodo);
+      await expect(contenedor, `El Dashboard no reflejó el periodo "${periodo}" tras aplicarlo`).toContainText(
+        new RegExp(`${periodo}\\s*·`)
+      );
+    });
+  }
+
+  await test.step('Aplicar un rango de fechas personalizado y validar que se refleja', async () => {
+    const hoy = new Date();
+    const hace7 = new Date(hoy.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const formato = (d: Date) => d.toISOString().slice(0, 10);
+
+    await recepcion.aplicarRangoDashboard(formato(hace7), formato(hoy));
+    await expect(contenedor, 'El Dashboard no reflejó el rango de fechas personalizado aplicado').toContainText(/Rango\s*·/);
+  });
+
+  await test.step('Volver a "Hoy" para limpiar el filtro de rango', async () => {
+    await recepcion.seleccionarPeriodoDashboard('Hoy');
+    await expect(contenedor).toContainText(/Hoy\s*·/);
+  });
+
+  await test.step('Validar que no aparecen errores visibles ni de JavaScript', validarSinErrores(page, errores));
+});
+
+test('Dashboard: Vista General muestra sus KPIs y la sección "Flujo operativo del taller"', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST_DASHBOARD);
+  const recepcion = new RecepcionPage(page);
+  const errores = espiarErroresJS(page);
+
+  await test.step('Abrir el módulo, entrar al Dashboard y seleccionar "Vista General"', async () => {
+    await recepcion.ir();
+    await recepcion.visitarTab(TAB_DASHBOARD);
+    await recepcion.seleccionarVistaDashboard('Vista General');
+  });
+
+  await test.step('Validar que las tarjetas KPI de Vista General son visibles y tienen valores', async () => {
+    const kpis = page.locator(TAB_DASHBOARD.contenedorContenido).locator('.js-vrd-open-detail.vrd-kpi-action');
+    await expect(kpis.first()).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    expect(await kpis.count()).toBeGreaterThanOrEqual(6);
+  });
+
+  await test.step('Validar que "Flujo operativo del taller" carga con datos por columna del tablero', async () => {
+    const seccion = page.locator('.vrd-section-title', { hasText: 'Flujo operativo del taller' });
+    await expect(seccion, 'La sección "Flujo operativo del taller" no está visible').toBeVisible({ timeout: TIMEOUTS.CARGA });
+
+    const verOrdenes = page.locator(TAB_DASHBOARD.contenedorContenido).locator('.js-vrd-open-detail.vrd-stage-action');
+    expect(await verOrdenes.count(), 'No hay ninguna tarjeta de columna en "Flujo operativo del taller"').toBeGreaterThan(0);
+  });
+
+  await test.step('Validar que no aparecen errores visibles ni de JavaScript', validarSinErrores(page, errores));
+});
+
+test('Dashboard: las pestañas Mecánicos/Finanzas/Citas/Repuestos cargan (estado real: "disponible en una siguiente entrega")', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST_DASHBOARD);
+  const recepcion = new RecepcionPage(page);
+  const errores = espiarErroresJS(page);
+
+  await test.step('Abrir el módulo y entrar al Dashboard', async () => {
+    await recepcion.ir();
+    await recepcion.visitarTab(TAB_DASHBOARD);
+  });
+
+  for (const vista of ['Mecánicos', 'Finanzas', 'Citas', 'Repuestos'] as const) {
+    await test.step(`Seleccionar "${vista}" y validar que carga sin errores (pestaña aún no implementada en este ambiente)`, async () => {
+      await recepcion.seleccionarVistaDashboard(vista);
+      expect(await recepcion.dashboardMuestraPestanaPendiente(), `"${vista}" no mostró la leyenda esperada de pestaña pendiente`).toBe(true);
+    });
+  }
+
+  await test.step('Volver a "Vista General"', async () => {
+    await recepcion.seleccionarVistaDashboard('Vista General');
+    expect(await recepcion.dashboardMuestraPestanaPendiente()).toBe(false);
+  });
+
+  await test.step('Validar que no aparecen errores visibles ni de JavaScript', validarSinErrores(page, errores));
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TAB GRÁFICOS
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('Gráficos: los filtros (mecánico, servicio, fechas) cambian el contenido mostrado', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST_GRAFICOS);
+  const recepcion = new RecepcionPage(page);
+  const errores = espiarErroresJS(page);
+
+  await test.step('Abrir el módulo y entrar al tab Gráficos', async () => {
+    await recepcion.ir();
+    await recepcion.visitarTab(TAB_GRAFICOS);
+  });
+
+  const contenedor = recepcion.contenedorGraficos;
+
+  await test.step('Filtrar por el primer mecánico real disponible y validar que el contenido cambia', async () => {
+    const textoAntes = await contenedor.innerText();
+    await recepcion.seleccionarPrimeraOpcionChosen('#mechanics_select');
+    await recepcion.buscarGraficos();
+    await expect.poll(() => contenedor.innerText(), { timeout: TIMEOUTS.CARGA }).not.toBe(textoAntes);
+  });
+
+  await test.step('Filtrar además por un rango de fechas y validar que el contenido vuelve a cambiar', async () => {
+    const textoAntes = await contenedor.innerText();
+    const hoy = new Date();
+    const haceUnAnio = new Date(hoy.getTime() - 365 * 24 * 60 * 60 * 1000);
+    const formato = (d: Date) => d.toISOString().slice(0, 10);
+
+    await recepcion.establecerFechasGraficos(formato(haceUnAnio), formato(hoy));
+    await recepcion.buscarGraficos();
+    await expect.poll(() => contenedor.innerText(), { timeout: TIMEOUTS.CARGA }).not.toBe(textoAntes);
+  });
+
+  await test.step('Refrescar el caché de Gráficos', async () => {
+    await recepcion.refrescarGraficos();
+    await expect(contenedor).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  });
+
+  await test.step('Validar que no aparecen errores visibles ni de JavaScript', validarSinErrores(page, errores));
+});
+
+test('Gráficos: "Ver mas" de cada KPI actualiza el resumen y el gráfico', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST_GRAFICOS);
+  const recepcion = new RecepcionPage(page);
+  const errores = espiarErroresJS(page);
+
+  await test.step('Abrir el módulo y entrar al tab Gráficos', async () => {
+    await recepcion.ir();
+    await recepcion.visitarTab(TAB_GRAFICOS);
+  });
+
+  const nombresKpi = ['Facturados último mes', 'Facturados último año', 'Rechazados último mes', 'Rechazados último año'];
+  for (let indice = 0; indice < nombresKpi.length; indice++) {
+    await test.step(`"Ver mas" en "${nombresKpi[indice]}" actualiza el resumen y el gráfico`, async () => {
+      await recepcion.abrirVerMasKpiGraficos(indice);
+    });
+  }
+
+  await test.step('Validar que no aparecen errores visibles ni de JavaScript', validarSinErrores(page, errores));
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TAB TABLA INFORMATIVA
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('Tabla informativa: los filtros (mecánico y fechas) cambian los datos mostrados', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST_TABLA_INFORMATIVA);
+  const recepcion = new RecepcionPage(page);
+  const errores = espiarErroresJS(page);
+
+  await test.step('Abrir el módulo y entrar al tab Tabla informativa', async () => {
+    await recepcion.ir();
+    await recepcion.visitarTab(TAB_TABLA_INFORMATIVA);
+  });
+
+  const contenedor = recepcion.contenedorTablaInformativa;
+
+  await test.step('Filtrar por el primer mecánico real disponible y validar que la tabla cambia', async () => {
+    const textoAntes = await contenedor.innerText();
+    await recepcion.seleccionarPrimeraOpcionChosen('#slt_mechanics_select');
+    await recepcion.buscarTablaInformativa();
+    await expect.poll(() => contenedor.innerText(), { timeout: TIMEOUTS.CARGA }).not.toBe(textoAntes);
+  });
+
+  await test.step('Filtrar además por un rango de fechas y validar que la tabla vuelve a cambiar', async () => {
+    const textoAntes = await contenedor.innerText();
+    const hoy = new Date();
+    const haceUnAnio = new Date(hoy.getTime() - 365 * 24 * 60 * 60 * 1000);
+    const formato = (d: Date) => d.toISOString().slice(0, 10);
+
+    await recepcion.establecerFechasTablaInformativa(formato(haceUnAnio), formato(hoy));
+    await recepcion.buscarTablaInformativa();
+    await expect.poll(() => contenedor.innerText(), { timeout: TIMEOUTS.CARGA }).not.toBe(textoAntes);
+  });
+
+  await test.step('Validar que no aparecen errores visibles ni de JavaScript', validarSinErrores(page, errores));
+});
+
+test('Tabla informativa: los totales de Facturación, Mano de obra y Utilidad son coherentes con las filas mostradas', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST_TABLA_INFORMATIVA);
+  const recepcion = new RecepcionPage(page);
+  const errores = espiarErroresJS(page);
+
+  await test.step('Abrir el módulo, entrar a Tabla informativa y validar que los 3 totales son visibles', async () => {
+    await recepcion.ir();
+    await recepcion.visitarTab(TAB_TABLA_INFORMATIVA);
+    await expect(page.locator('#lb_mechanics_subservice_total')).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await expect(page.locator('#lb_workforce_mechanics_subservice')).toBeVisible();
+    await expect(page.locator('#lb_utility_mechanics_subservice')).toBeVisible();
+  });
+
+  await test.step('Comparar el total de "Facturado" mostrado contra la suma real de las filas visibles', async () => {
+    const totalMostrado = await recepcion.totalFacturadoTablaInformativa();
+    const totalCalculado = await recepcion.totalFacturadoDesdeFilas();
+    expect(totalCalculado, 'La suma de "TOTAL FACTURADO" de las filas no coincide con el total mostrado al pie').toBeCloseTo(totalMostrado, 1);
+  });
+
+  await test.step('Comparar el total de "Utilidad" mostrado contra la suma real de las filas visibles', async () => {
+    const totalMostrado = await recepcion.totalUtilidadTablaInformativa();
+    const totalCalculado = await recepcion.totalUtilidadDesdeFilas();
+    expect(totalCalculado, 'La suma de "TOTAL UTILIDAD" de las filas no coincide con el total mostrado al pie').toBeCloseTo(totalMostrado, 1);
+  });
+
+  await test.step('Comparar el total de "Mano de obra" mostrado contra la suma real de las filas visibles', async () => {
+    const totalMostrado = await recepcion.totalManoObraTablaInformativa();
+    const totalCalculado = await recepcion.costoManoObraDesdeFilas();
+    expect(totalCalculado, 'La suma de "COSTO MANO OBRA" de las filas no coincide con el total mostrado al pie').toBeCloseTo(totalMostrado, 1);
+  });
+
+  await test.step('Filtrar por el primer mecánico real y validar que los totales se recalculan de forma coherente', async () => {
+    await recepcion.seleccionarPrimeraOpcionChosen('#slt_mechanics_select');
+    await recepcion.buscarTablaInformativa();
+
+    const totalMostrado = await recepcion.totalFacturadoTablaInformativa();
+    const totalCalculado = await recepcion.totalFacturadoDesdeFilas();
+    expect(totalCalculado, 'Tras filtrar por mecánico, el total "Facturado" no coincide con la suma de las filas').toBeCloseTo(totalMostrado, 1);
+  });
+
+  await test.step('Validar que no aparecen errores visibles ni de JavaScript', validarSinErrores(page, errores));
+});

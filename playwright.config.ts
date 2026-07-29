@@ -50,6 +50,15 @@ export default defineConfig({
     testMatch: /super-admin\.setup\.ts/,
   },
 
+  // Tercer setup de la suite (ver tests/auth/restaurant.setup.ts): ambiente
+  // COMPLETO distinto (qa_restaurant, no solo otra compañía) — proyecto de
+  // setup separado por el mismo motivo que 'setup-super-admin': genera un
+  // storageState DISTINTO (restaurant.json).
+  {
+    name: 'setup-restaurant',
+    testMatch: /restaurant\.setup\.ts/,
+  },
+
   {
     name: 'firefox',
     use: {
@@ -79,6 +88,22 @@ export default defineConfig({
       launchOptions: {},
     },
     dependencies: ['setup-super-admin'],
+  },
+
+  // Variante de 'chromium' autenticada contra el ambiente qa_restaurant
+  // (compañía "Restaurante Rancho Robertos") en vez del ambiente original —
+  // los specs del módulo Mesas (tests/pos/pos-restaurante.spec.ts) corren con
+  // --project=chromium-restaurant. Ver el comentario de restaurant.setup.ts:
+  // debe invocarse en un comando dedicado (solo archivos de este ambiente),
+  // nunca mezclado con el resto de la suite en la misma corrida.
+  {
+    name: 'chromium-restaurant',
+    use: {
+      ...devices['Desktop Chrome'],
+      storageState: 'playwright/.auth/restaurant.json',
+      launchOptions: {},
+    },
+    dependencies: ['setup-restaurant'],
   },
 
   {
