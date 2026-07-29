@@ -17,18 +17,31 @@ export const TIMEOUTS = {
  * Submódulos del menú "Contabilidad" (URLs confirmadas en vivo desde el menú
  * lateral del dashboard). Esta lista corresponde exactamente a la solicitada
  * por el usuario — el menú real tiene además "Línea de crédito" (sección
- * raíz), "Tipo de activos" (sección "Activo Fijo"), "Sub Cuentas" y
- * "Configuración de Reportes" (sección "Configuraciones adicionales"), que
- * se omiten a propósito por no estar en la lista pedida.
+ * raíz), "Sub Cuentas" y "Configuración de Reportes" (sección
+ * "Configuraciones adicionales"), que se omiten a propósito por no estar en
+ * la lista pedida.
  *
  * La mayoría de estas pantallas no usan `.content-header` (a diferencia de
  * la mayoría de módulos anteriores) sino un encabezado real visible — la
  * mayoría es un `<h2>`, salvo "Dashboard Contable" que sí es `<h1>`
  * (confirmado en vivo elemento por elemento, tras un primer intento fallido
- * asumiendo `<h1>` para todos). "Cuentas bancarias", "Tipo de movimiento",
- * "Solicitudes" y "Depósitos y transferencias" reutilizan los mismos
- * locators ya confirmados en bancos.page.ts (mismas URLs, mismo menú
- * duplicado entre "Bancos" y "Contabilidad").
+ * asumiendo `<h1>` para todos). "Cuentas bancarias", "Tipo de movimiento" y
+ * "Depósitos y transferencias" reutilizan los mismos locators ya confirmados
+ * en bancos.page.ts (mismas URLs, mismo menú duplicado entre "Bancos" y
+ * "Contabilidad").
+ *
+ * "Solicitudes de bancos" NO reutiliza el locator de "Solicitudes" de
+ * bancos.page.ts — son dos entradas de menú reales y DISTINTAS bajo
+ * "Contabilidad > Bancos" (confirmado en vivo, ambas visibles en el sidebar
+ * al mismo tiempo): "Solicitudes" (`/bnkpaymentrequest/bnk_payment_request`,
+ * título de pestaña "Solicitudes de cheque", pantalla antigua con el botón
+ * `#btnRequest`) y "Solicitudes de bancos" (`/bank_requests/index_Bank`,
+ * título de pestaña "Solicitudes de Bancos", pantalla nueva con filtros,
+ * contadores de estado y toggle Tabla/Kanban). Esta lista cubre únicamente
+ * la segunda — no tiene `.content-header` (0 en el DOM, confirmado en vivo),
+ * así que se valida con `#bnk_btn_new` ("Nueva solicitud"), el único botón
+ * del toolbar que solo queda visible una vez que el AJAX real de la lista
+ * terminó de cargar.
  */
 export type SubmoduloContabilidad = {
   nombre: string;
@@ -49,11 +62,20 @@ export const SUBMODULOS_CONTABILIDAD: SubmoduloContabilidad[] = [
     obtenerLocatorDeCarga: (page) => page.locator('h1', { hasText: /dashboard contable/i }),
   },
   {
-    nombre: 'Asiento de diario',
+    // Renombrado en vivo por el sistema (confirmado reproducible 3/3 veces):
+    // el link del sidebar y el `<title>` ya no dicen "Asiento de diario" sino
+    // "Asientos y contabilización" — misma URL, mismo contenido funcional
+    // (IDs `jd_*` de asientos: `jd_new_journal`, `jd_stat_*`, `tJournal`).
+    // Sin `<h2>` visible con ese texto (solo aparece "Gestión Contable", el
+    // encabezado de la sección del sidebar, no de la pantalla) — se valida
+    // con `#jd_new_journal` ("Nuevo asiento"), mismo patrón ya usado para
+    // "Solicitudes de bancos" (`#bnk_btn_new`) y "Reporte de bancos"
+    // (`#ac_br_search`).
+    nombre: 'Asientos y contabilización',
     url: BASE_URL + '/acjournalentry/ac_journal_entry',
     rutaEsperada: 'ac_journal_entry',
-    tituloEsperado: /asientos de diario/i,
-    obtenerLocatorDeCarga: (page) => page.locator('h2', { hasText: /asientos de diario/i }),
+    tituloEsperado: /asientos y contabilizaci[oó]n/i,
+    obtenerLocatorDeCarga: (page) => page.locator('#jd_new_journal'),
   },
   // ─── Bancos ───────────────────────────────────────────────────────────────
   {
@@ -71,11 +93,11 @@ export const SUBMODULOS_CONTABILIDAD: SubmoduloContabilidad[] = [
     obtenerLocatorDeCarga: (page) => page.locator('#v_search'),
   },
   {
-    nombre: 'Solicitudes',
-    url: BASE_URL + '/bnkpaymentrequest/bnk_payment_request',
-    rutaEsperada: 'bnk_payment_request',
-    tituloEsperado: /solicitudes de cheque/i,
-    obtenerLocatorDeCarga: (page) => page.locator('#btnRequest'),
+    nombre: 'Solicitudes de bancos',
+    url: BASE_URL + '/bank_requests/index_Bank',
+    rutaEsperada: 'bank_requests/index_Bank',
+    tituloEsperado: /solicitudes de bancos/i,
+    obtenerLocatorDeCarga: (page) => page.locator('#bnk_btn_new'),
   },
   {
     nombre: 'Depósitos y transferencias',
@@ -86,6 +108,17 @@ export const SUBMODULOS_CONTABILIDAD: SubmoduloContabilidad[] = [
     // línea entre ellas (mismo hallazgo documentado en tienda.page.ts).
     obtenerLocatorDeCarga: (page) => page.locator('.content-header', { hasText: /dep[oó]sitos\s+y\s+transferencias/i }).first(),
   },
+  {
+    // Sin `.content-header` en esta pantalla (confirmado en vivo) — se valida
+    // con `#ac_br_search` (botón "Buscar" del toolbar de filtros), presente
+    // apenas carga el layout, sin depender de que los KPI/gráficos con datos
+    // reales terminen de calcularse.
+    nombre: 'Reporte de bancos',
+    url: BASE_URL + '/accounting/bank-report',
+    rutaEsperada: 'accounting/bank-report',
+    tituloEsperado: /reportes de bancos/i,
+    obtenerLocatorDeCarga: (page) => page.locator('#ac_br_search'),
+  },
   // ─── Activo fijo ──────────────────────────────────────────────────────────
   {
     nombre: 'Activos',
@@ -93,6 +126,15 @@ export const SUBMODULOS_CONTABILIDAD: SubmoduloContabilidad[] = [
     rutaEsperada: 'faassets/fa_assets',
     tituloEsperado: /activos fijos/i,
     obtenerLocatorDeCarga: (page) => page.locator('h2', { hasText: /activos fijos/i }),
+  },
+  {
+    // Sin `.content-header` en esta pantalla (confirmado en vivo, mismo caso
+    // que "Tipo de movimiento") — se valida con el buscador real `#v_search`.
+    nombre: 'Tipo de activos',
+    url: BASE_URL + '/fatypeassets/fa_type_assets',
+    rutaEsperada: 'fatypeassets/fa_type_assets',
+    tituloEsperado: /tipos de activos/i,
+    obtenerLocatorDeCarga: (page) => page.locator('#v_search'),
   },
   // ─── Reportes ─────────────────────────────────────────────────────────────
   {
