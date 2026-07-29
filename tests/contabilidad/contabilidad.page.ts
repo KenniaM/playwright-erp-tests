@@ -62,11 +62,20 @@ export const SUBMODULOS_CONTABILIDAD: SubmoduloContabilidad[] = [
     obtenerLocatorDeCarga: (page) => page.locator('h1', { hasText: /dashboard contable/i }),
   },
   {
-    nombre: 'Asiento de diario',
+    // Renombrado en vivo por el sistema (confirmado reproducible 3/3 veces):
+    // el link del sidebar y el `<title>` ya no dicen "Asiento de diario" sino
+    // "Asientos y contabilización" — misma URL, mismo contenido funcional
+    // (IDs `jd_*` de asientos: `jd_new_journal`, `jd_stat_*`, `tJournal`).
+    // Sin `<h2>` visible con ese texto (solo aparece "Gestión Contable", el
+    // encabezado de la sección del sidebar, no de la pantalla) — se valida
+    // con `#jd_new_journal` ("Nuevo asiento"), mismo patrón ya usado para
+    // "Solicitudes de bancos" (`#bnk_btn_new`) y "Reporte de bancos"
+    // (`#ac_br_search`).
+    nombre: 'Asientos y contabilización',
     url: BASE_URL + '/acjournalentry/ac_journal_entry',
     rutaEsperada: 'ac_journal_entry',
-    tituloEsperado: /asientos de diario/i,
-    obtenerLocatorDeCarga: (page) => page.locator('h2', { hasText: /asientos de diario/i }),
+    tituloEsperado: /asientos y contabilizaci[oó]n/i,
+    obtenerLocatorDeCarga: (page) => page.locator('#jd_new_journal'),
   },
   // ─── Bancos ───────────────────────────────────────────────────────────────
   {
