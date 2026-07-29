@@ -1,5 +1,5 @@
 import { Locator } from '@playwright/test';
-import { BASE_URL } from '../env.config';
+import { BASE_URL } from '../../env.config';
 
 // Tipos y constantes compartidas de todo el módulo POS — movidos tal cual
 // desde pos.page.ts (Paso 0 de la migración a composición, ver el plan

@@ -49,7 +49,7 @@ npx playwright test
 ```
 Ejecutar únicamente las pruebas del POS:
 ```bash
-npx playwright test tests/pos/pos.spec.ts
+npx playwright test tests/facturar/pos/pos.spec.ts
 ```
 Ejecutar en Chrome:
 ```bash

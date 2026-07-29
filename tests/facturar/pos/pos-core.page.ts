@@ -348,8 +348,18 @@ export class PosCore {
    * *distinguir* entre los flujos válidos, que es justamente lo que este
    * diseño evita: aquí solo se usa para dar forma al mensaje de la falla
    * real, ya decidida por `Promise.any()`).
+   *
+   * `posTypeOption` generaliza el mismo mecanismo real a otros links del
+   * submenú "FACTURAR" del Dashboard, confirmado en vivo que comparten
+   * exactamente la misma función `get_company_pos_select(N)` con distinto
+   * argumento numérico (1="Crear factura", 2="Ordenes de caja",
+   * 5="Cotizaciones") — mismo flujo de selección de compañía, mismos
+   * overlays, misma carrera modal-vs-navegación-directa. Reutilizado por
+   * `irAlPosConOpcion()` (más abajo) para no duplicar esta lógica en
+   * tests/facturar/facturar.page.ts. Por defecto 1, para no alterar ningún
+   * llamado existente (irAlPos()/cargarPosDesdeDashboard()).
    */
-  async _irAlPosResolviendoCompania() {
+  async _irAlPosResolviendoCompania(posTypeOption: number = 1) {
     // Orden confirmado en vivo (cuentas cuya compañía por defecto tiene
     // pendiente el setup inicial): el modal de tipo de cambio puede abrirse
     // POR ENCIMA del modal "Setup Inicial del Sistema" (mismo backdrop
@@ -373,8 +383,11 @@ export class PosCore {
       .waitFor({ state: 'hidden', timeout: TIMEOUTS.PAYMENT_MODAL })
       .catch(() => {});
 
-    // Paso 2: localizar "Crear factura".
-    const linkIrAPos = this.page.locator(L.DASHBOARD_LINK_IR_A_POS).first();
+    // Paso 2: localizar el link real (mismo mecanismo para los 3 valores
+    // confirmados de posTypeOption — ver el comentario del método).
+    const linkIrAPos = this.page
+      .locator(posTypeOption === 1 ? L.DASHBOARD_LINK_IR_A_POS : `a[onclick*="get_company_pos_select(${posTypeOption})"]`)
+      .first();
     if (!(await linkIrAPos.isVisible().catch(() => false))) {
       // El link vive colapsado dentro de su submenú padre (treeview) — se
       // expande haciendo click en el <a> inmediatamente superior, sin asumir
@@ -499,7 +512,7 @@ export class PosCore {
       // Ni el modal apareció ni la navegación ocurrió: falla real del
       // ambiente/automatización, no una rama válida de ningún flujo.
       throw new Error(
-        `Tras hacer click en "Crear factura", ni apareció el modal de selección de compañía (${L.DASHBOARD_MODAL_SELECCIONAR_COMPANIA}) ` +
+        `Tras hacer click en el link de POS (get_company_pos_select(${posTypeOption})), ni apareció el modal de selección de compañía (${L.DASHBOARD_MODAL_SELECCIONAR_COMPANIA}) ` +
         `ni la aplicación navegó al POS dentro de ${TIMEOUTS.PAYMENT_MODAL}ms (ni Flujo A ni Flujo B ocurrieron). URL actual: ${this.page.url()}`
       );
     }
@@ -508,8 +521,53 @@ export class PosCore {
 
     // Recordar la URL REAL que la aplicación generó (nunca construida a
     // mano) para que irAlPos() pueda reutilizarla en visitas posteriores de
-    // este mismo worker sin repetir el paso por Dashboard.
-    posUrlResueltaPorWorker = this.page.url();
+    // este mismo worker sin repetir el paso por Dashboard. Solo para
+    // posTypeOption 1 ("Crear factura"): es la única URL que irAlPos()
+    // reutiliza, así que cachear la de otro posTypeOption aquí contaminaría
+    // ese caché global y rompería a TODO el resto de la suite de POS, que
+    // asume que irAlPos() siempre aterriza en "POS Facturación".
+    if (posTypeOption === 1) {
+      posUrlResueltaPorWorker = this.page.url();
+    }
+  }
+
+
+  /**
+   * Navega al POS desde el Dashboard usando un `posTypeOption` distinto al
+   * de "Crear factura" (1) — pensado para tests/facturar/facturar.page.ts,
+   * que necesita entrar directo a "Ordenes de caja" (2) o "Cotizaciones" (5)
+   * vía su propio link real del sidebar "FACTURAR", sin pasar por el tab
+   * interno del POS. Reutiliza `_irAlPosResolviendoCompania()` tal cual
+   * (mismo mecanismo real de carrera modal-vs-navegación-directa, mismos
+   * overlays) — no se duplica esa lógica, solo se generaliza el
+   * `posTypeOption` usado. A diferencia de `irAlPos()`, no cachea la URL
+   * resultante a nivel de worker (ver el comentario de arriba: ese caché es
+   * exclusivo de posTypeOption=1).
+   *
+   * NO llama a `esperarEstadoInicial()` (a diferencia de
+   * `cargarPosDesdeDashboard()`): ese método corre una carrera entre el
+   * modal "Abrir Caja" y `primerProducto` (el grid de "POS Facturación"),
+   * asumiendo que se aterriza en ese tab — confirmado en vivo que es FALSO
+   * para `posTypeOption` 2/5 (Órdenes de caja/Cotizaciones aterrizan
+   * directo en `#content_invoice_order_list`, nunca en el grid): con
+   * posTypeOption=5, ni el modal ni `primerProducto` aparecían nunca, y la
+   * carrera colgaba los `TIMEOUTS.PRODUCTS_LOAD` completos de ambos lados.
+   * En su lugar, solo se comprueba puntualmente (sin esperar) si el modal
+   * "Abrir Caja" está visible — puede aparecer sin importar el
+   * `posTypeOption` real, es estado global de caja, no del tab — y se
+   * cierra si aplica. Cada llamante real (tests/facturar/facturar.page.ts)
+   * valida por su cuenta el contenedor de contenido que le corresponde.
+   */
+  async irAlPosConOpcion(posTypeOption: number) {
+    await this.page.goto(DASHBOARD_URL, { waitUntil: 'load' });
+    await this.page.locator(L.DASHBOARD_BELL_LOADING)
+      .waitFor({ state: 'hidden', timeout: TIMEOUTS.PAYMENT_MODAL })
+      .catch(() => {});
+    await this._irAlPosResolviendoCompania(posTypeOption);
+    if (await this.modalAbrirCajaVisible()) {
+      await expect(this.modalAbrirCaja.getByText(CAJA_TEXTO)).toBeVisible();
+      await this.cerrarModalAbrirCaja();
+    }
   }
 
 
@@ -1392,7 +1450,29 @@ export class PosCore {
 
     if (abrioModalMonto) {
       await this.page.locator(L.MONTO_A_COMPRAR_INPUT_MONTO).fill(montoSiEsPorMonto);
-      await this.page.locator(L.MONTO_A_COMPRAR_BTN_CONFIRMAR).click();
+
+      // Reintentos cortos cerrando el banner de notificaciones antes de CADA
+      // intento (mismo patrón que _cerrarOverlayDashboardSiAparece()/
+      // abrirMenuTresPuntos(), no una sola llamada previa al click): confirmado
+      // en vivo, específico de Firefox (no reproducido en Chromium/WebKit en
+      // este mismo flujo), que el banner de permisos de notificación
+      // (#workshop-web-notification-permission) puede REAPARECER de forma
+      // asíncrona justo entre el cierre y el click — una única llamada a
+      // cerrarModalNotificacionesSiAparece() antes del click no alcanzó
+      // (reproducido en vivo: el banner seguía interceptando el punto exacto
+      // del botón), así que aquí se repite la comprobación en cada vuelta,
+      // igual que el resto de overlays "conocidos" de esta clase.
+      const MAX_INTENTOS = 5;
+      let confirmado = false;
+      for (let intento = 1; intento <= MAX_INTENTOS && !confirmado; intento++) {
+        await this.cerrarModalNotificacionesSiAparece();
+        confirmado = await this.page.locator(L.MONTO_A_COMPRAR_BTN_CONFIRMAR)
+          .click({ timeout: 3_000 })
+          .then(() => true)
+          .catch(() => false);
+      }
+      expect(confirmado, `El botón "Continuar" del modal "Monto a comprar" no se pudo clickear tras ${MAX_INTENTOS} intentos`).toBe(true);
+
       await expect(modalMontoACompra, 'El modal "Monto a comprar" no se cerró tras presionar "Continuar"').toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
     }
 

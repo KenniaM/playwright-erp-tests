@@ -32,12 +32,12 @@ import { test as setup, expect } from '@playwright/test';
 // comando dedicado, nunca mezclados con el resto de la suite en la misma
 // invocación de `npx playwright test`:
 //
-//   npx playwright test tests/pos/pos-restaurante.spec.ts --project=setup-restaurant --project=chromium-restaurant
+//   npx playwright test tests/facturar/pos/pos-restaurante.spec.ts --project=setup-restaurant --project=firefox-restaurant
 //
 process.env.BASE_URL = process.env.BASE_URL ?? 'https://dev.designsoftcr.com/qa_restaurant/public';
 process.env.POS_COMPANIA = process.env.POS_COMPANIA ?? 'Restaurante Rancho Robertos';
 const { BASE_URL } = require('../env.config') as typeof import('../env.config');
-const { PosCore } = require('../pos/pos-core.page') as typeof import('../pos/pos-core.page');
+const { PosCore } = require('../facturar/pos/pos-core.page') as typeof import('../facturar/pos/pos-core.page');
 
 const EMAIL = process.env.RESTAURANT_USER_EMAIL ?? 'qadesignsoftcr@gmail.com';
 const PASSWORD = process.env.RESTAURANT_USER_PASSWORD ?? 'qa0000';

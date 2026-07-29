@@ -71,6 +71,9 @@ export class PosPage {
   async cargarPosDesdeDashboard(...args: Parameters<PosCore['cargarPosDesdeDashboard']>) {
     return this.core.cargarPosDesdeDashboard(...args);
   }
+  async irAlPosConOpcion(...args: Parameters<PosCore['irAlPosConOpcion']>) {
+    return this.core.irAlPosConOpcion(...args);
+  }
   async _cerrarModalMonedaSiAparece(...args: Parameters<PosCore['_cerrarModalMonedaSiAparece']>) {
     return this.core._cerrarModalMonedaSiAparece(...args);
   }

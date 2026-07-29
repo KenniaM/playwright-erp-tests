@@ -26,7 +26,7 @@ const PASSWORD = process.env.SUPER_ADMIN_PASSWORD ?? 'qa0000';
 // tocar pos.types.ts ni su default ('HONDURAS', usado por el resto de la
 // suite).
 process.env.POS_COMPANIA = process.env.POS_COMPANIA ?? 'TALLER ALPHA  PREMIUM';
-const { PosCore } = require('../pos/pos-core.page') as typeof import('../pos/pos-core.page');
+const { PosCore } = require('../facturar/pos/pos-core.page') as typeof import('../facturar/pos/pos-core.page');
 
 setup('authenticate as super admin (TALLER ALPHA  PREMIUM)', async ({ page }) => {
   // El timeout por defecto de Playwright (30s) alcanza para auth.setup.ts

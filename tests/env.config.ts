@@ -8,7 +8,7 @@
 // ambiente original como default — no cambia ningún comportamiento existente
 // cuando la variable no se define.
 //
-// No reemplaza POS_COMPANIA (tests/pos/pos.types.ts) — ese sigue siendo el
+// No reemplaza POS_COMPANIA (tests/facturar/pos/pos.types.ts) — ese sigue siendo el
 // nombre visible de la compañía a seleccionar cuando el modal de selección
 // de compañía aparece (cuentas con más de una compañía). BASE_URL resuelve
 // la instancia/ambiente; POS_COMPANIA resuelve la compañía dentro de esa

@@ -1,6 +1,6 @@
 import { expect, Locator, Page } from '@playwright/test';
 import { BASE_URL } from '../env.config';
-import { espiarErroresJS, esperarQuedaActivo } from '../pos/pos.page';
+import { espiarErroresJS, esperarQuedaActivo } from '../facturar/pos/pos.page';
 
 // espiarErroresJS/esperarQuedaActivo se reexportan tal cual desde pos.page.ts
 // (funciones independientes, no atadas a PosPage — no dependen de `this`,

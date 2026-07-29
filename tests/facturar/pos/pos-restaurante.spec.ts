@@ -7,7 +7,7 @@
 // qa_talleralpha). Por diseño, este archivo debe correrse en un comando
 // dedicado, nunca mezclado con el resto de la suite en la misma invocación:
 //
-//   npx playwright test tests/pos/pos-restaurante.spec.ts --project=chromium-restaurant
+//   npx playwright test tests/facturar/pos/pos-restaurante.spec.ts --project=setup-restaurant --project=firefox-restaurant
 //
 process.env.BASE_URL = process.env.BASE_URL ?? 'https://dev.designsoftcr.com/qa_restaurant/public';
 process.env.POS_COMPANIA = process.env.POS_COMPANIA ?? 'Restaurante Rancho Robertos';

@@ -21,7 +21,7 @@ npx playwright install --with-deps
 npx playwright test
 
 # Correr un archivo específico
-npx playwright test tests/pos/pos-crear.spec.ts
+npx playwright test tests/facturar/pos/pos-crear.spec.ts
 
 # Correr una prueba por nombre
 npx playwright test -g "Apertura de caja"
@@ -56,7 +56,7 @@ No hay scripts propios en `package.json` (`"scripts": {}`) — todo se ejecuta i
 |---|---|---|
 | `POS_USER_EMAIL` | `tests/auth/auth.setup.ts` | `kadmin@gmail.com` |
 | `POS_USER_PASSWORD` | `tests/auth/auth.setup.ts` | `qa0000` |
-| `POS_COMPANIA` | `tests/pos/pos.types.ts` (`COMPANIA_POS`) | `HONDURAS` |
+| `POS_COMPANIA` | `tests/facturar/pos/pos.types.ts` (`COMPANIA_POS`) | `HONDURAS` |
 
 Permiten correr la misma suite contra otra cuenta/compañía del ambiente sin tocar código. **Nunca hardcodear un id numérico de compañía** — varía por ambiente; la selección real siempre se hace por el nombre visible en el modal de selección de compañía (ver `CLAUDE_CONTEXT.md`).
 
