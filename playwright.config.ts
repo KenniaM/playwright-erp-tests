@@ -113,11 +113,11 @@ const TODOS_LOS_PROYECTOS = [
       storageState: 'playwright/.auth/admin.json',
     },
     dependencies: ['setup'],
-    // contabilidad-navegacion.spec.ts corre exclusivamente bajo la sesión
-    // Super Administrador (proyecto 'firefox-super-admin' más abajo) — se
-    // excluye aquí para que no corra dos veces (una por cada sesión) en una
-    // corrida por defecto.
-    testIgnore: /contabilidad-navegacion\.spec\.ts/,
+    // contabilidad-navegacion.spec.ts y contabilidad-mes-fiscal.spec.ts
+    // corren exclusivamente bajo la sesión Super Administrador (proyecto
+    // 'firefox-super-admin' más abajo) — se excluyen aquí para que no corran
+    // dos veces (una por cada sesión) en una corrida por defecto.
+    testIgnore: /contabilidad-navegacion\.spec\.ts|contabilidad-mes-fiscal\.spec\.ts/,
   },
 
   {
@@ -172,7 +172,12 @@ const TODOS_LOS_PROYECTOS = [
       storageState: 'playwright/.auth/super-admin.json',
     },
     dependencies: ['setup-super-admin'],
-    testMatch: /contabilidad-navegacion\.spec\.ts/,
+    // contabilidad-mes-fiscal.spec.ts se suma aquí por el mismo motivo que
+    // contabilidad-navegacion.spec.ts: el submódulo Mes Fiscal necesita la
+    // sesión Super Administrador (selector de compañía propio con las 17+
+    // compañías de esa cuenta) — sin agregarlo aquí quedaría sin ningún
+    // proyecto que lo cubra en una corrida sin --project explícito.
+    testMatch: /contabilidad-navegacion\.spec\.ts|contabilidad-mes-fiscal\.spec\.ts/,
   },
 
   // Variante de 'firefox' autenticada contra el ambiente qa_restaurant
