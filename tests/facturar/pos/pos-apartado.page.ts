@@ -217,23 +217,43 @@ export class PosApartados {
    * Carga el primer Apartado disponible en la pestaña ya abierta — mismo
    * patrón exacto que cargarPrimeraOrdenCajaDisponible(), solo que espera
    * AJAX_CARGAR_APARTADO en vez de AJAX_CARGAR_ORDEN_CAJA.
+   *
+   * Confirmado en vivo: este ambiente compartido puede tener Apartados
+   * "vacíos" (tarjeta con "Total: ₡0.00", sin ninguna línea de producto
+   * real detrás) mezclados con los que sí tienen ítems — no se detecta
+   * leyendo la tarjeta antes de cargarla (ver cargarPrimerApartadoConTotalRazonable()
+   * para el caso hermano de Total corrupto). Mismo remedio: reintentar por
+   * posición (nth) en vez de asumir que tarjetas.first() siempre trae datos
+   * reales, sin heredar el mismo candidato vacío en cada intento.
    */
   async cargarPrimerApartadoDisponible() {
-    const filas = this.page.locator(L.IMPORTAR_FACTURA_FILA);
-    const primeraFila = filas.first();
-    await expect(primeraFila, 'No hay ningún Apartado disponible').toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+    const MAX_INTENTOS = 5;
 
-    const respuestaPromise = this.page.waitForResponse(
-      (res) => res.url().includes(L.AJAX_CARGAR_APARTADO),
-      { timeout: TIMEOUTS.PAYMENT_MODAL }
-    );
-    await primeraFila.locator(L.ORDEN_CAJA_LISTA_BTN_CARGAR).click();
-    await respuestaPromise;
+    for (let intento = 0; intento < MAX_INTENTOS; intento++) {
+      const tarjetas = this.page.locator(L.IMPORTAR_FACTURA_FILA);
+      await expect(
+        tarjetas.nth(intento),
+        `No hay un Apartado en la posición ${intento} para reintentar`
+      ).toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
 
-    await expect(
-      this.page.locator(L.IMPORTAR_FACTURA_CARRITO_FILAS).first(),
-      'No se cargó ninguna línea de producto tras seleccionar el Apartado'
-    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+      const respuestaPromise = this.page.waitForResponse(
+        (res) => res.url().includes(L.AJAX_CARGAR_APARTADO),
+        { timeout: TIMEOUTS.PAYMENT_MODAL }
+      );
+      await tarjetas.nth(intento).locator(L.ORDEN_CAJA_LISTA_BTN_CARGAR).click();
+      await respuestaPromise;
+
+      const cargoLinea = await expect(
+        this.page.locator(L.IMPORTAR_FACTURA_CARRITO_FILAS).first(),
+        'No se cargó ninguna línea de producto tras seleccionar el Apartado'
+      ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL }).then(() => true).catch(() => false);
+      if (cargoLinea) return;
+
+      console.log(`[cargarPrimerApartadoDisponible] Apartado en posición ${intento} cargó sin ninguna línea de producto (Apartado vacío) — se descarta y se reintenta con el siguiente.`);
+      const pestanaApartados = await this.core.localizarPestanaApartados();
+      if (pestanaApartados) await this.core.visitarPestanaPos(pestanaApartados);
+    }
+    throw new Error(`No se encontró ningún Apartado con al menos una línea de producto entre los primeros ${MAX_INTENTOS} disponibles.`);
   }
 
 

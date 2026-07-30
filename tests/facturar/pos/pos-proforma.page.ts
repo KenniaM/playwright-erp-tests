@@ -43,6 +43,23 @@ export class PosProforma {
    * a caja", L.ORDEN_CAJA_MENU_BTN) y selecciona "PROFORMA". Reutiliza el
    * mismo patrón de reintento + cierre de overlays ya probado en
    * abrirMenuOrdenCaja(), cambiando únicamente el ítem de éxito esperado.
+   *
+   * Bug de automatización confirmado en vivo (no del sistema, mismo
+   * mecanismo ya documentado y corregido en otros puntos de esta suite —
+   * ver `abrirProductoRapido()`/`abrirCrearProducto()`): el click sobre
+   * `L.ORDEN_CAJA_MENU_BTN` se disparaba con `this.page.evaluate(...)` (a
+   * nivel de PÁGINA, no de locator) — Playwright NO acepta un `timeout`
+   * para `Page.evaluate()`, así que ese `evaluate()` podía quedar esperando
+   * indefinidamente a que el motor JS de la página quedara libre para
+   * ejecutarlo (confirmado en vivo: 4 corridas consecutivas, en una página
+   * recién cargada mediante `cargarPosDesdeDashboard()`, colgaron el
+   * presupuesto COMPLETO del test exactamente en esta línea, antes de que
+   * el bucle de reintento de más abajo llegara siquiera a su primera
+   * vuelta). Se reemplaza por `locator(...).evaluate(fn, undefined,
+   * {timeout})`, que SÍ acepta timeout — con eso, un intento que no
+   * consigue ejecutar el click a tiempo falla rápido y el bucle de
+   * reintento (ya existente, pensado exactamente para esto) puede
+   * intentarlo de nuevo en la siguiente vuelta.
    */
   async abrirCrearProforma() {
     await this.core.cerrarModalNotificacionesSiAparece();
@@ -59,18 +76,15 @@ export class PosProforma {
       await this.core.cerrarModalNotificacionesSiAparece();
       await this.core.cerrarAvisoConsecutivoSiAparece();
 
-      await this.page.evaluate(
-        (sel) => (document.querySelector(sel) as HTMLElement)?.click(),
-        L.ORDEN_CAJA_MENU_BTN
-      );
+      await this.page.locator(L.ORDEN_CAJA_MENU_BTN)
+        .evaluate((el: HTMLElement) => el.click(), undefined, { timeout: 5_000 })
+        .catch(() => {});
       abierto = await item.waitFor({ state: 'visible', timeout: 2_000 }).then(() => true).catch(() => false);
     }
     expect(abierto, `La opción "Proforma" no apareció en el menú de acciones tras ${MAX_INTENTOS} intentos`).toBe(true);
 
-    await this.page.evaluate(
-      (sel) => (document.querySelector(sel) as HTMLElement)?.click(),
-      L.PROFORMA_MENU_ITEM
-    );
+    await this.page.locator(L.PROFORMA_MENU_ITEM)
+      .evaluate((el: HTMLElement) => el.click(), undefined, { timeout: 5_000 });
 
     await expect(this.modalCrearProforma, 'El modal "Agregar Proforma" no apareció tras seleccionar la opción del menú').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
   }

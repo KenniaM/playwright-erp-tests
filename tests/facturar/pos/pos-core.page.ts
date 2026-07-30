@@ -1313,15 +1313,51 @@ export class PosCore {
 
 
   /**
+   * Cambia al tab "Servicios" si no está ya activo — idempotente, seguro de
+   * llamar aunque el test ya haya hecho el cambio explícitamente antes.
+   * Extraído de `obtenerPrimerServicio()` (única duplicación real
+   * encontrada de este patrón) para que `PosCrearProducto.abrirCrearServicio()`
+   * lo reutilice en vez de repetirlo.
+   *
+   * Bug de automatización confirmado en vivo (no del sistema): la versión
+   * original (heredada de `obtenerPrimerServicio()`) hacía un único
+   * `click()` sin timeout propio — mismo antipatrón ya documentado y
+   * corregido en otros puntos de esta clase (ver `abrirProductoRapido()`):
+   * si el click no aterriza a la primera (overlay asíncrono reapareciendo,
+   * animación en curso), Playwright espera indefinidamente la
+   * accionabilidad del elemento, consumiendo el timeout COMPLETO del test
+   * en una sola línea en vez de fallar rápido y reintentar. Confirmado en
+   * vivo: un test se agotó a los 480s exactamente en este `click()`. Se
+   * reemplaza por reintentos cortos y acotados, cerrando overlays conocidos
+   * antes de cada uno — mismo patrón que `abrirMenuTresPuntos()`.
+   */
+  async asegurarPestanaServiciosActiva() {
+    if (await this.tabEstaActivo(this.tabServicios)) return;
+
+    const MAX_INTENTOS = 5;
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      await this.cerrarModalNotificacionesSiAparece();
+      const clickeado = await this.tabServicios.click({ timeout: 5_000 }).then(() => true).catch(() => false);
+      if (!clickeado) continue;
+
+      const activo = await expect.poll(
+        () => this.tabEstaActivo(this.tabServicios),
+        { timeout: 5_000 }
+      ).toBe(true).then(() => true).catch(() => false);
+      if (activo) return;
+    }
+
+    throw new Error(`El tab "Servicios" no quedó activo tras ${MAX_INTENTOS} intentos.`);
+  }
+
+
+  /**
    * Primer servicio del tab "Servicios" (item_type=2). Cambia a ese tab si
    * no está ya activo — idempotente, seguro de llamar aunque el test ya
    * haya hecho el cambio explícitamente antes.
    */
   async obtenerPrimerServicio(): Promise<MetadatoProducto> {
-    if (!(await this.tabEstaActivo(this.tabServicios))) {
-      await this.tabServicios.click();
-      await expect.poll(() => this.tabEstaActivo(this.tabServicios), { timeout: TIMEOUTS.PRODUCTS_LOAD }).toBe(true);
-    }
+    await this.asegurarPestanaServiciosActiva();
     return this.localizarPrimerProducto((m) => m.tipoItem === 2, 'servicio');
   }
 
@@ -1628,6 +1664,161 @@ export class PosCore {
       () => this.obtenerCantidadProducto(clave),
       { timeout: TIMEOUTS.PAYMENT_MODAL, message: `La cantidad de "${clave}" no quedó en ${cantidad}` }
     ).toBe(parseFloat(cantidad));
+  }
+
+
+  // ─── Edición de nombre de una línea del carrito ────────────────────────────
+  //
+  // Cada fila trae 3 íconos superpuestos (solo uno visible a la vez, el resto
+  // con `display:none`): lápiz (`i_edit_name_edit_<clave>`, entra a modo
+  // edición), "X" (`i_edit_name_close_<clave>`, cancela) y check
+  // (`i_edit_name_check_<clave>`, guarda) — confirmado en vivo inspeccionando
+  // la fila real. El nombre visible vive en `#product_table_name_<clave>`; el
+  // campo editable (oculto hasta entrar en modo edición) en
+  // `#product_table_input_name_<clave>`.
+
+  /** Nombre actualmente mostrado de una línea del carrito. */
+  async obtenerNombreProducto(clave: string): Promise<string> {
+    return (await this.page.locator(`#product_table_name_${clave}`).innerText()).trim();
+  }
+
+
+  /**
+   * Indica si el ícono de lápiz (entrar a modo edición de nombre) está
+   * disponible para una línea — sin asumir el resultado: se usa para
+   * confirmar el efecto real de "Editar nombre de producto en POS"
+   * (permiso), no solo intentar el click y ver si falla.
+   */
+  async iconoEditarNombreVisible(clave: string): Promise<boolean> {
+    return this.page.locator(`#i_edit_name_edit_${clave}`).isVisible().catch(() => false);
+  }
+
+
+  /**
+   * Edita el nombre de una línea del carrito: entra a modo edición (lápiz),
+   * reemplaza el valor del campo y confirma (check). Dispara
+   * `save_edit_product_name` vía el ícono de check, no `Enter`/`blur` —
+   * confirmado en vivo que ese ícono es el único camino real que la propia UI
+   * ofrece (el campo no tiene `onblur` propio, solo `onchange`/`onkeyup` para
+   * Enter, y esta suite prefiere reproducir la interacción real del ícono).
+   */
+  async editarNombreProducto(clave: string, nuevoNombre: string) {
+    await this.page.locator(`#i_edit_name_edit_${clave}`).click();
+    const campo = this.page.locator(`#product_table_input_name_${clave}`);
+    await expect(campo, `El campo de edición de nombre de "${clave}" no quedó visible`).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await campo.fill(nuevoNombre);
+    await this.page.locator(`#i_edit_name_check_${clave}`).click();
+    await expect.poll(
+      () => this.obtenerNombreProducto(clave),
+      { timeout: TIMEOUTS.PAYMENT_MODAL, message: `El nombre de "${clave}" no quedó en "${nuevoNombre}"` }
+    ).toBe(nuevoNombre);
+  }
+
+
+  // ─── Edición de precio de venta de una línea del carrito ───────────────────
+  //
+  // Campo real: `#input_product_edit_price_<clave>` (sin IVA) —
+  // `#input_product_edit_price_with_iva_<clave>` es su contraparte con IVA,
+  // oculta/visible según el mismo checkbox `show_price_with_iva` que ya
+  // documenta el resto de la suite (ver `establecerMostrarPrecioConIva`);
+  // esta suite solo necesita confirmar que el precio es o no editable, así
+  // que trabaja siempre sobre el campo "sin IVA" (visible por defecto).
+
+  /** Valor actual del campo de precio editable de una línea (sin IVA). */
+  async obtenerPrecioProducto(clave: string): Promise<number> {
+    return parseFloat(await this.page.locator(`#input_product_edit_price_${clave}`).inputValue()) || 0;
+  }
+
+
+  /**
+   * Indica si el campo de precio de una línea está disponible para editar.
+   *
+   * Corrección de automatización confirmada en vivo (no un bug del sistema):
+   * sin el permiso "Cambiar precio de venta de un producto - POS", el campo
+   * NO queda deshabilitado (`disabled`) — gana la clase `hide` (mismo patrón
+   * "hide" que usa el resto de la app para ocultar elementos), confirmado
+   * inspeccionando su `outerHTML` en vivo. `isEnabled()` no detecta esto
+   * (un elemento oculto sin `disabled` sigue reportando `enabled=true`),
+   * así que la fuente de verdad real es la visibilidad, no el estado
+   * habilitado/deshabilitado.
+   */
+  async precioEdicionHabilitada(clave: string): Promise<boolean> {
+    return this.page.locator(`#input_product_edit_price_${clave}`).isVisible().catch(() => false);
+  }
+
+
+  /**
+   * Escribe un nuevo precio en el campo editable de una línea y espera a que
+   * el total de esa línea (`#total_by_product_<clave>`) refleje el cambio —
+   * mismo patrón que `establecerCantidadProducto()` (fill + blur, ya que
+   * `edit_product_price_change` está ligado a `onchange`, no disparado por
+   * `fill()` solo).
+   */
+  async establecerPrecioProducto(clave: string, precio: string) {
+    const totalAntes = await this.obtenerTotalProducto(clave);
+    const campo = this.page.locator(`#input_product_edit_price_${clave}`);
+    await campo.fill(precio);
+    await campo.blur();
+    await expect.poll(
+      () => this.obtenerTotalProducto(clave),
+      { timeout: TIMEOUTS.PAYMENT_MODAL, message: `El total de "${clave}" no cambió tras editar el precio a ${precio}` }
+    ).not.toBe(totalAntes);
+  }
+
+
+  // ─── Responsable (comisión) de una línea del carrito ───────────────────────
+  //
+  // Botón `#btn_product_line_created_by_<clave>` (ícono de usuario, junto al
+  // nombre) abre `#modal_pos_product_responsible` — confirmado en vivo que
+  // trae su `data-responsible-name` actualizado con el responsable vigente,
+  // fuente más simple que leer el modal para confirmar el estado sin abrirlo.
+
+  /** Indica si el botón para reasignar responsable existe en una línea. */
+  async botonResponsableVisible(clave: string): Promise<boolean> {
+    return this.page.locator(`#btn_product_line_created_by_${clave}`).isVisible().catch(() => false);
+  }
+
+
+  /** Nombre del responsable actualmente asignado a una línea (atributo `data-responsible-name`, sin abrir el modal). */
+  async obtenerResponsableProducto(clave: string): Promise<string> {
+    return (await this.page.locator(`#btn_product_line_created_by_${clave}`).getAttribute('data-responsible-name')) ?? '';
+  }
+
+
+  /** Abre el modal "Cambiar responsable del producto" de una línea. */
+  async abrirModalResponsableProducto(clave: string) {
+    await this.page.locator(`#btn_product_line_created_by_${clave}`).click();
+    await expect(
+      this.page.locator(L.DIALOG_RESPONSABLE_PRODUCTO),
+      'El modal "Cambiar responsable del producto" no apareció'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+
+  /**
+   * Selecciona el primer cajero real disponible en el modal "Cambiar
+   * responsable del producto" (ya abierto) y guarda — mismo criterio de
+   * "primera opción real disponible" que el resto de la suite usa para
+   * catálogos sin nombre estable (vendedor, cliente, CABYS). Devuelve el
+   * nombre realmente seleccionado.
+   */
+  async asignarPrimerResponsableDisponible(clave: string): Promise<string> {
+    await this._seleccionarPrimeraOpcionChosen(L.RESPONSABLE_PRODUCTO_CHOSEN);
+    const nombreElegido = await this._obtenerTextoChosenSeleccionado(L.RESPONSABLE_PRODUCTO_CHOSEN);
+
+    const respuesta = this.page.waitForResponse(
+      (res) => res.url().includes('updatePosItemResponsible') || res.url().includes('ProductResponsible'),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    ).catch(() => null);
+    await this.page.locator(L.DIALOG_RESPONSABLE_PRODUCTO_BTN_GUARDAR).click();
+    await respuesta;
+    await expect(this.page.locator(L.DIALOG_RESPONSABLE_PRODUCTO), 'El modal de responsable no se cerró tras Guardar').toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    await expect.poll(
+      () => this.obtenerResponsableProducto(clave),
+      { timeout: TIMEOUTS.PAYMENT_MODAL, message: `El responsable de "${clave}" no quedó en "${nombreElegido}"` }
+    ).toBe(nombreElegido);
+    return nombreElegido;
   }
 
 
