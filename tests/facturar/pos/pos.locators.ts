@@ -300,6 +300,10 @@ export const L = {
   // texto "Crear Producto", onclick="add_product_modal(...)").
   PRODUCTO_TARJETA_CREAR:     '.product_box_new_item',
   DIALOG_CREAR_PRODUCTO:      '#dialog_add_quick_product',
+  // Misma tarjeta (.product_box_new_item) que "Crear Producto", pero en el
+  // tab "Servicios" (onclick="add_quick_service_modal(...)") — id real del
+  // modal confirmado en vivo (distinto del de "Crear Producto").
+  DIALOG_CREAR_SERVICIO:      '#dialog_add_quick_service_update_form',
   PRODUCTO_NOMBRE:            '#product_name_app',
   PRODUCTO_MARCA:             '#product_brand_app',
   PRODUCTO_PROVEEDOR_CODIGO:  '#product_provider_code_app',
@@ -510,6 +514,16 @@ export const L = {
   DIALOG_COMENTARIO_PRODUCTO: '#dialog_product_item_comment',
   COMENTARIO_PRODUCTO_BTN_NUEVO: '#dialog_product_item_comment button[onclick*="show_product_item_comment(0,1)"]',
   COMENTARIO_PRODUCTO_TEXTAREA: '#ta_product_item_comment',
+
+  // Modal "Cambiar responsable del producto" (botón por-línea
+  // #btn_product_line_created_by_<clave>, ícono de usuario junto al nombre,
+  // onclick="open_pos_item_responsible_modal(...)") — reasigna el
+  // responsable de comisión de esa línea. Confirmado en vivo: el <select>
+  // real (#pos_product_responsible_select) usa Chosen, igual que el resto de
+  // catálogos de la suite (vendedor, cliente).
+  DIALOG_RESPONSABLE_PRODUCTO: '#modal_pos_product_responsible',
+  RESPONSABLE_PRODUCTO_CHOSEN: '#pos_product_responsible_select_chosen',
+  DIALOG_RESPONSABLE_PRODUCTO_BTN_GUARDAR: '#btn_pos_update_product_responsible',
   COMENTARIO_PRODUCTO_BTN_GUARDAR: '#dialog_product_item_comment button[onclick="updateDialogProductItemComment(0,1)"]',
 
   // "Agregar" → "Nombre del cliente": factura solo con un nombre, sin

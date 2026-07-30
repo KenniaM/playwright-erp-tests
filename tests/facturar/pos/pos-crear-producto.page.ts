@@ -411,17 +411,79 @@ export class PosCrearProducto {
 
   /**
    * Abre el modal "Crear Producto" desde la primera tarjeta del grid de
-   * productos del POS. A diferencia del FAB (Producto Rápido/Combo), esta
-   * tarjeta es parte del grid normal — un click simple basta, sin el ciclo
-   * de expansión/reintento que sí necesita el FAB.
+   * productos del POS.
+   *
+   * Bug de automatización confirmado en vivo (no del sistema, mismo
+   * mecanismo ya documentado y corregido en `abrirProductoRapido()` de
+   * `PosCore`): el banner de permisos de notificación
+   * (`#workshop-web-notification-permission`) puede reaparecer de forma
+   * asíncrona justo entre `cerrarModalNotificacionesSiAparece()` y el click,
+   * específico de Firefox — un único `click()` sin timeout propio entonces
+   * queda esperando indefinidamente su propia accionabilidad (este proyecto
+   * no configura `actionTimeout`), consumiendo el presupuesto COMPLETO del
+   * test en esta sola línea en vez de fallar rápido y reintentar (confirmado
+   * en vivo: un test se agotó a los 480s exactamente aquí). Se reemplaza por
+   * reintentos cortos y acotados, cerrando el banner antes de cada uno.
    */
   async abrirCrearProducto() {
-    await this.core.cerrarModalNotificacionesSiAparece();
-    await this.page.locator(L.PRODUCTO_TARJETA_CREAR).click();
-    await expect(
-      this.modalCrearProducto,
-      'El modal "Crear Producto" no apareció tras clickear la tarjeta "Crear Producto" del grid'
-    ).toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+    const MAX_INTENTOS = 5;
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      await this.core.cerrarModalNotificacionesSiAparece();
+      const clickeado = await this.page.locator(L.PRODUCTO_TARJETA_CREAR)
+        .click({ timeout: 5_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (clickeado) {
+        const abrio = await this.modalCrearProducto
+          .waitFor({ state: 'visible', timeout: 3_000 })
+          .then(() => true)
+          .catch(() => false);
+        if (abrio) return;
+      }
+    }
+    throw new Error(`El modal "Crear Producto" no apareció tras ${MAX_INTENTOS} intentos de clickear la tarjeta "Crear Producto" del grid.`);
+  }
+
+
+  /** Locator del modal "Crear Servicio" (tab Servicios, misma tarjeta/clase que "Crear Producto"). */
+  get modalCrearServicio() {
+    return this.page.locator(L.DIALOG_CREAR_SERVICIO);
+  }
+
+
+  /**
+   * Abre el modal "Crear Servicio" desde la primera tarjeta del grid del tab
+   * "Servicios" — misma clase CSS que "Crear Producto" (`.product_box_new_item`),
+   * distinta solo por el tab activo y el onclick real
+   * (`add_quick_service_modal(...)`, confirmado en vivo). Cambia al tab
+   * Servicios primero si no está ya activo, reutilizando
+   * `asegurarPestanaServiciosActiva()` ya existente en `PosCore` (mismo
+   * método que usa `obtenerPrimerServicio()` — evita duplicar el patrón de
+   * "cambiar de tab si no está activo").
+   *
+   * Mismo reintento acotado que `abrirCrearProducto()` (mismo bug de
+   * automatización documentado ahí: el banner de notificaciones puede
+   * reaparecer entre el cierre y el click, específico de Firefox) — no se
+   * duplica el comentario completo aquí, ver el de `abrirCrearProducto()`.
+   */
+  async abrirCrearServicio() {
+    await this.core.asegurarPestanaServiciosActiva();
+    const MAX_INTENTOS = 5;
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      await this.core.cerrarModalNotificacionesSiAparece();
+      const clickeado = await this.page.locator(L.PRODUCTO_TARJETA_CREAR)
+        .click({ timeout: 5_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (clickeado) {
+        const abrio = await this.modalCrearServicio
+          .waitFor({ state: 'visible', timeout: 3_000 })
+          .then(() => true)
+          .catch(() => false);
+        if (abrio) return;
+      }
+    }
+    throw new Error(`El modal "Crear Servicio" no apareció tras ${MAX_INTENTOS} intentos de clickear la tarjeta "Crear Servicio" del grid.`);
   }
 
 

@@ -269,6 +269,36 @@ export class PosPage {
   async establecerCantidadProducto(...args: Parameters<PosCore['establecerCantidadProducto']>) {
     return this.core.establecerCantidadProducto(...args);
   }
+  async obtenerNombreProducto(...args: Parameters<PosCore['obtenerNombreProducto']>) {
+    return this.core.obtenerNombreProducto(...args);
+  }
+  async iconoEditarNombreVisible(...args: Parameters<PosCore['iconoEditarNombreVisible']>) {
+    return this.core.iconoEditarNombreVisible(...args);
+  }
+  async editarNombreProducto(...args: Parameters<PosCore['editarNombreProducto']>) {
+    return this.core.editarNombreProducto(...args);
+  }
+  async obtenerPrecioProducto(...args: Parameters<PosCore['obtenerPrecioProducto']>) {
+    return this.core.obtenerPrecioProducto(...args);
+  }
+  async precioEdicionHabilitada(...args: Parameters<PosCore['precioEdicionHabilitada']>) {
+    return this.core.precioEdicionHabilitada(...args);
+  }
+  async establecerPrecioProducto(...args: Parameters<PosCore['establecerPrecioProducto']>) {
+    return this.core.establecerPrecioProducto(...args);
+  }
+  async botonResponsableVisible(...args: Parameters<PosCore['botonResponsableVisible']>) {
+    return this.core.botonResponsableVisible(...args);
+  }
+  async obtenerResponsableProducto(...args: Parameters<PosCore['obtenerResponsableProducto']>) {
+    return this.core.obtenerResponsableProducto(...args);
+  }
+  async abrirModalResponsableProducto(...args: Parameters<PosCore['abrirModalResponsableProducto']>) {
+    return this.core.abrirModalResponsableProducto(...args);
+  }
+  async asignarPrimerResponsableDisponible(...args: Parameters<PosCore['asignarPrimerResponsableDisponible']>) {
+    return this.core.asignarPrimerResponsableDisponible(...args);
+  }
   async obtenerEstadoImpresionAutomatica(...args: Parameters<PosCore['obtenerEstadoImpresionAutomatica']>) {
     return this.core.obtenerEstadoImpresionAutomatica(...args);
   }
@@ -492,9 +522,13 @@ export class PosPage {
     return this.crearProducto.buscarComboYAgregarAlCarrito(...args);
   }
   get modalCrearProducto() { return this.crearProducto.modalCrearProducto; }
+  get modalCrearServicio() { return this.crearProducto.modalCrearServicio; }
   get checkboxIvaProducto() { return this.crearProducto.checkboxIvaProducto; }
   async abrirCrearProducto(...args: Parameters<PosCrearProducto['abrirCrearProducto']>) {
     return this.crearProducto.abrirCrearProducto(...args);
+  }
+  async abrirCrearServicio(...args: Parameters<PosCrearProducto['abrirCrearServicio']>) {
+    return this.crearProducto.abrirCrearServicio(...args);
   }
   async llenarNombreProducto(...args: Parameters<PosCrearProducto['llenarNombreProducto']>) {
     return this.crearProducto.llenarNombreProducto(...args);
@@ -1023,6 +1057,9 @@ export class PosPage {
   }
   async obtenerPrimeraProformaEnTab(...args: Parameters<PosProforma['obtenerPrimeraProformaEnTab']>) {
     return this.proforma.obtenerPrimeraProformaEnTab(...args);
+  }
+  async abrirMenuDeTarjeta(...args: Parameters<PosProforma['abrirMenuDeTarjeta']>) {
+    return this.proforma.abrirMenuDeTarjeta(...args);
   }
   async buscarProformaEnTab(...args: Parameters<PosProforma['buscarProformaEnTab']>) {
     return this.proforma.buscarProformaEnTab(...args);
