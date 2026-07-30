@@ -23,11 +23,24 @@ test('Cargar el módulo Cotizaciones', async ({ page }) => {
   });
 
   await test.step('Validar el título de la página', async () => {
-    await expect(page).toHaveTitle(/proformas/i);
+    // Confirmado en vivo contra POSMOVI (misma URL, misma pantalla real: los
+    // controles reales #btn_proform/#receip_search sí cargan): esta pantalla
+    // se llama "PROFORMA" (singular, sin "s" — el regex original /proformas/i
+    // ya fallaba también contra Taller Alpha por eso, confirmado reproduciendo
+    // el fallo con git stash antes de este cambio) en Taller Alpha, y
+    // "COTIZACION" (singular, mayúsculas) en POSMOVI — diferencia de wording
+    // entre ambientes, no un módulo ni pantalla distinta. Regex ampliado para
+    // cubrir ambos (y de paso corregir el falso negativo ya existente en
+    // Taller Alpha).
+    await expect(page).toHaveTitle(/proformas?|cotizaci[oó]n(es)?/i);
   });
 
   await test.step('Validar que el encabezado y los filtros de "Ver cotizaciones" cargaron correctamente', async () => {
-    await expect(page.locator('.content-header', { hasText: /ver cotizaciones/i })).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    // Mismo hallazgo que el título (ver comentario arriba): el encabezado real
+    // dice "Ver PROFORMA" en Taller Alpha y "Ver COTIZACION" en POSMOVI — el
+    // regex original ('ver cotizaciones') no coincidía con ninguno de los dos
+    // ambientes reales (confirmado en vivo en ambos), no solo con POSMOVI.
+    await expect(page.locator('.content-header', { hasText: /ver (proformas?|cotizaci[oó]n(es)?)/i })).toBeVisible({ timeout: TIMEOUTS.CARGA });
     await expect(page.locator('#btn_proform')).toBeVisible();
     // Antes: locator('input[placeholder="Buscar"]') — ambiguo (modo estricto
     // de Playwright falla con "resolved to 2 elements") en cualquier

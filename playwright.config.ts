@@ -92,6 +92,18 @@ const TODOS_LOS_PROYECTOS = [
     use: { ...devices['Desktop Firefox'] },
   },
 
+  // Cuarto setup de la suite (ver tests/auth/posmovi.setup.ts): ambiente
+  // COMPLETO distinto (qa_posmovi, no solo otra compañía) — proyecto de
+  // setup separado por el mismo motivo que 'setup-restaurant': genera un
+  // storageState DISTINTO (posmovi.json).
+  {
+    name: 'setup-posmovi',
+    testMatch: /posmovi\.setup\.ts/,
+    // Mismo motivo que 'setup' de arriba: sin esto, este login también
+    // caía al default real de Playwright (chromium) en vez de Firefox.
+    use: { ...devices['Desktop Firefox'] },
+  },
+
   {
     name: 'firefox',
     use: {
@@ -150,6 +162,21 @@ const TODOS_LOS_PROYECTOS = [
       storageState: 'playwright/.auth/restaurant.json',
     },
     dependencies: ['setup-restaurant'],
+  },
+
+  // Variante de 'firefox' autenticada contra el ambiente qa_posmovi (compañía
+  // "POSMOVI TIENDA", rol Super Admin) en vez del ambiente original — las
+  // suites de navegación que corran contra este ambiente usan
+  // --project=firefox-posmovi. Mismo motivo que 'firefox-restaurant': debe
+  // invocarse en un comando dedicado (solo archivos/BASE_URL de este
+  // ambiente), nunca mezclado con el resto de la suite en la misma corrida.
+  {
+    name: 'firefox-posmovi',
+    use: {
+      ...devices['Desktop Firefox'],
+      storageState: 'playwright/.auth/posmovi.json',
+    },
+    dependencies: ['setup-posmovi'],
   },
 
   {
