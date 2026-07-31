@@ -1,0 +1,17 @@
+﻿
+Running 2 tests using 1 worker
+
+node.exe : (node:5616) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+En línea: 1 Carácter: 1
++ & "C:\Program Files\nodejs/node.exe" "C:\Users\kenia\AppData\Roaming\ ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ((node:5616) War... env being set.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [setup-super-admin] › tests\auth\super-admin.setup.ts:31:6 › authenticate as super admin (TALLER ALPHA  PREMIUM) (52.5s)
+(node:19516) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  2 [firefox-super-admin] › tests\facturar\facturar-despacho-ordenes-caja.spec.ts:44:7 › Despacho de Órdenes de Caja › 1. Apertura del módulo y carga de registros (36.6s)
+
+  2 passed (1.6m)

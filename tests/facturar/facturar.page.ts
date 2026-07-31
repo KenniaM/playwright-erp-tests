@@ -137,36 +137,117 @@ export class FacturarPage {
   // ─── Despacho de bodega ───────────────────────────────────────────────────
 
   /**
-   * Abre "Despacho de bodega" — confirmado en vivo (monitoreo de red +
-   * inspección del DOM real durante la investigación de este archivo) que
-   * este link (`#dispatch_order_enable`, `class="purchase-module-trigger"`)
-   * NO navega a ninguna pantalla funcional en el ambiente QA de este
-   * proyecto: dispara el modal "Módulos Adicionales" — venta del complemento
-   * "Control de Despacho" ("Cotización personalizada"), no comprado/
-   * habilitado para esta compañía. Es un hallazgo de ambiente/producto, no
-   * un bug de automatización (ver CLAUDE_CONTEXT.md → clasificación de
-   * causas): el módulo real de despacho de bodega no existe todavía para
-   * esta cuenta, así que este método valida el resultado REAL (el modal de
-   * venta aparece), documentado aquí para que una sesión futura no repita la
-   * misma investigación.
+   * Abre "Despacho de bodega" (`#dispatch_order_enable`,
+   * `class="purchase-module-trigger"`) y devuelve cuál de sus DOS resultados
+   * reales ocurrió — carrera real entre dos comportamientos legítimos de la
+   * app, mismo criterio que `PosCore._irAlPosResolviendoCompania()` (Flujo A
+   * modal / Flujo B navegación directa: `Promise.any()`, nunca
+   * `Promise.race()`, con un `.catch()` silencioso por promesa individual
+   * para no dejar un rechazo sin manejar de la que pierde la carrera):
+   *
+   * - `'modulo_no_habilitado'`: el complemento "Control de Despacho" no está
+   *   comprado/habilitado para la compañía activa — la app muestra el modal
+   *   de venta "Módulos Adicionales" (`#dialog_purchase_modules`) en vez de
+   *   navegar. Confirmado en vivo con la cuenta admin por defecto
+   *   (`kadmin`, compañía por defecto de esa cuenta).
+   * - `'pantalla_real'`: navega a la pantalla real de Despacho de Bodega
+   *   (`PosDispatchOrder/dispatchOrder`, título real "Despacho de órdenes" /
+   *   encabezado en pantalla "Control de Calidad - Órdenes de despacho").
+   *   Confirmado en vivo con la cuenta Super Administrador (compañía
+   *   HONDURAS entre otras) — el complemento SÍ está habilitado ahí.
+   *
+   * Antes, este método asumía siempre el primer resultado y lo validaba
+   * aquí mismo — correcto únicamente para la cuenta admin por defecto. Se
+   * separa navegación de aserción: la aserción específica de "esta cuenta
+   * no tiene el módulo" vive ahora en facturar-navegacion.spec.ts (que
+   * sigue corriendo con esa cuenta, mismo resultado ya validado), y
+   * facturar-despacho-bodega.page.ts reutiliza este método tal cual para la
+   * cuenta Super Administrador, donde el resultado real es el otro.
    */
-  async abrirDespachoDeBodega() {
+  async abrirDespachoDeBodega(): Promise<'modulo_no_habilitado' | 'pantalla_real'> {
     await this._irADashboardYExpandirFacturar();
     const link = this.page.locator('#dispatch_order_enable');
+
+    const esperaModal = this.modalModulosAdicionales
+      .waitFor({ state: 'visible', timeout: TIMEOUTS.MODAL })
+      .then(() => 'modulo_no_habilitado' as const);
+    const esperaPantallaReal = this.page
+      .waitForURL(/PosDispatchOrder\/dispatchOrder/, { timeout: TIMEOUTS.NAVIGATE })
+      .then(() => 'pantalla_real' as const);
+    esperaModal.catch(() => {});
+    esperaPantallaReal.catch(() => {});
+
     await link.evaluate((el: HTMLElement) => el.click());
-    await expect(
-      this.modalModulosAdicionales,
-      'El click en "Despacho de bodega" no abrió el modal "Módulos Adicionales" (comportamiento esperado en este ambiente: módulo no comprado/habilitado)'
-    ).toBeVisible({ timeout: TIMEOUTS.MODAL });
+
+    const resultado = await Promise.any([esperaModal, esperaPantallaReal]).catch(() => null);
+    if (!resultado) {
+      throw new Error(
+        'El click en "Despacho de bodega" no produjo ninguno de los dos resultados reales conocidos ' +
+        '(ni el modal "Módulos Adicionales" ni la navegación a PosDispatchOrder/dispatchOrder).'
+      );
+    }
+    return resultado;
   }
 
   /**
    * Locator del modal de venta "Módulos Adicionales" que abre "Despacho de
-   * bodega" en este ambiente — id real confirmado en vivo:
-   * `#dialog_purchase_modules`.
+   * bodega" cuando el complemento no está habilitado para la compañía activa
+   * — id real confirmado en vivo: `#dialog_purchase_modules`.
    */
   get modalModulosAdicionales(): Locator {
     return this.page.locator('#dialog_purchase_modules');
+  }
+
+
+  // ─── Chosen por texto exacto (filtros de las pantallas de Despacho) ────────
+
+  /**
+   * Selecciona una opción por su texto EXACTO en cualquier widget Chosen de
+   * selección simple — variante nueva y genérica (no una de las 3 ya
+   * existentes en `PosCore._seleccionarPrimeraOpcionChosen*()`, que siempre
+   * toman la PRIMERA opción real disponible, nunca una específica por
+   * texto). Las pantallas de Despacho ("Despacho de Órdenes de Caja",
+   * "Despacho de Bodega") reutilizan este mismo mecanismo para varios
+   * filtros distintos: Compañía (`#company_select_chosen`), Estado orden
+   * (`#select_order_status_chosen`), Tipo de factura y "Pagó con" — todos
+   * confirmados en vivo como el mismo widget Chosen de selección simple, así
+   * que centralizar aquí evita 4 copias casi idénticas del mismo bucle
+   * click-buscar-click (mismo criterio que `_seleccionarMarcaVehiculoConModelosReales`
+   * en pos-crear-cliente.page.ts: documentar por qué los 3 helpers de
+   * PosCore no aplican, en vez de forzarlos).
+   */
+  async _seleccionarOpcionChosenPorTexto(contenedorChosenSelector: string, texto: string) {
+    const chosen = this.page.locator(contenedorChosenSelector);
+    await expect(chosen, `El Chosen "${contenedorChosenSelector}" no quedó visible en esta pantalla de Despacho`).toBeVisible({ timeout: TIMEOUTS.MODAL });
+    await chosen.locator('.chosen-single').click();
+
+    const textoEscapado = texto.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const opcion = chosen.locator('.chosen-results li', { hasText: new RegExp(`^\\s*${textoEscapado}\\s*$`) }).first();
+    await expect(opcion, `"${texto}" no está entre las opciones reales del Chosen "${contenedorChosenSelector}" en esta pantalla`).toBeVisible({ timeout: TIMEOUTS.MODAL });
+    await opcion.click();
+
+    // Confirmado en vivo que cambiar cualquiera de estos filtros re-consulta
+    // el listado por AJAX sin recargar la página — se espera la condición
+    // real (red en reposo) en vez de un endpoint específico, que no está
+    // confirmado en vivo con evidencia (a diferencia de otros AJAX ya
+    // documentados en este repo con su URL exacta).
+    await this.page.waitForLoadState('networkidle', { timeout: TIMEOUTS.MODAL }).catch(() => {});
+  }
+
+  /**
+   * Selecciona una compañía por su nombre EXACTO en el filtro `#company_select`
+   * (Chosen) que traen tanto "Despacho de Órdenes de Caja"
+   * (`cashOrderDispath/dispath`) como "Despacho de Bodega"
+   * (`PosDispatchOrder/dispatchOrder`) — confirmado en vivo que ambas
+   * pantallas comparten el mismo widget e id. Es un filtro PROPIO de cada
+   * pantalla, independiente de la compañía ya resuelta al hacer login
+   * (`_irAlPosResolviendoCompania()`/`COMPANIA_POS`): la cuenta Super
+   * Administrador pertenece a 17+ compañías y estas dos pantallas son
+   * cross-company para ella, por eso no se puede asumir que el login ya
+   * dejó activa la compañía que un escenario necesita.
+   */
+  async seleccionarCompaniaEnDespacho(nombreCompania: string) {
+    await this._seleccionarOpcionChosenPorTexto('#company_select_chosen', nombreCompania);
   }
 
 

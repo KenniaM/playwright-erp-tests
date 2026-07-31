@@ -107,18 +107,21 @@ test('Ingresar a "Despacho de bodega"', async ({ page }) => {
   const pos = new PosPage(page);
   const facturar = new FacturarPage(pos, page);
 
+  // Hallazgo de ambiente confirmado en vivo (ver el comentario completo en
+  // facturar.page.ts → abrirDespachoDeBodega()): con la cuenta admin por
+  // defecto de este spec, el módulo "Control de Despacho" no está comprado/
+  // habilitado para su compañía, así que el resultado REAL y esperado del
+  // click es el modal de venta "Módulos Adicionales", no una pantalla
+  // funcional de despacho — documentar, no ocultar (CLAUDE_CONTEXT.md). Con
+  // la cuenta Super Administrador (compañía HONDURAS) el resultado real es
+  // el otro: ver tests/facturar/facturar-despacho-bodega.spec.ts.
+  let resultado: Awaited<ReturnType<typeof facturar.abrirDespachoDeBodega>>;
   await test.step('Ingresar vía el link directo "Despacho de bodega"', async () => {
-    await facturar.abrirDespachoDeBodega();
+    resultado = await facturar.abrirDespachoDeBodega();
   });
 
-  // Hallazgo de ambiente confirmado en vivo (ver el comentario completo en
-  // facturar.page.ts → abrirDespachoDeBodega()): el módulo "Control de
-  // Despacho" no está comprado/habilitado para esta compañía, así que el
-  // resultado REAL y esperado del click es el modal de venta "Módulos
-  // Adicionales", no una pantalla funcional de despacho. Se valida ese
-  // resultado real en vez de una funcionalidad que no existe en este
-  // ambiente — documentar, no ocultar (CLAUDE_CONTEXT.md).
   await test.step('Validar que se muestra el modal real "Módulos Adicionales" (módulo no comprado en este ambiente QA)', async () => {
+    expect(resultado!, 'Con la cuenta admin por defecto se esperaba el modal "Módulos Adicionales", no la pantalla real de despacho').toBe('modulo_no_habilitado');
     await expect(facturar.modalModulosAdicionales).toContainText(/Módulos Adicionales/i);
   });
 });
