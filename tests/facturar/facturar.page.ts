@@ -148,21 +148,22 @@ export class FacturarPage {
    * - `'modulo_no_habilitado'`: el complemento "Control de Despacho" no está
    *   comprado/habilitado para la compañía activa — la app muestra el modal
    *   de venta "Módulos Adicionales" (`#dialog_purchase_modules`) en vez de
-   *   navegar. Confirmado en vivo con la cuenta admin por defecto
-   *   (`kadmin`, compañía por defecto de esa cuenta).
+   *   navegar.
    * - `'pantalla_real'`: navega a la pantalla real de Despacho de Bodega
    *   (`PosDispatchOrder/dispatchOrder`, título real "Despacho de órdenes" /
    *   encabezado en pantalla "Control de Calidad - Órdenes de despacho").
-   *   Confirmado en vivo con la cuenta Super Administrador (compañía
-   *   HONDURAS entre otras) — el complemento SÍ está habilitado ahí.
+   *   Confirmado en vivo tanto con la cuenta Super Administrador (compañía
+   *   HONDURAS entre otras) como con la cuenta admin por defecto (`kadmin`,
+   *   perteneciente a una única compañía, ya HONDURAS) — RE-CONFIRMADO en
+   *   una sesión posterior que el complemento también quedó habilitado para
+   *   `kadmin` (el estado real del complemento en el ambiente cambió entre
+   *   ambas investigaciones; ver facturar-navegacion.spec.ts y
+   *   facturar-despacho-bodega.spec.ts, que documentan el estado vigente).
    *
-   * Antes, este método asumía siempre el primer resultado y lo validaba
-   * aquí mismo — correcto únicamente para la cuenta admin por defecto. Se
-   * separa navegación de aserción: la aserción específica de "esta cuenta
-   * no tiene el módulo" vive ahora en facturar-navegacion.spec.ts (que
-   * sigue corriendo con esa cuenta, mismo resultado ya validado), y
-   * facturar-despacho-bodega.page.ts reutiliza este método tal cual para la
-   * cuenta Super Administrador, donde el resultado real es el otro.
+   * Navegación y aserción quedan separadas a propósito: cada spec que use
+   * este método decide qué resultado espera y lo valida por su cuenta, sin
+   * que este helper compartido asuma cuál cuenta obtiene cuál resultado —
+   * ese mapeo ya demostró cambiar con el tiempo en este ambiente.
    */
   async abrirDespachoDeBodega(): Promise<'modulo_no_habilitado' | 'pantalla_real'> {
     await this._irADashboardYExpandirFacturar();
@@ -219,11 +220,28 @@ export class FacturarPage {
   async _seleccionarOpcionChosenPorTexto(contenedorChosenSelector: string, texto: string) {
     const chosen = this.page.locator(contenedorChosenSelector);
     await expect(chosen, `El Chosen "${contenedorChosenSelector}" no quedó visible en esta pantalla de Despacho`).toBeVisible({ timeout: TIMEOUTS.MODAL });
-    await chosen.locator('.chosen-single').click();
 
     const textoEscapado = texto.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const opcion = chosen.locator('.chosen-results li', { hasText: new RegExp(`^\\s*${textoEscapado}\\s*$`) }).first();
-    await expect(opcion, `"${texto}" no está entre las opciones reales del Chosen "${contenedorChosenSelector}" en esta pantalla`).toBeVisible({ timeout: TIMEOUTS.MODAL });
+
+    // CORRECCIÓN DE AUTOMATIZACIÓN confirmada en vivo (Despacho de Bodega):
+    // un único click sobre `.chosen-single` sin reintentos podía perderse
+    // contra el mismo overlay asíncrono ya documentado en el resto de la
+    // suite (banner de permisos de notificación de Firefox reapareciendo
+    // entre el cierre inicial y este click) — el dropdown nunca llegaba a
+    // abrirse y la opción buscada expiraba como "no encontrada" pese a
+    // existir. Se reintenta el CICLO completo (cerrar overlays → abrir
+    // dropdown → comprobar que la opción quedó visible), mismo patrón ya
+    // usado en `PosCore.abrirProductoRapido()`/`FacturarDespachoOrdenesCajaPage
+    // .abrirMenuDetalle()`, en vez de un único intento con timeout largo.
+    const MAX_INTENTOS = 5;
+    let opcionVisible = false;
+    for (let intento = 1; intento <= MAX_INTENTOS && !opcionVisible; intento++) {
+      await this.pos.cerrarOverlaysConocidos().catch(() => {});
+      await chosen.locator('.chosen-single').click({ timeout: 3_000 }).catch(() => {});
+      opcionVisible = await opcion.waitFor({ state: 'visible', timeout: 2_000 }).then(() => true).catch(() => false);
+    }
+    expect(opcionVisible, `"${texto}" no está entre las opciones reales del Chosen "${contenedorChosenSelector}" en esta pantalla tras ${MAX_INTENTOS} intentos`).toBe(true);
     await opcion.click();
 
     // Confirmado en vivo que cambiar cualquiera de estos filtros re-consulta
