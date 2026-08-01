@@ -3,6 +3,7 @@ import { PosPage, espiarErroresJS } from './pos.page';
 import { L } from './pos.locators';
 import { PosPermisos, PERMISO, ROL_ADMINISTRADOR, TIMEOUTS } from './pos-permisos.page';
 import { PosProductosExternos } from './pos-productos-externos.page';
+import { PosTaller } from './pos-taller.page';
 
 // Suite del módulo "Roles y permisos" acotada a los permisos del POS,
 // trabajando únicamente con el rol "Administrador nivel 1" (el rol
@@ -22,6 +23,25 @@ import { PosProductosExternos } from './pos-productos-externos.page';
 // el propio POS, y un fallo a mitad de esa secuencia en una página
 // compartida arrastraría a los siguientes tests del mismo worker. Página
 // nueva por test (fixture `page` estándar) aísla ese riesgo.
+
+// Helpers locales reutilizados únicamente por los escenarios de Caja de este
+// archivo (abrir la caja si hace falta, luego abrir "Detalle de Cierre") —
+// mismo criterio que `crearOrdenDesechable()` en recepcion-basico.spec.ts:
+// composición de métodos ya existentes de PosPage, no lógica nueva, así que
+// vive como función local del spec en vez de sumarse a ningún Page Object.
+async function asegurarCajaAbierta(pos: PosPage) {
+  if (await pos.modalAbrirCajaVisible()) {
+    await pos.completarAperturaCaja();
+    await expect(pos.modalAbrirCaja).toBeHidden();
+  }
+}
+
+async function abrirDetalleCierre(pos: PosPage) {
+  await pos.abrirMenuCaja();
+  await pos.seleccionarAbrirCerrarCaja();
+  await pos.esperarResultadoMenuCaja();
+  await expect(pos.modalCerrarCaja).toBeVisible();
+}
 
 test.describe('Permisos del POS — rol Administrador nivel 1', () => {
   test('Admin roles — controla la opción "Permisos del POS" del menú de tres puntos', async ({ page }) => {
@@ -1396,6 +1416,524 @@ test.describe('Permisos del POS — Facturación, Impresión y Pagos — rol Adm
         await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
         await permisos.establecerPermiso(PERMISO.MOSTRAR_VENDEDOR_AL_FACTURAR, true);
         await permisos.esperarPermiso(ROL_ADMINISTRADOR, PERMISO.MOSTRAR_VENDEDOR_AL_FACTURAR, true);
+      });
+    }
+  });
+});
+
+
+// Confirmados en vivo contra "Admin. Cajas" (`/adminCash/adminCash`, fuera
+// del POS) y el modal "Detalle de Cierre" del propio POS. 4 de estos 6 ids
+// no aparecen en el JSON de `getRolePermissionById` (solo en el DOM servido
+// de "Roles y permisos") — ver el informe de la suite.
+test.describe('Permisos del POS — Caja — rol Administrador nivel 1', () => {
+  test('Agregar caja — controla el botón "Crear caja" en Admin. Cajas', async ({ page }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const pos = new PosPage(page);
+    const permisos = new PosPermisos(pos, page);
+
+    await test.step('Activar el permiso y validar que el botón "Crear caja" y su input existen', async () => {
+      await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
+      await permisos.establecerPermiso(PERMISO.AGREGAR_CAJA, true);
+
+      await permisos.irAAdminCajas();
+      await expect(permisos.botonCrearCaja, 'El botón "Crear caja" debería existir con el permiso activado').toBeVisible({ timeout: TIMEOUTS.NAVIGATE });
+      await expect(permisos.inputNombreCaja).toBeVisible();
+    });
+
+    try {
+      await test.step('Desactivar el permiso y validar que el botón "Crear caja" y su input desaparecen', async () => {
+        await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
+        await permisos.establecerPermiso(PERMISO.AGREGAR_CAJA, false);
+
+        await permisos.irAAdminCajas();
+        const botonVisible = await permisos.botonCrearCaja.isVisible().catch(() => false);
+        const inputVisible = await permisos.inputNombreCaja.isVisible().catch(() => false);
+        console.log(`[Agregar caja OFF] botón "Crear caja" visible=${botonVisible} | input visible=${inputVisible}`);
+        expect(botonVisible, 'El botón "Crear caja" no debería existir con el permiso desactivado').toBe(false);
+        expect(inputVisible, 'El input "Nombre de caja a agregar" no debería existir con el permiso desactivado').toBe(false);
+      });
+    } finally {
+      await test.step('Restaurar el permiso a su estado original (activo)', async () => {
+        await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
+        await permisos.establecerPermiso(PERMISO.AGREGAR_CAJA, true);
+        await permisos.esperarPermiso(ROL_ADMINISTRADOR, PERMISO.AGREGAR_CAJA, true);
+      });
+    }
+  });
+
+
+  test('Ver reporte de movimientos de caja — controla "Historial Mov. de Caja" en el menú Caja del POS', async ({ page }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const pos = new PosPage(page);
+    const permisos = new PosPermisos(pos, page);
+
+    await test.step('Activar el permiso y validar que "Historial Mov. de Caja" aparece en el menú Caja', async () => {
+      await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
+      await permisos.establecerPermiso(PERMISO.VER_REPORTE_MOVIMIENTOS_CAJA, true);
+
+      await pos.cargarPosDesdeDashboard();
+      await pos.cerrarOverlaysConocidos();
+      await pos.abrirMenuCaja();
+      await expect(page.locator(L.MENU_CAJA_UL)).toContainText(L.MENU_CAJA_ITEM_HISTORIAL_MOVIMIENTOS);
+      await page.keyboard.press('Escape').catch(() => {});
+    });
+
+    try {
+      await test.step('Desactivar el permiso y validar que "Historial Mov. de Caja" desaparece del menú y el acceso directo queda bloqueado', async () => {
+        await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
+        await permisos.establecerPermiso(PERMISO.VER_REPORTE_MOVIMIENTOS_CAJA, false);
+
+        await permisos.recargarPos();
+        await pos.abrirMenuCaja();
+        await expect(page.locator(L.MENU_CAJA_UL)).not.toContainText(L.MENU_CAJA_ITEM_HISTORIAL_MOVIMIENTOS);
+        await page.keyboard.press('Escape').catch(() => {});
+
+        // "(F9) Movimientos de caja" (ítem vecino, gobernado por otro permiso) debe seguir existiendo.
+        await pos.abrirMenuCaja();
+        await expect(page.locator(L.MENU_CAJA_UL)).toContainText('Movimientos de caja');
+        await page.keyboard.press('Escape').catch(() => {});
+
+        await page.goto(`${process.env.BASE_URL ?? 'https://dev.designsoftcr.com/qa_talleralpha/public'}/cash_movement/movements`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+        console.log(`[Ver reporte de movimientos de caja OFF] navegación directa -> url final: ${page.url()}`);
+        expect(page.url(), 'La navegación directa a /cash_movement/movements debería quedar bloqueada con el permiso desactivado').toContain('unauthorized');
+      });
+    } finally {
+      await test.step('Restaurar el permiso a su estado original (activo)', async () => {
+        await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
+        await permisos.establecerPermiso(PERMISO.VER_REPORTE_MOVIMIENTOS_CAJA, true);
+        await permisos.esperarPermiso(ROL_ADMINISTRADOR, PERMISO.VER_REPORTE_MOVIMIENTOS_CAJA, true);
+      });
+    }
+  });
+
+
+  test('Ocultar total general en cierre de caja — controla la píldora "Total general" del modal Detalle de Cierre', async ({ page }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const pos = new PosPage(page);
+    const permisos = new PosPermisos(pos, page);
+
+    await test.step('Activar el permiso y validar que "Total general" NO aparece en el modal', async () => {
+      await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
+      await permisos.establecerPermiso(PERMISO.OCULTAR_TOTAL_GENERAL_CIERRE_CAJA, true);
+
+      await pos.cargarPosDesdeDashboard();
+      await pos.cerrarOverlaysConocidos();
+      await asegurarCajaAbierta(pos);
+      await abrirDetalleCierre(pos);
+
+      const visible = await page.locator(L.CIERRE_TOTAL_GENERAL).isVisible().catch(() => false);
+      console.log(`[Ocultar total general ACTIVADO] "Total general" visible=${visible}`);
+      expect(visible, '"Total general" no debería estar visible con el permiso activado').toBe(false);
+
+      await pos.completarFormularioCerrarCaja('0', '0', 'Permisos — total general ON');
+      await pos.confirmarCerrarCaja();
+    });
+
+    try {
+      await test.step('Desactivar el permiso y validar que "Total general" sí aparece', async () => {
+        await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
+        await permisos.establecerPermiso(PERMISO.OCULTAR_TOTAL_GENERAL_CIERRE_CAJA, false);
+
+        await permisos.recargarPos();
+        await asegurarCajaAbierta(pos);
+        await abrirDetalleCierre(pos);
+
+        const visible = await page.locator(L.CIERRE_TOTAL_GENERAL).isVisible().catch(() => false);
+        console.log(`[Ocultar total general DESACTIVADO] "Total general" visible=${visible}`);
+        expect(visible, '"Total general" debería estar visible con el permiso desactivado').toBe(true);
+
+        await pos.completarFormularioCerrarCaja('0', '0', 'Permisos — total general OFF');
+        await pos.confirmarCerrarCaja();
+      });
+    } finally {
+      await test.step('Restaurar el permiso a su estado original (inactivo)', async () => {
+        await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
+        await permisos.establecerPermiso(PERMISO.OCULTAR_TOTAL_GENERAL_CIERRE_CAJA, false);
+        await permisos.esperarPermiso(ROL_ADMINISTRADOR, PERMISO.OCULTAR_TOTAL_GENERAL_CIERRE_CAJA, false);
+      });
+    }
+  });
+
+
+  test('Ver resumen de utilidad de caja en el detalle de cierre — controla el tile "Utilidad" del modal Detalle de Cierre', async ({ page }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const pos = new PosPage(page);
+    const permisos = new PosPermisos(pos, page);
+
+    await test.step('Activar el permiso y validar que el tile "Utilidad" aparece', async () => {
+      await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
+      await permisos.establecerPermiso(PERMISO.VER_RESUMEN_UTILIDAD_CIERRE_CAJA, true);
+
+      await pos.cargarPosDesdeDashboard();
+      await pos.cerrarOverlaysConocidos();
+      await asegurarCajaAbierta(pos);
+      await abrirDetalleCierre(pos);
+
+      const visible = await pos.modalCerrarCaja.getByText('Utilidad', { exact: true }).isVisible().catch(() => false);
+      console.log(`[Ver resumen utilidad ACTIVADO] tile "Utilidad" visible=${visible}`);
+      expect(visible, 'El tile "Utilidad" debería estar visible con el permiso activado').toBe(true);
+
+      await pos.completarFormularioCerrarCaja('0', '0', 'Permisos — resumen utilidad ON');
+      await pos.confirmarCerrarCaja();
+    });
+
+    try {
+      await test.step('Desactivar el permiso y validar que el tile "Utilidad" desaparece', async () => {
+        await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
+        await permisos.establecerPermiso(PERMISO.VER_RESUMEN_UTILIDAD_CIERRE_CAJA, false);
+
+        await permisos.recargarPos();
+        await asegurarCajaAbierta(pos);
+        await abrirDetalleCierre(pos);
+
+        const visible = await pos.modalCerrarCaja.getByText('Utilidad', { exact: true }).isVisible().catch(() => false);
+        console.log(`[Ver resumen utilidad DESACTIVADO] tile "Utilidad" visible=${visible}`);
+        expect(visible, 'El tile "Utilidad" no debería estar visible con el permiso desactivado').toBe(false);
+
+        await pos.completarFormularioCerrarCaja('0', '0', 'Permisos — resumen utilidad OFF');
+        await pos.confirmarCerrarCaja();
+      });
+    } finally {
+      await test.step('Restaurar el permiso a su estado original (activo)', async () => {
+        await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
+        await permisos.establecerPermiso(PERMISO.VER_RESUMEN_UTILIDAD_CIERRE_CAJA, true);
+        await permisos.esperarPermiso(ROL_ADMINISTRADOR, PERMISO.VER_RESUMEN_UTILIDAD_CIERRE_CAJA, true);
+      });
+    }
+  });
+
+
+  test('Ocultar opción de impresión en cierre de caja — controla el popup de impresión tras confirmar el cierre', async ({ page }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const pos = new PosPage(page);
+    const permisos = new PosPermisos(pos, page);
+
+    let popups = 0;
+    page.on('popup', () => { popups++; });
+
+    await test.step('Activar el permiso y validar que NO se abre ningún popup de impresión tras cerrar caja', async () => {
+      await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
+      await permisos.establecerPermiso(PERMISO.OCULTAR_OPCION_IMPRESION_CIERRE_CAJA, true);
+
+      await pos.cargarPosDesdeDashboard();
+      await pos.cerrarOverlaysConocidos();
+      await asegurarCajaAbierta(pos);
+      await abrirDetalleCierre(pos);
+      await pos.completarFormularioCerrarCaja('0', '0', 'Permisos — ocultar impresión ON');
+
+      const popupsAntes = popups;
+      await pos.confirmarCerrarCaja();
+      console.log(`[Ocultar opción de impresión ACTIVADO] popups nuevos=${popups - popupsAntes}`);
+      expect(popups - popupsAntes, 'No debería abrirse ningún popup de impresión con el permiso activado').toBe(0);
+    });
+
+    try {
+      await test.step('Desactivar el permiso y validar que SÍ se abre el popup de impresión tras cerrar caja', async () => {
+        await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
+        await permisos.establecerPermiso(PERMISO.OCULTAR_OPCION_IMPRESION_CIERRE_CAJA, false);
+
+        await permisos.recargarPos();
+        await asegurarCajaAbierta(pos);
+        await abrirDetalleCierre(pos);
+        await pos.completarFormularioCerrarCaja('0', '0', 'Permisos — ocultar impresión OFF');
+
+        const popupsAntes = popups;
+        await pos.confirmarCerrarCaja();
+        console.log(`[Ocultar opción de impresión DESACTIVADO] popups nuevos=${popups - popupsAntes}`);
+        expect(popups - popupsAntes, 'Debería abrirse un popup de impresión con el permiso desactivado').toBeGreaterThan(0);
+      });
+    } finally {
+      await test.step('Restaurar el permiso a su estado original (activo)', async () => {
+        await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
+        await permisos.establecerPermiso(PERMISO.OCULTAR_OPCION_IMPRESION_CIERRE_CAJA, true);
+        await permisos.esperarPermiso(ROL_ADMINISTRADOR, PERMISO.OCULTAR_OPCION_IMPRESION_CIERRE_CAJA, true);
+      });
+    }
+  });
+
+
+  test('Restringir cierre de caja con órdenes de taller sin facturar — bloquea "Cerrar Caja" mientras existan órdenes pendientes', async ({ page }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const pos = new PosPage(page);
+    const permisos = new PosPermisos(pos, page);
+    const taller = new PosTaller(pos, page);
+
+    await test.step('Confirmar que existen órdenes de Taller sin facturar en el ambiente', async () => {
+      await pos.cargarPosDesdeDashboard();
+      await pos.cerrarOverlaysConocidos();
+      await asegurarCajaAbierta(pos);
+      await taller.abrirListadoTaller();
+      const ids = await taller.obtenerIdsOrdenesVisibles(1);
+      expect(ids.length, 'Se necesita al menos una orden de Taller sin facturar en el ambiente para este escenario').toBeGreaterThan(0);
+    });
+
+    await test.step('Activar el permiso e intentar cerrar caja: debe quedar bloqueado', async () => {
+      await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
+      await permisos.establecerPermiso(PERMISO.RESTRINGIR_CIERRE_ORDENES_TALLER_SIN_FACTURAR, true);
+
+      await permisos.recargarPos();
+      await asegurarCajaAbierta(pos);
+      await abrirDetalleCierre(pos);
+      await pos.completarFormularioCerrarCaja('0', '0', 'Permisos — restricción taller ON');
+
+      const quedoBloqueada = await permisos.intentarCerrarCajaYVerificarSiQuedoBloqueada();
+      console.log(`[Restringir cierre con taller ACTIVADO] ¿quedó bloqueada?=${quedoBloqueada}`);
+      expect(quedoBloqueada, 'El cierre de caja debería quedar bloqueado con el permiso activado mientras haya órdenes de Taller sin facturar').toBe(true);
+
+      // El modal permanece abierto tras el bloqueo — cerrarlo con Cancelar para no dejarlo interceptando el resto del test.
+      await page.locator(L.CIERRE_BTN_CANCELAR).first().click({ timeout: 5_000 }).catch(() => {});
+    });
+
+    try {
+      await test.step('Desactivar el permiso e intentar cerrar caja de nuevo: debe completarse con éxito', async () => {
+        await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
+        await permisos.establecerPermiso(PERMISO.RESTRINGIR_CIERRE_ORDENES_TALLER_SIN_FACTURAR, false);
+
+        await permisos.recargarPos();
+        await asegurarCajaAbierta(pos);
+        await abrirDetalleCierre(pos);
+        await pos.completarFormularioCerrarCaja('0', '0', 'Permisos — restricción taller OFF');
+        await pos.confirmarCerrarCaja();
+
+        await expect(pos.modalCerrarCaja).toBeHidden();
+      });
+    } finally {
+      await test.step('Restaurar el permiso a su estado original (inactivo)', async () => {
+        await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
+        await permisos.establecerPermiso(PERMISO.RESTRINGIR_CIERRE_ORDENES_TALLER_SIN_FACTURAR, false);
+        await permisos.esperarPermiso(ROL_ADMINISTRADOR, PERMISO.RESTRINGIR_CIERRE_ORDENES_TALLER_SIN_FACTURAR, false);
+      });
+    }
+  });
+
+
+  test('Validar cierre de caja — simplifica el modal Detalle de Cierre y oculta los montos esperados', async ({ page }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const pos = new PosPage(page);
+    const permisos = new PosPermisos(pos, page);
+
+    async function leerElementosDeMonto() {
+      const kpiVentasTotales = await pos.modalCerrarCaja.getByText('Ventas Totales', { exact: true }).isVisible().catch(() => false);
+      const resumenCierre = await pos.modalCerrarCaja.getByText('Resumen de cierre', { exact: true }).isVisible().catch(() => false);
+      const reporteAvanzado = await pos.modalCerrarCaja.getByText('Mostrar Reporte Avanzado', { exact: true }).isVisible().catch(() => false);
+      const diferencia = await pos.modalCerrarCaja.getByText('Diferencia').isVisible().catch(() => false);
+      const tabsMoneda = await pos.modalCerrarCaja.locator('.cash_closed_style').count().catch(() => -1);
+      return { kpiVentasTotales, resumenCierre, reporteAvanzado, diferencia, tabsMoneda };
+    }
+
+    // Cierra el modal "Detalle de Cierre" (botón X del encabezado, con
+    // timeout acotado) antes de navegar fuera del POS — confirmado en vivo
+    // que, sin este paso, la navegación posterior a "Roles y permisos" puede
+    // quedar colgada de forma reproducible (2/2 corridas): a diferencia del
+    // resto de escenarios de Caja, este test nunca completa un cierre real
+    // (`confirmarCerrarCaja()`, que ya navega/recarga como parte de su propio
+    // flujo), así que el modal queda abierto al terminar de leerlo.
+    async function cerrarModalDetalleCierre() {
+      await pos.modalCerrarCaja.locator('button[data-dismiss="modal"]').first().click({ timeout: 5_000 }).catch(() => {});
+      await pos.modalCerrarCaja.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => {});
+    }
+
+    await test.step('Activar el permiso y validar que el modal queda simplificado: sin KPIs, sin Resumen de cierre, sin Reporte Avanzado, sin Diferencia y con solo 2 tabs de moneda', async () => {
+      await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
+      await permisos.establecerPermiso(PERMISO.VALIDAR_CIERRE_CAJA, true);
+      await permisos.esperarPermiso(ROL_ADMINISTRADOR, PERMISO.VALIDAR_CIERRE_CAJA, true);
+
+      await pos.cargarPosDesdeDashboard();
+      await pos.cerrarOverlaysConocidos();
+      await asegurarCajaAbierta(pos);
+      await abrirDetalleCierre(pos);
+
+      const estado = await leerElementosDeMonto();
+      console.log(`[Validar cierre ACTIVADO] ${JSON.stringify(estado)}`);
+      await cerrarModalDetalleCierre();
+      expect(estado.kpiVentasTotales, 'La fila de KPIs "Ventas Totales" no debería estar visible con el permiso activado').toBe(false);
+      expect(estado.resumenCierre, '"Resumen de cierre" no debería estar visible con el permiso activado').toBe(false);
+      expect(estado.reporteAvanzado, '"Mostrar Reporte Avanzado" no debería estar visible con el permiso activado').toBe(false);
+      expect(estado.diferencia, '"Diferencia" no debería estar visible con el permiso activado').toBe(false);
+      expect(estado.tabsMoneda, 'Deberían quedar solo 2 tabs de moneda (General/Facturas) con el permiso activado').toBeLessThanOrEqual(2);
+    });
+
+    try {
+      await test.step('Desactivar el permiso y validar que el modal vuelve a mostrar todo el detalle normal', async () => {
+        await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
+        await permisos.establecerPermiso(PERMISO.VALIDAR_CIERRE_CAJA, false);
+
+        await permisos.recargarPos();
+        await asegurarCajaAbierta(pos);
+        await abrirDetalleCierre(pos);
+
+        const estado = await leerElementosDeMonto();
+        console.log(`[Validar cierre DESACTIVADO] ${JSON.stringify(estado)}`);
+        await cerrarModalDetalleCierre();
+        expect(estado.kpiVentasTotales, 'La fila de KPIs "Ventas Totales" debería estar visible con el permiso desactivado').toBe(true);
+        expect(estado.resumenCierre, '"Resumen de cierre" debería estar visible con el permiso desactivado').toBe(true);
+        expect(estado.reporteAvanzado, '"Mostrar Reporte Avanzado" debería estar visible con el permiso desactivado').toBe(true);
+        expect(estado.diferencia, '"Diferencia" debería estar visible con el permiso desactivado').toBe(true);
+        expect(estado.tabsMoneda, 'Deberían volver a aparecer más de 2 tabs de moneda con el permiso desactivado').toBeGreaterThan(2);
+      });
+    } finally {
+      await test.step('Restaurar el permiso a su estado original (inactivo)', async () => {
+        await permisos.irARolesYPermisos(ROL_ADMINISTRADOR);
+        await permisos.establecerPermiso(PERMISO.VALIDAR_CIERRE_CAJA, false);
+        await permisos.esperarPermiso(ROL_ADMINISTRADOR, PERMISO.VALIDAR_CIERRE_CAJA, false);
+      });
+    }
+  });
+
+
+  // Un único test cubre "Abrir caja aún pendiente de aprobación" (567) y
+  // "Cambiar estado de cierres de caja" (674) juntos — nunca en tests
+  // separados: ambos dependen del mismo cierre real pendiente generado con
+  // VALIDAR_CIERRE_CAJA (673) activo, y `fullyParallel: true`
+  // (playwright.config.ts) no garantiza orden ni aislamiento entre tests
+  // que toquen la misma cola GLOBAL de "Cierres pendientes" (compartida con
+  // cierres reales de otros usuarios) — separarlos habría arriesgado que
+  // corrieran en paralelo y chocaran togleando los mismos permisos de rol.
+  // Confirmado en vivo (no en la descripción original de 2 permisos
+  // independientes) que 567 solo tiene efecto observable con 673 activo, y
+  // que la aprobación real vive en Reportes → "Cierres de Caja"
+  // (`/reports/cashReport`), identificando el cierre propio SIEMPRE por el
+  // `cash_id` real devuelto por `closePosCash` — nunca por "la primera fila
+  // pendiente" de esa cola compartida.
+  //
+  // Togglea los 3 permisos vía el modal "Permisos del POS" (`abrirModalPermisosDelPos()`
+  // + `establecerPermisoEnModalPos()`), no vía `irARolesYPermisos()`: este
+  // escenario ya necesita generar y aprobar un cierre real de por medio (el
+  // más largo y sensible a la latencia de toda la suite), y togglear sin
+  // salir del POS evita el ciclo completo de ida y vuelta a
+  // `/roleAdmin/roleAdmin` — confirmado en vivo que ambos caminos escriben el
+  // mismo permiso real (mismo endpoint `SetPermissionToRole`/`deletePermissionRole`).
+  test('Abrir caja aún pendiente de aprobación + Cambiar estado de cierres de caja — flujo completo de aprobación', async ({ page }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const pos = new PosPage(page);
+    const permisos = new PosPermisos(pos, page);
+
+    let cashIdPendiente: number | null = null;
+
+    // Todo el escenario vive dentro de try/finally, incluida la preparación:
+    // confirmado en vivo que un fallo durante "Preparar" (p. ej. el bug de
+    // sistema intermitente de HTTP 500 en VALIDAR_CIERRE_CAJA) puede dejar
+    // permisos a medio togglear si esta sección queda fuera del try — el
+    // finally siempre debe correr, sin importar en qué paso falle el test.
+    try {
+      await test.step('Preparar: activar Validar cierre de caja (dependencia) y generar un cierre real propio pendiente de aprobación', async () => {
+        await pos.cargarPosDesdeDashboard();
+        await pos.cerrarOverlaysConocidos();
+
+        await permisos.abrirModalPermisosDelPos();
+        await permisos.expandirSeccionCajaEnModalPos();
+        await permisos.establecerPermisoEnModalPos(PERMISO.VALIDAR_CIERRE_CAJA, true);
+        await permisos.establecerPermisoEnModalPos(PERMISO.ABRIR_CAJA_PENDIENTE_APROBACION, false);
+        await permisos.cerrarModalPermisosDelPos();
+
+        await pos.irAlPos();
+        await pos.cerrarOverlaysConocidos();
+        await asegurarCajaAbierta(pos);
+        await abrirDetalleCierre(pos);
+        await pos.completarFormularioCerrarCaja('0', '0', 'Permisos — flujo de aprobación de cierres');
+
+        const respuestaCierrePromise = page.waitForResponse((res) => res.url().includes('closePosCash'), { timeout: TIMEOUTS.GUARDADO });
+        await pos.confirmarCerrarCaja();
+        const respuesta = await respuestaCierrePromise;
+        const body = (await respuesta.text().catch(() => '')).trim();
+        // Confirmado en vivo: closePosCash responde el cash_id como texto
+        // plano ("3737"), no como JSON — se acepta ese caso directamente
+        // antes de intentar los patrones JSON como respaldo.
+        const match = body.match(/"id"\s*:\s*"?(\d+)/) || body.match(/cash_id"?\s*[:=]\s*"?(\d+)/i);
+        cashIdPendiente = /^\d+$/.test(body) ? Number(body) : (match ? Number(match[1]) : null);
+        console.log(`Cierre propio generado, cash_id=${cashIdPendiente} (body: ${body.slice(0, 200)})`);
+        expect(cashIdPendiente, 'No se pudo leer el cash_id real del cierre recién generado (respuesta de closePosCash)').not.toBeNull();
+        await expect(pos.modalCerrarCaja).toBeHidden();
+      });
+
+      await test.step('Con "Abrir caja aún pendiente de aprobación" DESACTIVADO: la apertura de una caja nueva queda bloqueada', async () => {
+        await pos.irAlPos();
+        await pos.cerrarOverlaysConocidos();
+        await expect(pos.modalAbrirCaja).toBeVisible({ timeout: TIMEOUTS.NAVIGATE });
+        await pos.modalAbrirCaja.locator('#btn_open_cash').click({ timeout: 8_000 }).catch(() => {});
+        await page.waitForTimeout(1_500);
+
+        const siguecerrada = await pos.modalAbrirCajaVisible();
+        console.log(`[Abrir pendiente DESACTIVADO] ¿modal Abrir Caja sigue visible (bloqueado)?=${siguecerrada}`);
+        expect(siguecerrada, 'La apertura de una caja nueva debería quedar bloqueada mientras el cierre anterior no esté aprobado').toBe(true);
+      });
+
+      await test.step('Con "Abrir caja aún pendiente de aprobación" ACTIVADO: la apertura se permite aunque el cierre anterior siga sin aprobar', async () => {
+        await permisos.abrirModalPermisosDelPos();
+        await permisos.expandirSeccionCajaEnModalPos();
+        await permisos.establecerPermisoEnModalPos(PERMISO.ABRIR_CAJA_PENDIENTE_APROBACION, true);
+        await permisos.cerrarModalPermisosDelPos();
+
+        await permisos.recargarPos();
+        await expect(pos.modalAbrirCaja).toBeVisible({ timeout: TIMEOUTS.NAVIGATE });
+        await pos.completarAperturaCaja();
+
+        const seAbrio = await pos.modalAbrirCaja.isHidden().catch(() => false);
+        console.log(`[Abrir pendiente ACTIVADO] ¿se abrió la caja?=${seAbrio}`);
+        expect(seAbrio, 'La apertura de una caja nueva debería funcionar con el permiso activado, pese al cierre anterior sin aprobar').toBe(true);
+      });
+
+      await test.step('Con "Cambiar estado de cierres de caja" DESACTIVADO: el botón "Validar" no existe para el cierre pendiente', async () => {
+        await permisos.abrirModalPermisosDelPos();
+        await permisos.expandirSeccionCajaEnModalPos();
+        await permisos.establecerPermisoEnModalPos(PERMISO.CAMBIAR_ESTADO_CIERRES_CAJA, false);
+        await permisos.cerrarModalPermisosDelPos();
+
+        await permisos.irAReporteCierresDeCaja();
+        const visible = await permisos.botonValidarCierre(cashIdPendiente!).isVisible().catch(() => false);
+        console.log(`[Cambiar estado DESACTIVADO] botón "Validar" visible=${visible}`);
+        expect(visible, 'El botón "Validar" no debería existir para el cierre pendiente con el permiso desactivado').toBe(false);
+      });
+
+      await test.step('Con "Cambiar estado de cierres de caja" ACTIVADO: aprobar el cierre pendiente y validar que deja de aparecer como pendiente', async () => {
+        await pos.irAlPos();
+        await pos.cerrarOverlaysConocidos();
+        await asegurarCajaAbierta(pos);
+        await permisos.abrirModalPermisosDelPos();
+        await permisos.expandirSeccionCajaEnModalPos();
+        await permisos.establecerPermisoEnModalPos(PERMISO.CAMBIAR_ESTADO_CIERRES_CAJA, true);
+        await permisos.cerrarModalPermisosDelPos();
+
+        await permisos.irAReporteCierresDeCaja();
+        await expect(
+          permisos.botonValidarCierre(cashIdPendiente!),
+          'El botón "Validar" debería existir para el cierre pendiente con el permiso activado'
+        ).toBeVisible({ timeout: TIMEOUTS.NAVIGATE });
+
+        await permisos.aprobarCierrePendiente(cashIdPendiente!);
+
+        await permisos.irAReporteCierresDeCaja();
+        const sigueVisible = await permisos.botonValidarCierre(cashIdPendiente!).isVisible().catch(() => false);
+        console.log(`[Cambiar estado] ¿el cierre sigue pendiente tras aprobarlo?=${sigueVisible}`);
+        expect(sigueVisible, 'El cierre ya no debería aparecer como pendiente tras aprobarlo').toBe(false);
+      });
+    } finally {
+      await test.step('Red de seguridad: aprobar el cierre propio si algún paso anterior falló antes de aprobarlo', async () => {
+        if (cashIdPendiente === null) return;
+        await permisos.irAReporteCierresDeCaja();
+        const sigueVisible = await permisos.botonValidarCierre(cashIdPendiente).isVisible().catch(() => false);
+        if (sigueVisible) {
+          console.log(`[Red de seguridad] cash_id=${cashIdPendiente} seguía pendiente, aprobando vía API directa.`);
+          await permisos.aprobarCierrePendienteViaApiDirecta(cashIdPendiente);
+        }
+      });
+
+      await test.step('Restaurar los 3 permisos a su estado original (Validar cierre y Cambiar estado inactivos, Abrir pendiente activo)', async () => {
+        await pos.irAlPos();
+        await pos.cerrarOverlaysConocidos();
+        await asegurarCajaAbierta(pos);
+        await permisos.abrirModalPermisosDelPos();
+        await permisos.expandirSeccionCajaEnModalPos();
+        await permisos.establecerPermisoEnModalPos(PERMISO.CAMBIAR_ESTADO_CIERRES_CAJA, false);
+        await permisos.establecerPermisoEnModalPos(PERMISO.VALIDAR_CIERRE_CAJA, false);
+        await permisos.establecerPermisoEnModalPos(PERMISO.ABRIR_CAJA_PENDIENTE_APROBACION, true);
+        await permisos.cerrarModalPermisosDelPos();
+
+        // Verificación final independiente (fuente de verdad real, no solo el estado del modal).
+        await permisos.esperarPermiso(ROL_ADMINISTRADOR, PERMISO.CAMBIAR_ESTADO_CIERRES_CAJA, false);
+        await permisos.esperarPermiso(ROL_ADMINISTRADOR, PERMISO.VALIDAR_CIERRE_CAJA, false);
+        await permisos.esperarPermiso(ROL_ADMINISTRADOR, PERMISO.ABRIR_CAJA_PENDIENTE_APROBACION, true);
       });
     }
   });

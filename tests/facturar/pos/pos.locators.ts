@@ -113,6 +113,10 @@ export const L = {
   // abierta — descubierto inspeccionando el DOM real, no asumido.
   MENU_CAJA_BTN:        '#menu_cash',
   MENU_CAJA_ITEM_F12:   'Abrir/Cerrar Caja',
+  // "(F8) Historial Mov. de Caja" — confirmado en vivo que es un ítem propio
+  // del menú "Caja" del encabezado, distinto de "(F9) Movimientos de caja"
+  // (ese no depende del permiso "Ver reporte de movimientos de caja").
+  MENU_CAJA_ITEM_HISTORIAL_MOVIMIENTOS: 'Historial Mov. de Caja',
   // El <ul> del menú "Caja" (componente MDL, mismo patrón que el menú de tres
   // puntos): al upgradearse queda envuelto en un div.mdl-menu__container, que es
   // el que gana la clase "is-visible" mientras el menú está desplegado —
@@ -128,6 +132,10 @@ export const L = {
   CIERRE_OBSERVACION:      '#closuse_cash_observation', // sic: typo real de la app ("closuse")
   CIERRE_BTN_CERRAR:       '#btn_close_cash',
   CIERRE_BTN_CANCELAR:     'button[data-dismiss="modal"]',
+  // Píldora "Total general: $X" del encabezado del modal — confirmado en vivo
+  // que es el elemento real que controla el permiso "Ocultar total general en
+  // cierre de caja" (id 558).
+  CIERRE_TOTAL_GENERAL:    '#total_cash_entries',
 
   // Menú de tres puntos del encabezado y sus opciones de historial. El botón
   // (#demo-menu-lower-left) solo recibe el upgrade "MaterialButton" (estilo);

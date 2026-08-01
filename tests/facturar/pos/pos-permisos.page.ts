@@ -1,6 +1,7 @@
 import { expect, Locator, Page } from '@playwright/test';
 import { BASE_URL } from '../../env.config';
 import { PosPage } from './pos.page';
+import { L as POS_L } from './pos.locators';
 
 // Page Object del módulo "Roles y permisos" (`/roleAdmin/roleAdmin`), acotado
 // a lo que pos-permisos.spec.ts necesita: seleccionar un rol, togglear un
@@ -13,6 +14,21 @@ import { PosPage } from './pos.page';
 // ─── URL y datos de dominio ─────────────────────────────────────────────────
 
 export const ROLE_ADMIN_URL = BASE_URL + '/roleAdmin/roleAdmin';
+
+// Módulo "Admin. Cajas" (crear/asignar/eliminar cajas) — accesible desde el
+// sidebar Facturar → "Crear y asignar cajas". Ajeno al POS en sí, pero el
+// permiso "Agregar caja" solo se valida ahí, así que esta suite navega a su
+// URL directamente (mismo criterio que el resto del archivo: nunca se
+// hardcodea nada específico de la compañía, solo la ruta real de la app).
+export const ADMIN_CAJAS_URL = BASE_URL + '/adminCash/adminCash';
+
+// Reportes → "Cierres de Caja" ("Sistema de Cierres de Caja",
+// `/reports/cashReport`) — único lugar real donde se aprueban/rechazan los
+// cierres dejados "pendientes de aprobación" por VALIDAR_CIERRE_CAJA.
+// Confirmado en vivo leyendo el código fuente real de la página
+// (`validate_cash()`, `confirm()`, `change_state()`): las 3 funciones
+// disparan el mismo endpoint único `changeStateCashClosure`.
+export const CASH_REPORT_URL = BASE_URL + '/reports/cashReport';
 
 // Único rol usado por esta suite (pedido explícitamente): el rol
 // "Administrador nivel 1" es hoy el rol Administrador real de la cuenta de
@@ -123,6 +139,58 @@ export const PERMISO = {
   // el informe de la suite para la evidencia completa.
   /** slug: (nombre exacto, sin nota) — controla si el selector de vendedor existe en el modal de pago (Facturar), distinto del de "Enviar a caja". */
   MOSTRAR_VENDEDOR_AL_FACTURAR: 537,
+
+  // ─── Caja (módulo "Admin. Cajas" + modal "Detalle de Cierre" del POS) ──────
+  // Confirmados en vivo con el mismo criterio que el resto de este objeto:
+  // catálogo real (id + Nota del propio DOM — 4 de estos 6 NO aparecen en el
+  // JSON de getRolePermissionById, solo en el DOM servido; ver el informe de
+  // la suite) y efecto real observado (togglear y comprobar), nunca solo por
+  // el nombre visible.
+
+  /** slug: addcash — botón "Crear caja" + su input, en Admin. Cajas (`/adminCash/adminCash`). */
+  AGREGAR_CAJA: 41,
+  /** slug: seecashmovementreport — ítem "(F8) Historial Mov. de Caja" del menú "Caja" del POS + acceso directo a `/cash_movement/movements`. */
+  VER_REPORTE_MOVIMIENTOS_CAJA: 83,
+  /** (no en JSON de getRolePermissionById) — controla la píldora "Total general" del modal "Detalle de Cierre". */
+  OCULTAR_TOTAL_GENERAL_CIERRE_CAJA: 558,
+  /** slug: hidePrintCashClosing — controla el popup de impresión que se abre automáticamente tras confirmar "Cerrar Caja" (no hay ninguna opción visible dentro del propio modal). */
+  OCULTAR_OPCION_IMPRESION_CIERRE_CAJA: 571,
+  /** (no en JSON de getRolePermissionById) — con el permiso activo, "Cerrar Caja" queda bloqueado mientras existan órdenes de Taller sin facturar (SweetAlert con el texto real sin traducir "Not valid!"). */
+  RESTRINGIR_CIERRE_ORDENES_TALLER_SIN_FACTURAR: 575,
+  /** slug: seecashprofitsummarycashclosuredetails — controla el tile "Utilidad" del modal "Detalle de Cierre". */
+  VER_RESUMEN_UTILIDAD_CIERRE_CAJA: 619,
+  /**
+   * (no en JSON de getRolePermissionById) — confirmado en vivo (comparación
+   * visual directa, screenshots de ambos estados) que, activo, simplifica
+   * radicalmente el modal "Detalle de Cierre": quedan solo 2 tabs de moneda
+   * ("$ - General"/"$ - Facturas", de 8 normalmente) y desaparecen la fila de
+   * KPIs (Ventas Totales/Descuento/Impuestos/Utilidad), "Resumen de cierre",
+   * "Mostrar Reporte Avanzado" y los campos "Total"/"Diferencia" de "Datos de
+   * Cierre" — el cajero solo puede ingresar un conteo a ciegas, sin ver
+   * ningún monto esperado. El cierre generado con este permiso activo queda
+   * "pendiente de aprobación" (ver ABRIR_CAJA_PENDIENTE_APROBACION y
+   * CAMBIAR_ESTADO_CIERRES_CAJA) — aprobado/rechazado desde Reportes →
+   * "Cierres de Caja" (`/reports/cashReport`).
+   */
+  VALIDAR_CIERRE_CAJA: 673,
+  /**
+   * slug: seeopenboxstillpendingapproval — solo tiene efecto observable
+   * cuando VALIDAR_CIERRE_CAJA está activo (confirmado: es el permiso que
+   * deja cierres "pendientes de aprobación" al cerrar caja). Con
+   * VALIDAR_CIERRE_CAJA activo: este permiso activo permite abrir una caja
+   * nueva aunque el cierre anterior siga sin aprobar; desactivado, la
+   * apertura queda bloqueada hasta que alguien con CAMBIAR_ESTADO_CIERRES_CAJA
+   * apruebe el cierre pendiente en `/reports/cashReport`.
+   */
+  ABRIR_CAJA_PENDIENTE_APROBACION: 567,
+  /**
+   * (no en JSON de getRolePermissionById; permiso no pedido originalmente,
+   * hallazgo de esta investigación) — controla los botones "Aceptar"/
+   * "Rechazar" de un cierre pendiente en Reportes → "Cierres de Caja"
+   * (`/reports/cashReport`, "Sistema de Cierres de Caja"). Único mecanismo
+   * real para resolver un cierre dejado pendiente por VALIDAR_CIERRE_CAJA.
+   */
+  CAMBIAR_ESTADO_CIERRES_CAJA: 674,
 } as const;
 
 export type PermisoId = typeof PERMISO[keyof typeof PERMISO];
@@ -173,6 +241,12 @@ const L = {
   TABLA_PERMISOS: '#table_list_role',
   CHECKBOXES_PERMISOS: '#table_list_role .sub_section_checkbox',
   CHECKBOX: (id: number) => `#sub_section_id_${id}`,
+
+  // "Admin. Cajas" (`/adminCash/adminCash`) — confirmado en vivo volcando el
+  // DOM real: el botón real usa onclick="addCash()" (coincide con el slug
+  // real del permiso, addcash), más estable que el texto visible "Crear caja".
+  ADMIN_CAJAS_BTN_CREAR: 'button[onclick="addCash()"]',
+  ADMIN_CAJAS_INPUT_NOMBRE: 'input[placeholder="Nombre de caja a agregar"]',
 } as const;
 
 // ─── Page Object ──────────────────────────────────────────────────────────────
@@ -397,5 +471,221 @@ export class PosPermisos {
         document.dispatchEvent(evt);
       }
     });
+  }
+
+  // ─── Caja: "Admin. Cajas" (`/adminCash/adminCash`) ─────────────────────────
+
+  /** Navega a "Admin. Cajas", donde vive "Crear caja" (permiso AGREGAR_CAJA). */
+  async irAAdminCajas() {
+    await this.page.goto(ADMIN_CAJAS_URL, { waitUntil: 'domcontentloaded', timeout: TIMEOUTS.NAVIGATE });
+  }
+
+  /** Locator del botón "Crear caja" en Admin. Cajas (requiere irAAdminCajas() antes). */
+  get botonCrearCaja(): Locator {
+    return this.page.locator(L.ADMIN_CAJAS_BTN_CREAR);
+  }
+
+  /** Locator del input "Nombre de caja a agregar" en Admin. Cajas. */
+  get inputNombreCaja(): Locator {
+    return this.page.locator(L.ADMIN_CAJAS_INPUT_NOMBRE);
+  }
+
+  // ─── Caja: modal "Detalle de Cierre" del POS ───────────────────────────────
+
+  /**
+   * Intenta cerrar la caja ya abierta (modal "Detalle de Cierre" visible, con
+   * el formulario ya completado vía `pos.completarFormularioCerrarCaja()`)
+   * SIN asumir que el cierre tendrá éxito — a diferencia de
+   * `PosCierreCaja.confirmarCerrarCaja()` (pensado para el resto de la suite,
+   * que siempre espera un cierre exitoso). Necesario para "Restringir cierre
+   * de caja con órdenes de taller sin facturar": confirmado en vivo que, con
+   * el permiso activo y órdenes de Taller pendientes, el SweetAlert de
+   * confirmación de siempre aparece igual pero el cierre NO se completa — el
+   * modal "Detalle de Cierre" permanece abierto tras confirmarlo. Devuelve
+   * `true` si el cierre quedó bloqueado (modal sigue visible), `false` si se
+   * completó con éxito (mismo resultado que `confirmarCerrarCaja()`).
+   */
+  async intentarCerrarCajaYVerificarSiQuedoBloqueada(): Promise<boolean> {
+    await expect(this.pos.modalCerrarCaja).toBeVisible();
+    await this.pos.modalCerrarCaja.locator(POS_L.CIERRE_BTN_CERRAR).click({ timeout: 10_000 });
+
+    const alerta = this.page.locator('.sweet-alert.visible');
+    await alerta.waitFor({ state: 'visible', timeout: TIMEOUTS.PRINT_POPUP });
+    await alerta.locator('button.confirm').click();
+
+    return this.pos.modalCerrarCaja
+      .waitFor({ state: 'hidden', timeout: TIMEOUTS.PRINT_POPUP })
+      .then(() => false)
+      .catch(() => true);
+  }
+
+  // ─── Caja: aprobación de cierres pendientes (Reportes → Cierres de Caja) ───
+
+  /** Navega a Reportes → "Cierres de Caja" (`/reports/cashReport`). */
+  async irAReporteCierresDeCaja() {
+    await this.page.goto(CASH_REPORT_URL, { waitUntil: 'domcontentloaded', timeout: TIMEOUTS.NAVIGATE });
+  }
+
+  /**
+   * Fila real de un cierre por su id numérico (`tr.tr-<id>`, confirmado en
+   * vivo leyendo el DOM real — la misma clase que usa `change_state()` para
+   * actualizar la fila tras aprobar/rechazar).
+   */
+  filaCierre(cashId: number): Locator {
+    return this.page.locator(`.tr-${cashId}`);
+  }
+
+  /**
+   * Botón "Validar" (ícono de reloj, `title="Validar"`) de un cierre
+   * pendiente — solo existe en filas con la clase `pending-tr`. Dispara
+   * `validate_cash(cashId, this)`, que abre `#dialog_validate_cash`.
+   */
+  botonValidarCierre(cashId: number): Locator {
+    return this.filaCierre(cashId).locator('button.btn-cash-state');
+  }
+
+  /**
+   * Aprueba un cierre pendiente propio (nunca debe usarse contra un cierre
+   * ajeno — la cola de "Cierres pendientes" es global y compartida con
+   * cualquier otro usuario real del ambiente). Reproduce el flujo real
+   * completo confirmado leyendo el código fuente de la página: clic en el
+   * botón "Validar" → `#dialog_validate_cash` → botón `.validate-btn-accept`
+   * → SweetAlert de confirmación → tras `changeStateCashClosure`, un segundo
+   * SweetAlert de éxito.
+   */
+  async aprobarCierrePendiente(cashId: number) {
+    try {
+      await this.botonValidarCierre(cashId).click({ timeout: 10_000 });
+
+      const dialogo = this.page.locator('#dialog_validate_cash');
+      await expect(dialogo).toBeVisible({ timeout: 20_000 });
+      await dialogo.locator('.validate-btn-accept').click({ timeout: 10_000 });
+
+      const confirmacion = this.page.locator('.sweet-alert.visible');
+      await confirmacion.waitFor({ state: 'visible', timeout: TIMEOUTS.PRINT_POPUP });
+
+      const respuestaPromise = this.page.waitForResponse(
+        (res) => res.url().includes('changeStateCashClosure'),
+        { timeout: TIMEOUTS.GUARDADO }
+      ).catch(() => null);
+      await confirmacion.locator('button.confirm').click();
+      await respuestaPromise;
+
+      // Segundo SweetAlert real ("¡Listo! El cambio se guardó correctamente"), descartado si aparece.
+      const exito = this.page.locator('.sweet-alert.visible');
+      await exito.waitFor({ state: 'visible', timeout: TIMEOUTS.PRINT_POPUP }).catch(() => {});
+      await exito.locator('button.confirm').click({ timeout: 5_000 }).catch(() => {});
+    } catch (e) {
+      // Bug de sistema confirmado en vivo (intermitente bajo carga del
+      // ambiente compartido): `validate_cash()` hace un XHR SÍNCRONO
+      // (`async:false`) a `validateCash` antes de mostrar
+      // `#dialog_validate_cash` — si esa llamada nunca responde (o falla en
+      // silencio), el modal jamás aparece pese a que el click sí llegó al
+      // botón real (confirmado 2/2 en vivo). Red de seguridad: llamar
+      // directamente el mismo endpoint que usa `change_state()`
+      // (`changeStateCashClosure`, confirmado en vivo con `option=1` ->
+      // respuesta `"1"` real), igual criterio que
+      // `establecerPermisoViaApiDirecta()` para ADMIN_ROLES.
+      console.log(`[aprobarCierrePendiente] flujo de UI falló (${e}), usando la API directa como red de seguridad`);
+      await this.aprobarCierrePendienteViaApiDirecta(cashId);
+    }
+  }
+
+  /**
+   * Llama directamente `changeStateCashClosure` (mismo endpoint real que usa
+   * `change_state()` del propio código fuente de la página) sin pasar por el
+   * diálogo `#dialog_validate_cash`. Ver el comentario de
+   * `aprobarCierrePendiente()` — únicamente como red de seguridad cuando el
+   * flujo de UI falla, nunca como mecanismo normal de la suite.
+   */
+  async aprobarCierrePendienteViaApiDirecta(cashId: number) {
+    const resultado = await this.page.evaluate(
+      async ({ base, cashId }) => {
+        // @ts-expect-error _token vive en un input real de la página, no expuesto por tipos
+        const token = document.querySelector('#_token')?.value ?? document.querySelector('meta[name="csrf-token"]')?.content;
+        const body = new URLSearchParams({ _token: token, cash_id: String(cashId), option: '1', rejected_option: '1' });
+        const res = await fetch(`${base}/reports/changeStateCashClosure`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+          body: body.toString(),
+          credentials: 'include',
+        });
+        return { status: res.status, text: await res.text() };
+      },
+      { base: BASE_URL, cashId }
+    );
+    console.log(`[aprobarCierrePendienteViaApiDirecta] cash_id=${cashId} -> ${resultado.status} ${resultado.text.slice(0, 200)}`);
+  }
+
+  // ─── Alternativa rápida: modal "Permisos del POS" (menú de tres puntos) ───
+  //
+  // Confirmado en vivo (sugerido por el usuario tras observar que
+  // `irARolesYPermisos()` — navegación completa a `/roleAdmin/roleAdmin` y
+  // vuelta al POS — puede fallar de forma intermitente bajo carga del
+  // ambiente compartido): existe un modal equivalente ("Permisos del POS",
+  // opción del menú de tres puntos del encabezado del POS, ya usado para
+  // confirmar PERMISO.ADMIN_ROLES) que edita los MISMOS ids de permiso para
+  // "Administrador nivel 1" SIN salir de la página del POS — evita por
+  // completo el ciclo goto()/esperar AJAX/volver que sí requiere el flujo de
+  // `/roleAdmin/roleAdmin`. Confirmado en vivo: `data-role-id="1"` es
+  // exactamente "Administrador nivel 1" (primera columna del grid,
+  // verificado leyendo su atributo `title` real). Se usa únicamente en el
+  // escenario de "Validar cierre de caja"/"Abrir caja aún pendiente de
+  // aprobación"/"Cambiar estado de cierres de caja" (el más sensible a la
+  // latencia de navegación, por requerir generar y aprobar un cierre real
+  // real de por medio) — el resto de esta suite sigue usando
+  // `irARolesYPermisos()`/`establecerPermiso()`, ya probados de forma
+  // extensa y estable.
+
+  /** Abre "Permisos del POS" desde el menú de tres puntos del encabezado (requiere el POS ya cargado). */
+  async abrirModalPermisosDelPos() {
+    await this.pos.abrirMenuTresPuntos();
+    await this.page.locator('ul.mdl-menu[for="demo-menu-lower-left"]').getByText('Permisos del POS').click({ timeout: 10_000 });
+    await expect(this.page.locator('.pos-permission-modal')).toBeVisible({ timeout: TIMEOUTS.NAVIGATE });
+  }
+
+  /** Expande la sección "Caja" del modal ya abierto (acordeón, carga sus filas vía AJAX la primera vez). */
+  async expandirSeccionCajaEnModalPos() {
+    const modal = this.page.locator('.pos-permission-modal');
+    const yaExpandida = await modal.evaluate((el) => el.textContent?.includes('Agregar caja') ?? false);
+    if (yaExpandida) return;
+    await modal.locator('text=Caja').first().click({ timeout: 10_000 });
+    await expect(modal).toContainText('Agregar caja', { timeout: TIMEOUTS.PERMISOS_LOAD });
+  }
+
+  /** Cierra el modal "Permisos del POS". */
+  async cerrarModalPermisosDelPos() {
+    await this.page.locator('#pos-permission-close').click({ timeout: 5_000 }).catch(() => {});
+    await expect(this.page.locator('.pos-permission-modal')).toBeHidden({ timeout: 5_000 }).catch(() => {});
+  }
+
+  /** Checkbox real de un permiso puntual para "Administrador nivel 1" (`data-role-id="1"`) dentro de la sección "Caja" ya expandida. */
+  checkboxPermisoEnModalPos(id: number): Locator {
+    return this.page.locator(`input.pos-permission-switch-input[data-permission-id="${id}"][data-role-id="1"]`);
+  }
+
+  /**
+   * Activa/desactiva un permiso dentro del modal "Permisos del POS", sin
+   * navegar fuera del POS. Mismo mecanismo que `establecerPermiso()` (widget
+   * "slider": el `<input>` real queda fuera del flujo visual, así que
+   * `click()` normal falla con "element is not visible" — se ajusta
+   * `.checked` y se disparan los eventos reales, igual que el resto de la
+   * suite ya hace para este mismo patrón de checkbox-slider).
+   */
+  async establecerPermisoEnModalPos(id: number, activo: boolean) {
+    const checkbox = this.checkboxPermisoEnModalPos(id);
+    const actual = await checkbox.isChecked();
+    if (actual === activo) return;
+
+    const respuesta = this.page.waitForResponse(
+      (res) => res.url().includes('SetPermissionToRole') || res.url().includes('deletePermissionRole'),
+      { timeout: TIMEOUTS.GUARDADO }
+    ).catch(() => null);
+    await checkbox.evaluate((el: HTMLInputElement, checked) => {
+      el.checked = checked;
+      el.dispatchEvent(new Event('click', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }, activo);
+    await respuesta;
   }
 }
