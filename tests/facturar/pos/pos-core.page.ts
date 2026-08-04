@@ -3514,7 +3514,13 @@ export class PosCore {
    * general, impuestos) haciendo click en el bloque "Total:" — confirmado
    * en vivo que está oculto por defecto (showBillDetail()) y que, sin
    * expandirlo, el campo de porcentaje de descuento general
-   * (DESCUENTO_GENERAL_PORCENTAJE) no es interactuable.
+   * (DESCUENTO_GENERAL_PORCENTAJE) no es interactuable. Este bloque
+   * (`.content-total-bill`) vive en el footer del carrito, FUERA de
+   * `#dialog_payment` — debe llamarse antes de abrir el modal de pago
+   * (`presionarFacturar()`/`abrirModalDePago()`), nunca después: con el
+   * modal ya abierto, su backdrop queda por encima y un click normal
+   * termina interceptado por contenido del modal (confirmado en vivo,
+   * causa raíz real de un intento con el orden de llamada invertido).
    */
   async mostrarDetalleAvanzadoFactura() {
     const campoPorcentaje = this.page.locator(L.DESCUENTO_GENERAL_PORCENTAJE);

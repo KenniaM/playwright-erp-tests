@@ -76,6 +76,21 @@ export const SUBMODULOS_VENTAS: SubmoduloVentas[] = [
   },
 ];
 
+// ─── Histórico de Ventas: detalle de factura ───────────────────────────────────
+
+/**
+ * Datos reales del panel de detalle de una factura en Histórico de Ventas
+ * (`.receip-v2-order-item`, confirmado en vivo volcando su DOM real: dos
+ * bloques `<span class="order-label">`/`<span class="order-value">`, uno
+ * para "Número Orden de Compra" y otro para "Número Orden de Reparación").
+ * Ambos campos vienen vacíos ("—") cuando la factura no tiene ese origen —
+ * nunca `undefined`, el propio template siempre renderiza el bloque.
+ */
+export type DetalleFacturaHistorico = {
+  numeroOrdenCompra: string;
+  numeroOrdenReparacion: string;
+};
+
 // ─── Page Object ──────────────────────────────────────────────────────────────
 
 export class VentasPage {
@@ -84,5 +99,69 @@ export class VentasPage {
   /** Único punto de entrada a cualquier submódulo de Ventas. */
   async irA(url: string) {
     await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: TIMEOUTS.NAVIGATE });
+  }
+
+
+  // ─── Histórico de Ventas ──────────────────────────────────────────────────
+  //
+  // Único submódulo de Ventas con flujo de negocio propio hoy (buscar una
+  // factura y verificar su origen real) — el resto sigue cubierto solo por
+  // el patrón navegación (ventas-navegacion.spec.ts). Los métodos de esta
+  // sección se agregan aquí (no en un archivo aparte) porque el módulo es
+  // pequeño: mismo criterio que documenta CLAUDE.md para módulos que no
+  // alcanzan la escala de POS.
+
+  /**
+   * Abre "Histórico de Ventas" y busca por el término dado usando el
+   * buscador real de la pantalla (soporta número de factura, orden de
+   * compra, orden de reparación o proforma — confirmado en vivo por su
+   * propio placeholder). Espera la respuesta real de red antes de continuar
+   * en vez de un tiempo fijo.
+   */
+  async buscarEnHistoricoVentas(termino: string) {
+    await this.irA(SUBMODULOS_VENTAS[0].url);
+    const buscador = this.page.locator('input[placeholder="Buscar por factura, orden de compra, orden de reparación o proforma..."]');
+    await buscador.waitFor({ state: 'visible', timeout: TIMEOUTS.CARGA });
+
+    await buscador.fill(termino);
+    await buscador.press('Enter');
+    await this.page.waitForLoadState('networkidle', { timeout: TIMEOUTS.CARGA }).catch(() => {});
+  }
+
+  /**
+   * Abre el detalle de una factura ya visible en la lista filtrada
+   * (`buscarEnHistoricoVentas()` primero), localizándola por su propio
+   * consecutivo real (`span.receip-v2-sale-consecutive`, texto real
+   * "Consec. <numeroFactura>" — confirmado en vivo volcando su DOM) en vez
+   * de buscar el texto en toda la página, que puede coincidir con otros
+   * elementos (fecha, monto) que contengan el mismo número.
+   */
+  async abrirFacturaEnHistorico(numeroFactura: string) {
+    const tarjeta = this.page.locator('.receip-v2-sale-consecutive', { hasText: `Consec. ${numeroFactura}` }).first();
+    await tarjeta.waitFor({ state: 'visible', timeout: TIMEOUTS.CARGA });
+    await tarjeta.click();
+
+    await this.page.locator('.receip-v2-order-item', { hasText: 'Número Orden de Reparación' })
+      .waitFor({ state: 'visible', timeout: TIMEOUTS.CARGA });
+  }
+
+  /**
+   * Lee "Número Orden de Compra"/"Número Orden de Reparación" del panel de
+   * detalle YA ABIERTO (`abrirFacturaEnHistorico()`). Localiza cada bloque
+   * por su propio label real (`.order-label`), nunca por posición fija —
+   * confirmado en vivo que ambos bloques comparten la misma estructura
+   * (`.receip-v2-order-item` > `.order-label` + `.order-value`).
+   */
+  async leerDetalleFacturaAbierta(): Promise<DetalleFacturaHistorico> {
+    const leerValor = async (etiqueta: string) => {
+      const bloque = this.page.locator('.receip-v2-order-item', { hasText: etiqueta }).first();
+      const valor = await bloque.locator('.order-value').textContent();
+      return (valor ?? '').trim();
+    };
+
+    return {
+      numeroOrdenCompra: await leerValor('Número Orden de Compra'),
+      numeroOrdenReparacion: await leerValor('Número Orden de Reparación'),
+    };
   }
 }

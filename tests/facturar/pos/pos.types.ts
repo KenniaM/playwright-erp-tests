@@ -350,6 +350,136 @@ export type MetadatoProducto = {
   esFraccionado: boolean;
 };
 
+// ─── Tab General del modal "Detalle de Cierre" ─────────────────────────────────
+//
+// Estructura confirmada en vivo (investigación dedicada del módulo Cierre de
+// Caja, con una venta de contado y una a crédito reales ya facturadas antes
+// de abrir el modal) — ver los ids reales usados en cada campo en
+// pos.locators.ts (sección "Modal 'Detalle de Cierre' — Tab General").
+//
+// El ambiente de QA es compartido y sin limpieza (ver CLAUDE.md): una caja
+// puede llevar abierta varios días acumulando ventas de otras corridas antes
+// de que un escenario nuevo la inspeccione. Por eso `leerResumenTabGeneral()`
+// nunca se usa para afirmar un total absoluto — la validación real siempre
+// compara un snapshot ANTES vs. DESPUÉS de una operación conocida (venta,
+// abono, movimiento de caja) y verifica el DELTA, nunca el valor absoluto.
+export type ResumenTabGeneral = {
+  ventasTotales: number;
+  ventasContado: number;
+  ventasContadoCantidad: number;
+  ventasCredito: number;
+  descuento: number;
+  impuestos: number;
+  // null cuando el tile "Utilidad" no existe en el DOM — depende del permiso
+  // "Ver resumen de utilidad de caja en el detalle de cierre de caja" (id 619).
+  utilidad: number | null;
+  consolidadoTarjeta: {
+    ingreso: number;
+    abonos: number;
+    pagoInicial: number;
+    total: number;
+  };
+  metodoPago: {
+    efectivo: number;
+    tarjeta: number;
+    sinpe: number;
+    transaccion: number;
+  };
+  resumenCierre: {
+    apertura: number;
+    ventasEfectivo: number;
+    ingresoPagoInicial: number;
+    ingresoAbonos: number;
+    entradasMovCaja: number;
+    totalSalidas: number;
+  };
+  datosCierre: {
+    total: number;
+    diferencia: number;
+  };
+  // null cuando la píldora "Total general" no existe/no es visible — depende
+  // del permiso "Ocultar total general en cierre de caja" (id 558).
+  totalGeneral: number | null;
+};
+
+// ─── "Reporte Avanzado" del modal "Detalle de Cierre" ──────────────────────────
+//
+// Activado con el checkbox #checkbox_more_details_cash (ver
+// L.CIERRE_TOGGLE_REPORTE_AVANZADO). Estructura confirmada en vivo cruzando
+// cada id contra su etiqueta visible real en el HTML — varios ids con
+// nombres que sugieren otra cosa (confirmado: "check_sale_amount" es en
+// realidad "+ Ventas ( SINPE MOVIL )", no una venta con cheque/tarjeta; el
+// total real de "Total Consolidado Tarjeta" es `reported_card_output`, no
+// ningún id con "card_total" en su nombre) — ver los comentarios de
+// pos.locators.ts (sección "Reporte Avanzado") para el detalle completo de
+// cada verificación.
+//
+// `totalEntradas` es el campo clave pedido explícitamente: debe coincidir
+// EXACTAMENTE con `ResumenTabGeneral.ventasTotales` (misma cifra real del
+// cierre, vista desde dos secciones distintas del mismo modal).
+export type ReporteAvanzado = {
+  totalEntradas: number;
+  ventasEfectivo: number;
+  ventasTarjeta: number;
+  ventasSinpe: number;
+  ventasTransaccion: number;
+  ventasCredito: number;
+  notasDebito: number;
+  totalDevoluciones: number;
+  impuestosAdicionales: number;
+  totalConsolidadoOtros: number;
+  totalConsolidadoTarjeta: number;
+  otrasEntradas: number;
+  // "Abonos" + "Pago Inicial" + "Entradas (Mov. Caja)" combinados en un único total.
+  totalOtrasVentas: number;
+  // "Ingresos por facturas": Ventas por órdenes + Ventas directas combinadas.
+  totalFacturas: number;
+  totalSalidas: number;
+  // "Ingresos por Abonos": Órdenes + Ventas a crédito + Apartados combinados.
+  totalAbonos: number;
+};
+
+// ─── Tab Facturas del modal "Detalle de Cierre" ────────────────────────────────
+//
+// Fila real de las tablas "Ventas directas"/"Órdenes de Taller" (sub-tabs
+// Fact. Contado y Fact. Crédito) — columnas confirmadas en vivo. `numeroOrden`
+// solo aplica a la variante "Órdenes de Taller" (columna "N orden" ausente
+// en "Ventas directas").
+export type FilaFacturaVenta = {
+  consecutivo: string;
+  numeroFactura: string;
+  fecha: string;
+  observacion: string;
+  tipoPago: string;
+  numeroOrden?: string;
+  monto: number;
+};
+
+// Fila real de las tablas más simples: Fact. Devoluciones / Fact. Eliminadas
+// / Fact. Abonos — mismas 5 columnas en las 3 (sin Tipo Pago ni N orden).
+export type FilaFacturaSimple = {
+  consecutivo: string;
+  numeroFactura: string;
+  fecha: string;
+  observacion: string;
+  monto: number;
+};
+
+// Fila real de las tablas de Movimientos de Caja (sub-tabs Entradas/Salidas)
+// — la más simple de todas: sin No. Consecutivo ni No. Fact, "Comprobante"
+// en su lugar.
+export type FilaMovimientoCaja = {
+  comprobante: string;
+  fecha: string;
+  observacion: string;
+  monto: number;
+};
+
+// Las 7 sub-tabs reales de la Tab Facturas, en el mismo orden en que
+// aparecen — ver pos.locators.ts (sección "Tab Facturas") para los ids.
+export type SubTabFacturas =
+  | 'contado' | 'credito' | 'devoluciones' | 'eliminadas' | 'abonos' | 'entradas' | 'salidas';
+
 // URL real del POS ya resuelta al menos una vez en este proceso worker
 // (capturada de `page.url()` tras `_irAlPosResolviendoCompania()`, nunca
 // construida a mano) — permite que `irAlPos()` reutilice la MISMA URL real

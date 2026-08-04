@@ -125,6 +125,22 @@ export const L = {
   // refleja el estado.
   MENU_CAJA_UL:          'ul.mdl-menu[for="menu_cash"]',
 
+  // Menú "Caja" → "(F9) Movimientos de caja" — abre el modal para registrar
+  // una ENTRADA o SALIDA de efectivo manual. Confirmado en vivo (volcando el
+  // HTML real del modal): #cash_movement_type es un input oculto que el
+  // propio toggle de switches actualiza (1 = Entradas [checked por
+  // defecto], 2 = Salidas) — ninguno de los dos checkboxes reales
+  // (#movenment_cash_in/#movenment_cash_out) es la fuente de verdad para el
+  // backend, solo dispara el cambio de ese campo via onchange.
+  MENU_CAJA_ITEM_MOVIMIENTOS: '#add_cash_movement',
+  DIALOG_MOVIMIENTO_CAJA:     '#dialog_cash_movement',
+  MOVIMIENTO_CAJA_TIPO_ENTRADA: '#movenment_cash_in',
+  MOVIMIENTO_CAJA_TIPO_SALIDA:  '#movenment_cash_out',
+  MOVIMIENTO_CAJA_CANTIDAD:     '#movenment_cash_quantity',
+  MOVIMIENTO_CAJA_OBSERVACION:  '#movenment_cash_observation',
+  MOVIMIENTO_CAJA_BTN_PROCESAR: '#btn_send_movement',
+  MOVIMIENTO_CAJA_TIPO_HIDDEN:  '#cash_movement_type',
+
   // Modal "Detalle de Cierre" (cerrar caja)
   DIALOG_CERRAR_CAJA:      '#dialog_cash_closing',
   CIERRE_EFECTIVO_CAJA:    '#closure_posted_balance',
@@ -136,6 +152,169 @@ export const L = {
   // que es el elemento real que controla el permiso "Ocultar total general en
   // cierre de caja" (id 558).
   CIERRE_TOTAL_GENERAL:    '#total_cash_entries',
+
+  // ─── Modal "Detalle de Cierre" — Tab General ────────────────────────────────
+  // Confirmado en vivo (investigación dedicada, con una venta de contado y una
+  // a crédito reales ya facturadas): las 2 tabs propias ("General"/"Facturas")
+  // SÍ tienen id único y estable, pero cada tab de MONEDA adicional (Colón,
+  // Dobra, Dólar, Euro, Lempira, Peso Dominicano) comparte exactamente el
+  // MISMO id "pos_tab_invoice_by_currency_list" repetido — bug real de
+  // markup del sistema (ids duplicados, HTML inválido), no un error de esta
+  // suite. La única forma confiable de localizar una tab de moneda específica
+  // es por su atributo `onclick="closing_cash_by_currency(<id>)"` (el id
+  // numérico real de esa moneda) o por su texto visible, nunca por su `id`.
+  CIERRE_TAB_GENERAL:   '#pos_tab_general',
+  CIERRE_TAB_FACTURAS:  '#pos_tab_invoice_list',
+  CIERRE_TAB_MONEDA:    'li[onclick^="closing_cash_by_currency("]',
+  CIERRE_TAB_CLASE_ACTIVA: 'active',
+
+  // ─── Modal "Detalle de Cierre" — Tab Facturas ───────────────────────────────
+  // Investigado en vivo (con una venta de contado y una a crédito ya
+  // facturadas): 7 sub-tabs reales, todas `<a class="btn_movement_state">`
+  // dentro del mismo contenedor — la activa gana la clase
+  // "btn_movement_selected". El contenido de las 7 (tablas incluidas) ya
+  // está en el DOM en todo momento; cada sub-tab solo alterna qué tabla(s)
+  // quedan con `style="display: none"` o no.
+  FACTURAS_SUBTAB_CONTADO:   '#movement_cash_invoice_list',
+  FACTURAS_SUBTAB_CREDITO:   '#movement_credit_invoice_list',
+  FACTURAS_SUBTAB_DEVOLUCIONES: '#movement_refund_invoice_list',
+  FACTURAS_SUBTAB_ELIMINADAS:   '#movement_deleted_invoice_list',
+  FACTURAS_SUBTAB_ABONOS:       '#movement_credit_payment_invoice_list',
+  FACTURAS_SUBTAB_ENTRADAS:     '#movement_state_in',
+  FACTURAS_SUBTAB_SALIDAS:      '#movement_state_out',
+  FACTURAS_SUBTAB_CLASE_ACTIVA: 'btn_movement_selected',
+
+  // Tablas reales de cada sub-tab. "Contado" y "Crédito" se dividen cada una
+  // en 2 tablas (Ventas directas / Órdenes de Taller) con columnas propias
+  // (la de Órdenes agrega "N orden"); Devoluciones/Eliminadas/Abonos usan
+  // una tabla más simple (sin Tipo Pago ni N orden); Entradas/Salidas usan
+  // la más simple de todas (sin No. Consecutivo/No. Fact).
+  //
+  // Columnas confirmadas en vivo por tabla:
+  //  - *_CONTADO_DIRECTAS / *_CREDITO_DIRECTAS: No. Consecutivo | No. Fact | Fecha | Observ. | Tipo Pago | Monto
+  //  - *_CONTADO_ORDENES / *_CREDITO_ORDENES:   No. Consecutivo | No. Fact | Fecha | Observ. | Tipo Pago | N orden | Monto
+  //  - *_DEVOLUCIONES / *_ELIMINADAS / *_ABONOS: No. Consecutivo | No. Fact | Fecha | Observ. | Monto
+  //  - *_ENTRADAS / *_SALIDAS:                   Comprobante | Fecha | Observ. | Monto
+  TABLA_FACTURAS_CONTADO_DIRECTAS: '#table_movement_list_cash_invoice_content_direct',
+  TABLA_FACTURAS_CONTADO_ORDENES:  '#table_movement_list_cash_invoice_content_orders',
+  TABLA_FACTURAS_CREDITO_DIRECTAS: '#table_movement_list_credit_invoice_content_direct',
+  TABLA_FACTURAS_CREDITO_ORDENES:  '#table_movement_list_credit_invoice_content_orders',
+  TABLA_FACTURAS_DEVOLUCIONES:     '#table_movement_list_refund_invoice_content',
+  TABLA_FACTURAS_ELIMINADAS:       '#table_movement_list_deleted_invoice_content',
+  // sic: comparte el mismo id genérico "credit_invoice_content" (sin sufijo
+  // _direct/_orders) que en cualquier otro contexto significaría "Crédito"
+  // — confirmado en vivo que esta es en realidad la tabla real de "Fact.
+  // Abonos" (única tabla de esa sub-tab, sin división directas/órdenes).
+  TABLA_FACTURAS_ABONOS:           '#table_movement_list_credit_invoice_content',
+  TABLA_FACTURAS_ENTRADAS:         '#table_movement_list_input_content',
+  TABLA_FACTURAS_SALIDAS:          '#table_movement_list_output_content',
+
+  // Fila superior de KPIs: "Ventas Totales" con su desglose Contado/Crédito.
+  CIERRE_VENTAS_TOTALES:        '#closure_sales_total_display',
+  CIERRE_VENTAS_CONTADO:        '#closure_cash_sales_display',
+  CIERRE_VENTAS_CONTADO_CANTIDAD: '#closure_cash_count',
+  CIERRE_VENTAS_CREDITO:        '#closure_credit_sales_display',
+  CIERRE_DESCUENTO:             '#closure_discount_total_display',
+  CIERRE_IMPUESTOS:             '#closure_tax_total_display',
+  // Tile "Utilidad" — gobernado por el permiso "Ver resumen de utilidad de
+  // caja en el detalle de cierre de caja" (id 619): puede no existir en el
+  // DOM en absoluto con el permiso desactivado, nunca asumir su presencia.
+  CIERRE_UTILIDAD:              '#closure_profit_total_display',
+
+  // "Consolidado Tarjeta" (4 tarjetas: Ingreso/Abonos/Pago Inicial/Total).
+  CIERRE_CONSOLIDADO_TARJETA_INGRESO:      '#bento_card_total_amount',
+  CIERRE_CONSOLIDADO_TARJETA_ABONOS:       '#bento_credit_payment_card_amount',
+  CIERRE_CONSOLIDADO_TARJETA_PAGO_INICIAL: '#bento_initial_card_amount',
+  CIERRE_CONSOLIDADO_TARJETA_TOTAL:        '#bento_card_total_consolidated',
+
+  // "Ingresos por Método de Pago" (4 tarjetas).
+  CIERRE_METODO_PAGO_EFECTIVO:    '#payment_method_cash_display',
+  CIERRE_METODO_PAGO_TARJETA:     '#payment_method_card_display',
+  CIERRE_METODO_PAGO_SINPE:       '#payment_method_sinpe_display',
+  CIERRE_METODO_PAGO_TRANSACCION: '#payment_method_transaction_display',
+
+  // "Resumen de cierre" (columna izquierda de "Datos de Cierre").
+  CIERRE_RESUMEN_APERTURA:               '#aperture_cash_new',
+  CIERRE_RESUMEN_VENTAS_EFECTIVO:        '#total_cash_new',
+  CIERRE_RESUMEN_INGRESO_PAGO_INICIAL:   '#closure_panel_total_initial_payment_closing_summary',
+  CIERRE_RESUMEN_INGRESO_ABONOS:         '#closure_panel_total_credit_payment_closing_summary',
+  CIERRE_RESUMEN_ENTRADAS_MOV_CAJA:      '#closure_panel_total_input_cash_closing_summary',
+  CIERRE_RESUMEN_TOTAL_SALIDAS:          '#aperture_total_output_cash_new',
+
+  // "Datos de Cierre" (columna derecha): Total, Diferencia — Efectivo en caja
+  // y Efectivo para siguiente caja ya cubiertos por CIERRE_EFECTIVO_CAJA/
+  // CIERRE_EFECTIVO_SIGUIENTE de arriba.
+  CIERRE_DATOS_TOTAL:      '#closure_total',
+  CIERRE_DATOS_DIFERENCIA: '#closure_missing_balance',
+
+  // Checkbox-toggle real de "Mostrar Reporte Avanzado" — confirmado en vivo
+  // que NO es un botón, es un <input type="checkbox"> con este id.
+  CIERRE_TOGGLE_REPORTE_AVANZADO: '#checkbox_more_details_cash',
+
+  // ─── Modal "Detalle de Cierre" — Reporte Avanzado ───────────────────────────
+  // Estructura investigada en vivo (mismo modal, todo el contenido ya está en
+  // el DOM en todo momento — igual que el Tab Facturas — el checkbox de
+  // arriba solo alterna su visibilidad). Confirmado con una venta de contado
+  // real ya facturada: el bloque "Entradas → Ventas" termina en un total
+  // real ("Total: 15,200.00" en esa corrida) con id `closure_title_sale_total`
+  // — es el valor que debe coincidir exactamente con "Ventas Totales" del Tab
+  // General (mismo dato, dos vistas distintas del mismo cierre).
+  // Nota: cada id de este bloque se confirmó cruzando su etiqueta visible
+  // real en el HTML (no por suposición de nombre) — varios ids con nombres
+  // engañosos NO corresponden a lo que su nombre sugiere (ver el caso real
+  // de "check_sale_amount", cuya etiqueta real es "+ Ventas ( SINPE MOVIL )",
+  // no "Ventas con cheque"/tarjeta).
+  REPORTE_AVANZADO_VENTAS_EFECTIVO:      '#total_cash_new',            // mismo campo que Resumen de Cierre del Tab General
+  REPORTE_AVANZADO_VENTAS_TARJETA:       '#closure_in_card_total',
+  REPORTE_AVANZADO_VENTAS_SINPE:         '#check_sale_amount',
+  REPORTE_AVANZADO_VENTAS_TRANSACCION:   '#transaction_sale_amount',
+  REPORTE_AVANZADO_VENTAS_CREDITO:       '#credit_sale_amount',
+  REPORTE_AVANZADO_NOTAS_DEBITO:         '#debit_note_amount',
+  REPORTE_AVANZADO_TOTAL_DEVOLUCIONES:   '#refund_sales_amount',
+  // "Total" real de la sección "Entradas → Ventas" — LA cifra a comparar
+  // contra Tab General → Ventas Totales (#closure_sales_total_display).
+  REPORTE_AVANZADO_TOTAL_ENTRADAS:       '#closure_title_sale_total',
+
+  REPORTE_AVANZADO_IMPUESTOS_ADICIONALES: '#service_tax_amount',
+
+  // "Total Consolidado Otros" (Transacción/SINPE: ingreso, pago inicial, abonos).
+  // Su total real (`reported_check_and_transaction_output`) está fuera del
+  // <div> de esta sección en el DOM (confirmado en vivo) — no asumir que el
+  // total sigue el mismo patrón que las demás secciones.
+  REPORTE_AVANZADO_OTROS_INGRESO_TRANSACCION:      '#closure_in_transaction_total_amount',
+  REPORTE_AVANZADO_OTROS_PAGO_INICIAL_TRANSACCION: '#closure_in_in_initial_transaction_amount',
+  REPORTE_AVANZADO_OTROS_ABONOS_TRANSACCION:       '#closure_in_credit_payment_transaction_amount',
+  REPORTE_AVANZADO_TOTAL_CONSOLIDADO_OTROS:        '#reported_check_and_transaction_output',
+
+  // "Total Consolidado Tarjeta" (mismo desglose que los "bento" del Tab General).
+  REPORTE_AVANZADO_TARJETA_INGRESO:      '#closure_in_card_total_amount',
+  REPORTE_AVANZADO_TARJETA_PAGO_INICIAL: '#closure_in_in_initial_card_amount',
+  REPORTE_AVANZADO_TARJETA_ABONOS:       '#closure_in_credit_payment_card_amount',
+  REPORTE_AVANZADO_TOTAL_CONSOLIDADO_TARJETA: '#reported_card_output',
+
+  REPORTE_AVANZADO_OTRAS_ENTRADAS: '#closure_title_credit_payment_total',
+
+  REPORTE_AVANZADO_ENTRADAS_MOV_CAJA: '#closure_in_cash_movement',
+  // "Abonos" + "Pago Inicial" + "Entradas (Mov. Caja)" — un único total combinado.
+  REPORTE_AVANZADO_TOTAL_OTRAS_VENTAS: '#closure_title_sale_other_total',
+
+  // "Ingresos por facturas": Ventas por órdenes + Ventas directas.
+  REPORTE_AVANZADO_VENTAS_ORDENES_TOTAL:  '#invoiced_orders',
+  REPORTE_AVANZADO_VENTAS_DIRECTAS_TOTAL: '#total_sales_directs',
+  REPORTE_AVANZADO_TOTAL_FACTURAS:        '#total_directas_taller',
+
+  // "Salidas".
+  REPORTE_AVANZADO_RETIRADO_EFECTIVO:  '#closure_out_efective_total',
+  REPORTE_AVANZADO_RETIRADO_TARJETA:   '#closure_out_card_total',
+  REPORTE_AVANZADO_NOTAS_CREDITO:      '#closure_credit_total',
+  REPORTE_AVANZADO_SALIDAS_DEVOLUCIONES: '#closure_refund_total',
+  REPORTE_AVANZADO_TOTAL_SALIDAS:      '#reported_output',
+
+  // "Ingresos por Abonos": Órdenes / Ventas a crédito / Apartados.
+  REPORTE_AVANZADO_ABONOS_ORDENES:  '#total_payments_for_orders',
+  REPORTE_AVANZADO_ABONOS_CREDITO:  '#total_payments_for_sales_credit',
+  REPORTE_AVANZADO_ABONOS_APARTADOS: '#total_payments_for_sales_set_asides',
+  REPORTE_AVANZADO_TOTAL_ABONOS:     '#total_payments',
 
   // Menú de tres puntos del encabezado y sus opciones de historial. El botón
   // (#demo-menu-lower-left) solo recibe el upgrade "MaterialButton" (estilo);

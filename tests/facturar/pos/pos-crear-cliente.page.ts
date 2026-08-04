@@ -153,15 +153,50 @@ export class PosCrearCliente {
   /**
    * Abre "Agregar Cliente" desde el dropdown del panel "Buscar Cliente"
    * ("Nuevo Cliente") — ÚNICO camino confirmado en vivo que no depende de
-   * navegar fuera del POS. Reutiliza el mismo criterio de "click real, sin
-   * asumir que abrió" que el resto de menús de esta suite.
+   * navegar fuera del POS.
+   *
+   * Corrección de automatización confirmada en vivo: los 2 clicks
+   * secuenciales (abrir el dropdown, luego "Nuevo Cliente") no tenían ningún
+   * cierre de overlays entre medio ni reintento — confirmado en vivo (3/3
+   * fallos reproducibles en un escenario con más pasos previos, 0/1 en un
+   * repro mínimo aislado) que el banner de permisos de notificación
+   * (#workshop-web-notification-permission) puede reaparecer de forma
+   * asíncrona justo en la ventana entre esos 2 clicks, dejando "Nuevo
+   * Cliente" sin clickearse realmente y el modal sin abrir — mismo patrón ya
+   * documentado y corregido en abrirMenuCaja()/abrirProductoRapido() de este
+   * mismo repo. Se reintenta el ciclo completo (cerrar overlays → abrir
+   * dropdown → click "Nuevo Cliente" → confirmar modal) de forma acotada en
+   * vez de un solo intento con timeout largo.
    */
   async abrirAgregarCliente() {
-    await this.page.locator(L_CC.DROPDOWN_BUSCAR_CLIENTE).click();
-    await this.page.locator(L_CC.MENU_ITEM_NUEVO_CLIENTE).click();
+    const MAX_INTENTOS = 4;
+
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      await this.pos.cerrarModalNotificacionesSiAparece();
+      await this.pos.cerrarTodosLosToastsSiAparecen();
+      await this.page.locator(L_CC.DROPDOWN_BUSCAR_CLIENTE).click({ timeout: 3_000 }).catch(() => {});
+
+      await this.pos.cerrarModalNotificacionesSiAparece();
+      const clickeado = await this.page.locator(L_CC.MENU_ITEM_NUEVO_CLIENTE)
+        .click({ timeout: 3_000 })
+        .then(() => true)
+        .catch(() => false);
+
+      if (clickeado) {
+        // El backdrop (.modal-backdrop) puede aparecer de inmediato mientras
+        // el CONTENIDO del modal (#dialog_add_customer) se carga vía AJAX por
+        // separado — confirmado en vivo que esto puede tardar más que una
+        // espera corta bajo la latencia real del ambiente compartido. Se
+        // espera con el mismo presupuesto que el resto de modales del POS
+        // (TIMEOUTS.PAYMENT_MODAL) antes de descartar el intento como fallido.
+        const abrio = await this.modal.waitFor({ state: 'visible', timeout: TIMEOUTS.PAYMENT_MODAL }).then(() => true).catch(() => false);
+        if (abrio) return;
+      }
+    }
+
     await expect(
       this.modal,
-      'El modal "Agregar Cliente" no apareció tras seleccionar "Nuevo Cliente"'
+      `El modal "Agregar Cliente" no apareció tras seleccionar "Nuevo Cliente" (${MAX_INTENTOS} intentos)`
     ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
   }
 

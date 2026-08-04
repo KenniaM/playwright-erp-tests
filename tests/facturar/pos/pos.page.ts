@@ -115,6 +115,60 @@ export class PosPage {
   async confirmarCerrarCaja(...args: Parameters<PosCierreCaja['confirmarCerrarCaja']>) {
     return this.cierreCaja.confirmarCerrarCaja(...args);
   }
+  async registrarMovimientoCaja(...args: Parameters<PosCierreCaja['registrarMovimientoCaja']>) {
+    return this.cierreCaja.registrarMovimientoCaja(...args);
+  }
+  async abrirDetalleDeCierre(...args: Parameters<PosCierreCaja['abrirDetalleDeCierre']>) {
+    return this.cierreCaja.abrirDetalleDeCierre(...args);
+  }
+  async cancelarModalCerrarCaja(...args: Parameters<PosCierreCaja['cancelarModalCerrarCaja']>) {
+    return this.cierreCaja.cancelarModalCerrarCaja(...args);
+  }
+  async irATabGeneralCierre(...args: Parameters<PosCierreCaja['irATabGeneralCierre']>) {
+    return this.cierreCaja.irATabGeneralCierre(...args);
+  }
+  async leerResumenTabGeneral(...args: Parameters<PosCierreCaja['leerResumenTabGeneral']>) {
+    return this.cierreCaja.leerResumenTabGeneral(...args);
+  }
+  async reporteAvanzadoEstaActivo(...args: Parameters<PosCierreCaja['reporteAvanzadoEstaActivo']>) {
+    return this.cierreCaja.reporteAvanzadoEstaActivo(...args);
+  }
+  async activarReporteAvanzado(...args: Parameters<PosCierreCaja['activarReporteAvanzado']>) {
+    return this.cierreCaja.activarReporteAvanzado(...args);
+  }
+  async leerReporteAvanzado(...args: Parameters<PosCierreCaja['leerReporteAvanzado']>) {
+    return this.cierreCaja.leerReporteAvanzado(...args);
+  }
+  async irASubTabFacturas(...args: Parameters<PosCierreCaja['irASubTabFacturas']>) {
+    return this.cierreCaja.irASubTabFacturas(...args);
+  }
+  async leerFacturasContadoDirectas(...args: Parameters<PosCierreCaja['leerFacturasContadoDirectas']>) {
+    return this.cierreCaja.leerFacturasContadoDirectas(...args);
+  }
+  async leerFacturasContadoOrdenes(...args: Parameters<PosCierreCaja['leerFacturasContadoOrdenes']>) {
+    return this.cierreCaja.leerFacturasContadoOrdenes(...args);
+  }
+  async leerFacturasCreditoDirectas(...args: Parameters<PosCierreCaja['leerFacturasCreditoDirectas']>) {
+    return this.cierreCaja.leerFacturasCreditoDirectas(...args);
+  }
+  async leerFacturasCreditoOrdenes(...args: Parameters<PosCierreCaja['leerFacturasCreditoOrdenes']>) {
+    return this.cierreCaja.leerFacturasCreditoOrdenes(...args);
+  }
+  async leerFacturasDevoluciones(...args: Parameters<PosCierreCaja['leerFacturasDevoluciones']>) {
+    return this.cierreCaja.leerFacturasDevoluciones(...args);
+  }
+  async leerFacturasEliminadas(...args: Parameters<PosCierreCaja['leerFacturasEliminadas']>) {
+    return this.cierreCaja.leerFacturasEliminadas(...args);
+  }
+  async leerFacturasAbonos(...args: Parameters<PosCierreCaja['leerFacturasAbonos']>) {
+    return this.cierreCaja.leerFacturasAbonos(...args);
+  }
+  async leerEntradasCaja(...args: Parameters<PosCierreCaja['leerEntradasCaja']>) {
+    return this.cierreCaja.leerEntradasCaja(...args);
+  }
+  async leerSalidasCaja(...args: Parameters<PosCierreCaja['leerSalidasCaja']>) {
+    return this.cierreCaja.leerSalidasCaja(...args);
+  }
   async presionarFacturar(...args: Parameters<PosPayment['presionarFacturar']>) {
     return this.payment.presionarFacturar(...args);
   }
