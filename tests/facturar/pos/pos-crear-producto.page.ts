@@ -119,28 +119,41 @@ export class PosCrearProducto {
    * más en aparecer que el de Producto Rápido: se espera con un timeout
    * generoso (TIMEOUTS.PRODUCTS_LOAD) después del único click sobre el ítem.
    */
+  /**
+   * Mismo patrón ya establecido en PosCore.abrirProductoRapido() (root-cause
+   * real documentado ahí: el banner de permisos de notificación puede
+   * reaparecer de forma asíncrona justo en la ventana entre expandir el FAB
+   * y clickear el ítem, o entre ese click y que el modal realmente abra) —
+   * confirmado en vivo que la versión anterior de este método solo
+   * reintentaba la fase de EXPANDIR el FAB, pero hacía el click final sobre
+   * "Agregar combo" + la espera del modal como un único intento con timeout
+   * largo (PRODUCTS_LOAD, 120s) sin reintento: exactamente el antipatrón que
+   * el resto de la suite ya evita (ver abrirProductoRapido()). Se reintenta
+   * el ciclo completo (expandir + click + confirmar que el modal abrió) como
+   * una sola unidad.
+   */
   async abrirCrearCombo() {
     const toggle = this.page.locator(L.FAB_TOGGLE);
     const item = this.page.locator(L.FAB_ITEM_CREAR_COMBO);
 
-    const MAX_INTENTOS = 15;
-    let expandido = false;
-    for (let intento = 1; intento <= MAX_INTENTOS && !expandido; intento++) {
+    const MAX_INTENTOS = 10;
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
       await this.core.cerrarModalNotificacionesSiAparece();
-      await toggle.click({ force: true });
-      expandido = await item.isVisible().catch(() => false);
-      if (!expandido) await this.page.waitForTimeout(300);
+      await toggle.click({ force: true, timeout: 3_000 }).catch(() => {});
+
+      const expandido = await item.waitFor({ state: 'visible', timeout: 1_200 }).then(() => true).catch(() => false);
+      if (expandido) {
+        const clickeado = await item.click({ force: true, timeout: 2_000 }).then(() => true).catch(() => false);
+        if (clickeado) {
+          const abrio = await this.modalCrearCombo.waitFor({ state: 'visible', timeout: 3_000 }).then(() => true).catch(() => false);
+          if (abrio) return;
+        }
+      }
+
+      await this.page.waitForTimeout(300);
     }
 
-    if (!expandido) {
-      throw new Error(`El botón flotante del POS no se pudo expandir tras ${MAX_INTENTOS} intentos.`);
-    }
-
-    await item.click({ force: true });
-    await expect(
-      this.modalCrearCombo,
-      'El modal "Crear Combo" no apareció tras clickear "Agregar combo" en el FAB'
-    ).toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+    throw new Error(`El modal "Crear Combo" no se pudo abrir desde el FAB tras ${MAX_INTENTOS} intentos.`);
   }
 
 

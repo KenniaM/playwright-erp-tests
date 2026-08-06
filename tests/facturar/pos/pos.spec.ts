@@ -3,12 +3,45 @@ import { PosPage, METODO, DESCUENTO_INDIVIDUAL_PCT, TIMEOUTS, ResultadoDescuento
 
 const NOMBRE_CLIENTE_FACTURA = 'Cliente De Prueba QA';
 
+/**
+ * Carga el POS con reintento acotado (hasta 3 intentos completos) antes de
+ * dar el escenario por fallido. Mismo síntoma y misma causa raíz ya
+ * documentados en pos-ruteo.spec.ts (recargarPosConReintento()): bajo carga
+ * sostenida del ambiente compartido, un único intento de
+ * cargarPosYCerrarModalSiAparece()/cargarPosDesdeDashboard() puede no
+ * resolver ni el modal "Abrir Caja" ni el grid de productos dentro de
+ * PRODUCTS_LOAD, sin ser un problema de ningún escenario en particular —
+ * confirmado en vivo en este mismo archivo: 2 de 10 escenarios ("facturar un
+ * servicio de End. Pintura", "Seleccionar un cliente existente") agotaron el
+ * timeout completo del test (300s) exactamente en este paso, en corridas
+ * separadas y sin relación funcional entre ellas. Se duplica el patrón en
+ * vez de importarlo porque el original es una función local no exportada de
+ * pos-ruteo.spec.ts — mismo criterio ya usado en ese archivo: un helper de
+ * recuperación acotado al propio archivo, no un método de PosCore/PosPage.
+ */
+async function cargarPosConReintento(pos: PosPage, opciones: { desdeDashboard?: boolean } = {}) {
+  const MAX_INTENTOS = 3;
+  for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+    try {
+      if (opciones.desdeDashboard) {
+        await pos.cargarPosDesdeDashboard();
+      } else {
+        await pos.cargarPosYCerrarModalSiAparece();
+      }
+      return;
+    } catch (e) {
+      if (intento === MAX_INTENTOS) throw e;
+      console.log(`[cargarPosConReintento] Intento ${intento} no dejó el POS en un estado navegable, reintentando: ${(e as Error).message.slice(0, 200)}`);
+    }
+  }
+}
+
 test('facturar producto con efectivo en POS', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
+  test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
   const pos = new PosPage(page);
 
   await test.step('Abrir POS y agregar producto al carrito', async () => {
-    await pos.cargarPosYCerrarModalSiAparece();
+    await cargarPosConReintento(pos);
     await pos.agregarPrimerProductoDePrecioFijo();
   });
 
@@ -32,11 +65,11 @@ test('facturar producto con efectivo en POS', async ({ page }) => {
 });
 
 test('facturar producto con tarjeta en POS', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
+  test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
   const pos = new PosPage(page);
 
   await test.step('Abrir POS y agregar producto al carrito', async () => {
-    await pos.cargarPosYCerrarModalSiAparece();
+    await cargarPosConReintento(pos);
     await pos.agregarPrimerProductoDePrecioFijo();
   });
 
@@ -58,11 +91,11 @@ test('facturar producto con tarjeta en POS', async ({ page }) => {
 });
 
 test('facturar producto con SINPE Móvil en POS', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
+  test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
   const pos = new PosPage(page);
 
   await test.step('Abrir POS y agregar producto al carrito', async () => {
-    await pos.cargarPosYCerrarModalSiAparece();
+    await cargarPosConReintento(pos);
     await pos.agregarPrimerProductoDePrecioFijo();
   });
 
@@ -84,11 +117,11 @@ test('facturar producto con SINPE Móvil en POS', async ({ page }) => {
 });
 
 test('facturar producto con transacción bancaria en POS', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
+  test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
   const pos = new PosPage(page);
 
   await test.step('Abrir POS y agregar producto al carrito', async () => {
-    await pos.cargarPosYCerrarModalSiAparece();
+    await cargarPosConReintento(pos);
     await pos.agregarPrimerProductoDePrecioFijo();
   });
 
@@ -110,7 +143,7 @@ test('facturar producto con transacción bancaria en POS', async ({ page }) => {
 });
 
 test('facturar dos productos con descuento individual y pago mixto (tarjeta + efectivo)', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
+  test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
   const pos = new PosPage(page);
 
   let clavesProductos: string[] = [];
@@ -118,7 +151,7 @@ test('facturar dos productos con descuento individual y pago mixto (tarjeta + ef
   let resultadosDescuento: ResultadoDescuento[] = [];
 
   await test.step('Cargar el POS y validar el modal "Abrir Caja" si aparece', async () => {
-    await pos.cargarPosYCerrarModalSiAparece();
+    await cargarPosConReintento(pos);
     // Escenario 1 (no apareció) o tras cerrar el modal: el POS debe seguir funcionando.
   });
 
@@ -140,9 +173,24 @@ test('facturar dos productos con descuento individual y pago mixto (tarjeta + ef
   });
 
   await test.step('Registrar total de venta y claves antes de aplicar descuentos', async () => {
-    clavesProductos = await pos.obtenerClavesProductos();
-    totalAntes      = await pos.obtenerTotalVentaNumerico();
-    expect(clavesProductos.length).toBeGreaterThanOrEqual(2);
+    // obtenerClavesFilasCarrito() (no obtenerClavesProductos()): confirmado en
+    // vivo que, cuando "Desactivar descuento general" arriba SÍ dispara un
+    // toggle real (checkbox previamente activo — estado que persiste en este
+    // ambiente compartido sin limpieza entre corridas), la tabla del carrito
+    // se re-renderiza y las dos líneas ya agregadas pierden temporalmente su
+    // marcador `drag_and_drop_<clave>` (el único que obtenerClavesProductos()
+    // reconoce) — devolviendo 0 pese a que las líneas siguen ahí. Mismo
+    // motivo, y misma solución, ya documentados para líneas IMPORTADAS
+    // (Órdenes de Caja/Ruteo/factura) en el comentario de
+    // obtenerClavesFilasCarrito(): cubre ambos tipos de fila. expect.poll (no
+    // una lectura puntual) porque el re-render no es instantáneo tras el
+    // waitForTimeout(1_000) fijo de desactivarDescuentoGeneral().
+    await expect.poll(
+      async () => (await pos.obtenerClavesFilasCarrito()).length,
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    ).toBeGreaterThanOrEqual(2);
+    clavesProductos = await pos.obtenerClavesFilasCarrito();
+    totalAntes = await pos.obtenerTotalVentaNumerico();
     expect(totalAntes).toBeGreaterThan(0);
   });
 
@@ -202,11 +250,11 @@ test('facturar dos productos con descuento individual y pago mixto (tarjeta + ef
 });
 
 test('facturar un servicio del tab Servicios en POS', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
+  test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
   const pos = new PosPage(page);
 
   await test.step('Abrir el POS y cerrar overlays conocidos si aparecen', async () => {
-    await pos.cargarPosYCerrarModalSiAparece();
+    await cargarPosConReintento(pos);
     await pos.cerrarOverlaysConocidos();
   });
 
@@ -247,11 +295,11 @@ test('facturar un servicio del tab Servicios en POS', async ({ page }) => {
 });
 
 test('facturar un servicio de End. Pintura en POS', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
+  test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
   const pos = new PosPage(page);
 
   await test.step('Abrir el POS y cerrar overlays conocidos si aparecen', async () => {
-    await pos.cargarPosYCerrarModalSiAparece();
+    await cargarPosConReintento(pos);
     await pos.cerrarOverlaysConocidos();
   });
 
@@ -310,7 +358,7 @@ test('facturar un servicio de End. Pintura en POS', async ({ page }) => {
 });
 
 test('agregar y facturar un Producto Rápido en POS', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
+  test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
   const pos = new PosPage(page);
 
   await test.step('Cargar el POS pasando por el Dashboard y cerrar overlays conocidos si aparecen', async () => {
@@ -319,7 +367,7 @@ test('agregar y facturar un Producto Rápido en POS', async ({ page }) => {
     // botón "Agregar" cuando el POS es la primera página de un contexto
     // nuevo — ver el comentario de ese método en pos.page.ts para la
     // evidencia completa.
-    await pos.cargarPosDesdeDashboard();
+    await cargarPosConReintento(pos, { desdeDashboard: true });
     await pos.cerrarOverlaysConocidos();
   });
 
@@ -376,11 +424,11 @@ test('agregar y facturar un Producto Rápido en POS', async ({ page }) => {
 });
 
 test('Seleccionar un cliente existente en el POS', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
+  test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
   const pos = new PosPage(page);
 
   await test.step('Cargar el POS pasando por el Dashboard y cerrar overlays conocidos si aparecen', async () => {
-    await pos.cargarPosDesdeDashboard();
+    await cargarPosConReintento(pos, { desdeDashboard: true });
     await pos.cerrarOverlaysConocidos();
   });
 
@@ -391,11 +439,11 @@ test('Seleccionar un cliente existente en el POS', async ({ page }) => {
 });
 
 test('Ingresar nombre del cliente en el POS sin seleccionar uno registrado', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
+  test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
   const pos = new PosPage(page);
 
   await test.step('Cargar el POS pasando por el Dashboard y cerrar overlays conocidos si aparecen', async () => {
-    await pos.cargarPosDesdeDashboard();
+    await cargarPosConReintento(pos, { desdeDashboard: true });
     await pos.cerrarOverlaysConocidos();
   });
 

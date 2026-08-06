@@ -68,10 +68,58 @@ export class PosPayment {
   }
 
 
-  /** Espera a que el modal de pago esté listo para recibir el método de pago. */
+  /**
+   * Espera a que el modal de pago esté listo para recibir el método de
+   * pago Y a que el total ya esté asentado — nunca solo lo primero.
+   *
+   * Causa raíz confirmada en vivo (investigación "modal atascado al
+   * facturar Órdenes de Caja/Taller", 2026-08-06): `#payment_cash_total`
+   * (EFECTIVO_MONTO) se vuelve visible de inmediato al abrir el modal, pero
+   * para una venta que proviene de una orden ya existente (Órdenes de Caja,
+   * Taller), el TOTAL real sigue recalculándose de forma asíncrona un
+   * momento más (confirmado con capturas: `#total_hide` cambió de
+   * "22663.18" a "22488" ~1s después de abierto el modal, sin ningún otro
+   * aviso). Cualquier `seleccionarPagoExacto()`/`seleccionarPagoEfectivo()`
+   * que llenara el monto ANTES de ese asentamiento quedaba con un monto
+   * viejo (mayor al total real) que la propia app rechaza con un toast
+   * ("El monto de tarjeta no puede ser mayor al total a pagar!") — la venta
+   * simplemente nunca se completaba, sin ninguna señal de error visible
+   * para quien automatiza (ni popup, ni modal, ni excepción). Confirmado
+   * en vivo que, esperando a que el total se estabilice antes de llenar el
+   * monto, la misma venta se completa con éxito.
+   */
   async esperarModalPago() {
     await this.page.locator(L.EFECTIVO_MONTO).waitFor({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await this._esperarTotalEstable();
     await this.page.waitForTimeout(PAUSES.VER_MODAL);
+  }
+
+
+  /**
+   * Espera a que `TOTAL_HIDE` (`#total_hide`, el valor numérico crudo
+   * detrás del total mostrado) deje de cambiar — dos lecturas consecutivas
+   * iguales se toman como señal de que el recálculo asíncrono ya terminó.
+   * Ver el comentario de `esperarModalPago()` para la evidencia completa.
+   * Reintento acotado vía `expect.poll()` (nunca `waitForTimeout()` como
+   * mecanismo de sincronización real, solo como intervalo de sondeo entre
+   * lecturas).
+   */
+  async _esperarTotalEstable() {
+    let ultimoValor: string | null = null;
+    let lecturasIguales = 0;
+    await expect.poll(async () => {
+      const actual = await this.page.locator(L.TOTAL_HIDE).inputValue().catch(() => '');
+      if (actual !== '' && actual === ultimoValor) {
+        lecturasIguales++;
+      } else {
+        lecturasIguales = 0;
+        ultimoValor = actual;
+      }
+      return lecturasIguales;
+    }, {
+      timeout: TIMEOUTS.PAYMENT_MODAL,
+      message: 'El total de la venta no se estabilizó tras abrir el modal de pago',
+    }).toBeGreaterThanOrEqual(2);
   }
 
 
@@ -544,6 +592,35 @@ export class PosPayment {
     await this.page.locator('#payment_credit_card_total').fill(montoTarjeta);
     await this.page.getByPlaceholder('Referencia pago en tarjeta').fill('AUTOMATIZADO');
     await this.page.locator(L.EFECTIVO_MONTO).fill(montoEfectivo);
+    await this.page.waitForTimeout(PAUSES.VER_MONTO);
+  }
+
+
+  /**
+   * Activa `metodo` con `monto` SIN desmarcar antes el método previamente
+   * activo — a diferencia de `_cambiarMetodoPago()` (que sí desmarca
+   * Efectivo primero), reproduce el gesto de un cajero que hace click en un
+   * método nuevo sin desmarcar el anterior. Los 4 checkboxes de método de
+   * pago son sliders independientes, no un grupo mutuamente excluyente
+   * (confirmado leyendo el pos.js real servido por el ambiente): dejar dos
+   * marcados hace que `add_sale()` envíe AMBOS como pagados
+   * (`is_paid_with_cash=1` Y, p. ej., `is_paid_with_credit_card=1`, cada
+   * uno con su propio monto) — comportamiento CONFIRMADO COMO ESPERADO por
+   * el usuario del proyecto (investigación 2026-08-06): el sistema permite
+   * pagar con uno o más métodos a la vez, y es responsabilidad del cajero
+   * desactivar los que no use; no es un bug. Útil para investigar
+   * escenarios de pago mixto (declarado o accidental) sin tener que armar
+   * el toggle manualmente en cada spec — el flujo normal de automatización
+   * para seleccionar un único método sigue siendo
+   * `seleccionarPagoExacto()`/`_cambiarMetodoPago()`.
+   */
+  async activarMetodoPagoSinDesmarcarAnterior(metodo: MetodoPago, monto: string) {
+    await this.page.evaluate(
+      (id) => (document.getElementById(id) as HTMLInputElement).click(),
+      metodo.checkboxId
+    );
+    await this.page.waitForTimeout(PAUSES.CHECKBOX_ACTIVACION);
+    await this.page.locator(metodo.montoLocator).fill(monto);
     await this.page.waitForTimeout(PAUSES.VER_MONTO);
   }
 

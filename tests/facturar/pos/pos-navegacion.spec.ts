@@ -389,10 +389,36 @@ test('Vista Expandida: buscar, agregar y facturar un producto desde el buscador 
     ).toBe(1);
 
     const lineaAgregada = await pos.obtenerDatosLineaCarrito(clavesNuevas[0]);
+
+    // "toContain", no igualdad exacta: nombreProducto viene de
+    // obtenerPrimerProductoNormalConCodigo(), que lo lee del texto VISIBLE de
+    // la tarjeta del grid (obtenerMetadatosProductosVisibles() usa
+    // `textoVisible`, ver pos-core.page.ts) — para un producto CON código
+    // interno (el único tipo que este test puede elegir, al requerir un
+    // código para buscar por él en Vista Expandida) esa tarjeta muestra el
+    // código como parte del texto renderizado, prefijo que NO forma parte del
+    // argumento `name` real de add_to_table() ni, por lo tanto, del nombre
+    // que termina mostrando la línea del carrito (confirmado en vivo: nombre
+    // esperado "RT543-000002 A11 - PROT. BLING GLITTER ROSA" vs. línea real
+    // "A11 - PROT. BLING GLITTER ROSA"). Comparar por nombre exacto es
+    // entonces una aserción incorrecta para esta clase de producto.
+    //
+    // Se investigó primero una identidad por código vía
+    // obtenerCodigoYBarcodeDeLineaCarrito() (mismo helper usado con éxito en
+    // pos-facturar.spec.ts) pero, confirmado en vivo, esa línea en particular
+    // (agregada por el buscador interno de Vista Expandida, no por click
+    // directo del grid) nunca renderiza el <p> "COD." que ese helper espera
+    // — quedó esperando el locator hasta agotar el timeout completo del test
+    // (300s) sin señal de error, un loader/estado que nunca cambia. Se
+    // descarta esa ruta en vez de asumir que es solo más lenta: el propio
+    // crecimiento de clavesNuevas ya confirma que se agregó exactamente un
+    // producto nuevo, y el "toContain" seguía siendo evidencia suficiente
+    // (ver el mensaje de error real de la corrida que motivó este fix) de que
+    // es el producto correcto.
     expect(
-      lineaAgregada.nombre,
-      `El producto agregado vía buscador interno de Vista Expandida no coincide: se esperaba "${nombreProducto}" pero el carrito muestra "${lineaAgregada.nombre}"`
-    ).toBe(nombreProducto);
+      nombreProducto,
+      `El nombre visible de la tarjeta buscada ("${nombreProducto}") no contiene el nombre real de la línea agregada ("${lineaAgregada.nombre}") — posible producto incorrecto`
+    ).toContain(lineaAgregada.nombre);
     expect(
       lineaAgregada.cantidad,
       `La cantidad de "${nombreProducto}" agregado vía buscador interno no es la esperada (1): se obtuvo ${lineaAgregada.cantidad}`

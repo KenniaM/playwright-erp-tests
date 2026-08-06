@@ -97,6 +97,16 @@ export const L = {
   // Modal de pago
   DIALOG_PAGO:       '#dialog_payment',
   TOTAL_MODAL:       'total_sale_txt',         // ID sin # — se lee vía evaluate()
+  // Valor numérico crudo (sin formato de moneda) detrás de TOTAL_MODAL —
+  // confirmado en vivo (investigación del "modal atascado" al facturar
+  // Órdenes de Caja/Taller) que, para ventas que provienen de una orden ya
+  // existente, este valor se RECALCULA de forma asíncrona justo después de
+  // abrir el modal (ej. de $22,663.18 a $22,488.00 ~1s después) — leerlo
+  // antes de que se estabilice llena el monto del método de pago con un
+  // total viejo, que la propia app rechaza ("El monto no puede ser mayor
+  // al total a pagar"), dejando la venta sin completar sin ningún error
+  // visible para quien automatiza. Ver PosPayment._esperarTotalEstable().
+  TOTAL_HIDE:        '#total_hide',
   BTN_CONFIRMAR:     '#make_payment',
   EFECTIVO_MONTO:    '#payment_cash_total',    // señal confiable de apertura del modal
   EFECTIVO_RECIBIDO: '#received_mount',

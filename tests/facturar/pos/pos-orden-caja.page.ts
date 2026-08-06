@@ -75,10 +75,23 @@ export class PosOrdenCaja {
       .waitFor({ state: 'attached', timeout: TIMEOUTS.PRODUCTS_LOAD })
       .catch(() => {});
 
+    // Root-cause real confirmado en vivo (corrección de automatización,
+    // no bug de sistema ni de permisos): el SEGUNDO click (sobre la opción
+    // "Enviar a caja" ya visible en el menú, el que realmente dispara el
+    // modal) se hacía como un único intento sin reintento — a diferencia
+    // del primer click (abrir el menú), que sí reintentaba. Si ese segundo
+    // click no registraba (p. ej. el menú se cerró solo entre que se
+    // confirmó visible y el click, mismo tipo de condición de carrera ya
+    // documentada para otros menús/FAB de esta suite), el modal nunca
+    // aparecía y no había ningún mecanismo para recuperarse — confirmado en
+    // vivo: fallaba de forma reproducible con "El modal 'Enviar a caja' no
+    // apareció", incluso descartada la causa de permisos. Se reintenta el
+    // ciclo COMPLETO (abrir menú + click en la opción + confirmar que el
+    // modal abrió) como una sola unidad, mismo patrón ya establecido en
+    // PosCore.abrirProductoRapido()/PosCrearProducto.abrirCrearCombo().
     const item = this.page.locator(L.ORDEN_CAJA_MENU_ITEM);
     const MAX_INTENTOS = 4;
-    let abierto = false;
-    for (let intento = 1; intento <= MAX_INTENTOS && !abierto; intento++) {
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
       await this.core.cerrarModalNotificacionesSiAparece();
       await this.core.cerrarAvisoConsecutivoSiAparece();
 
@@ -86,16 +99,18 @@ export class PosOrdenCaja {
         (sel) => (document.querySelector(sel) as HTMLElement)?.click(),
         L.ORDEN_CAJA_MENU_BTN
       );
-      abierto = await item.waitFor({ state: 'visible', timeout: 2_000 }).then(() => true).catch(() => false);
+      const abierto = await item.waitFor({ state: 'visible', timeout: 2_000 }).then(() => true).catch(() => false);
+      if (!abierto) continue;
+
+      await this.page.evaluate(
+        (sel) => (document.querySelector(sel) as HTMLElement)?.click(),
+        L.ORDEN_CAJA_MENU_ITEM
+      );
+      const modalAbrio = await this.modalOrdenCaja.waitFor({ state: 'visible', timeout: 3_000 }).then(() => true).catch(() => false);
+      if (modalAbrio) return;
     }
-    expect(abierto, `La opción "Enviar a caja" no apareció en el menú de acciones tras ${MAX_INTENTOS} intentos`).toBe(true);
 
-    await this.page.evaluate(
-      (sel) => (document.querySelector(sel) as HTMLElement)?.click(),
-      L.ORDEN_CAJA_MENU_ITEM
-    );
-
-    await expect(this.modalOrdenCaja, 'El modal "Enviar a caja" no apareció tras seleccionar la opción del menú').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    await expect(this.modalOrdenCaja, `El modal "Enviar a caja" no apareció tras seleccionar la opción del menú (${MAX_INTENTOS} intentos)`).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
   }
 
 

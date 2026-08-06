@@ -71,6 +71,9 @@ export class PosPage {
   async cargarPosDesdeDashboard(...args: Parameters<PosCore['cargarPosDesdeDashboard']>) {
     return this.core.cargarPosDesdeDashboard(...args);
   }
+  async cargarPosDesdeDashboardConReintento(...args: Parameters<PosCore['cargarPosDesdeDashboardConReintento']>) {
+    return this.core.cargarPosDesdeDashboardConReintento(...args);
+  }
   async irAlPosConOpcion(...args: Parameters<PosCore['irAlPosConOpcion']>) {
     return this.core.irAlPosConOpcion(...args);
   }
@@ -386,6 +389,9 @@ export class PosPage {
   async seleccionarPagoMixto(...args: Parameters<PosPayment['seleccionarPagoMixto']>) {
     return this.payment.seleccionarPagoMixto(...args);
   }
+  async activarMetodoPagoSinDesmarcarAnterior(...args: Parameters<PosPayment['activarMetodoPagoSinDesmarcarAnterior']>) {
+    return this.payment.activarMetodoPagoSinDesmarcarAnterior(...args);
+  }
   async abrirMenuTresPuntos(...args: Parameters<PosNavigation['abrirMenuTresPuntos']>) {
     return this.navigation.abrirMenuTresPuntos(...args);
   }
@@ -531,6 +537,9 @@ export class PosPage {
   }
   async seleccionarIvaManualmente(...args: Parameters<PosCore['seleccionarIvaManualmente']>) {
     return this.core.seleccionarIvaManualmente(...args);
+  }
+  async desmarcarCheckboxIvaProductoRapido(...args: Parameters<PosCore['desmarcarCheckboxIvaProductoRapido']>) {
+    return this.core.desmarcarCheckboxIvaProductoRapido(...args);
   }
   async guardarProductoRapido(...args: Parameters<PosCore['guardarProductoRapido']>) {
     return this.core.guardarProductoRapido(...args);

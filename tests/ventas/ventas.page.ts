@@ -91,6 +91,26 @@ export type DetalleFacturaHistorico = {
   numeroOrdenReparacion: string;
 };
 
+/**
+ * Sección "Forma de pago" del detalle de una factura en Histórico de Ventas.
+ * A diferencia de `.receip-v2-order-item` (usado por `leerDetalleFacturaAbierta()`),
+ * esta sección NO expone una clase CSS propia y predecible por bloque
+ * (confirmado en vivo intentando localizarla por `.receip-v2-order-item` —
+ * cuenta 0) — se parsea desde el texto plano del panel, mismo criterio ya
+ * usado en otras investigaciones de este repo cuando el marcado real no
+ * ofrece un selector estable (ver `pos-permisos.page.ts`). Cada monto queda
+ * `null` cuando ese método no aparece en la factura (nunca "0.00": la propia
+ * plantilla solo imprime la línea de un método si se usó).
+ */
+export type FormaDePagoFacturaHistorico = {
+  estado: string;
+  efectivoRecibido: number | null;
+  vuelto: number | null;
+  tarjeta: number | null;
+  sinpe: number | null;
+  transaccion: number | null;
+};
+
 // ─── Page Object ──────────────────────────────────────────────────────────────
 
 export class VentasPage {
@@ -162,6 +182,55 @@ export class VentasPage {
     return {
       numeroOrdenCompra: await leerValor('Número Orden de Compra'),
       numeroOrdenReparacion: await leerValor('Número Orden de Reparación'),
+    };
+  }
+
+  /**
+   * Lee la sección "Forma de pago" del detalle de factura YA ABIERTO
+   * (`abrirFacturaEnHistorico()`) — expone cuánto quedó registrado por cada
+   * método (Efectivo/Tarjeta/SINPE/Transacción) y el Vuelto real, incluida
+   * la posibilidad de que una factura muestre más de un método a la vez
+   * (pago mixto declarado, o el saldo/abono acumulado de un Apartado —
+   * ambos casos legítimos, confirmados en vivo, investigación 2026-08-06).
+   */
+  async leerFormaDePagoFacturaAbierta(): Promise<FormaDePagoFacturaHistorico> {
+    const texto = await this.page.locator('body').innerText();
+
+    // No reutiliza PosCore._leerMontoDeTexto() (asume coma=miles/punto=decimal,
+    // correcto para los montos que expone el propio modal de pago del POS) —
+    // este panel de Histórico de Ventas usa el formato latinoamericano real
+    // ("L1.000,00": punto=miles, coma=decimal), confirmado en vivo. Variante
+    // acotada a este formato distinto, mismo criterio que documenta
+    // CLAUDE.md para no forzar un helper que asume el separador contrario.
+    const leerMonto = (etiqueta: string): number | null => {
+      // `[^:\n]*` entre la etiqueta y los dos puntos: confirmado en vivo que
+      // la etiqueta real de Transacción es "Transacción Bancaria" (no solo
+      // "Transacción"), palabra extra que un patrón sin este comodín no
+      // contempla — sin él, la regex nunca llega a los ":" reales y el
+      // monto se pierde por completo, devolviendo null pese a que el dato
+      // sí está en la página (hallazgo de fase37: causó un falso positivo
+      // de "Transacción no se guardó", ver metodo-pago-mismatch-bug).
+      const m = new RegExp(`${etiqueta}[^:\\n]*:?\\s*[A-Za-z$₡]*\\s*([0-9.,]+)`, 'i').exec(texto);
+      if (!m) return null;
+      const crudo = m[1];
+      const limpio = crudo.lastIndexOf(',') > crudo.lastIndexOf('.')
+        ? crudo.replace(/\./g, '').replace(',', '.') // punto=miles, coma=decimal
+        : crudo.replace(/,/g, '');                    // coma=miles, punto=decimal (o sin separador de miles)
+      const valor = parseFloat(limpio);
+      return Number.isNaN(valor) ? null : valor;
+    };
+    const leerTexto = (etiqueta: string): string => {
+      const m = new RegExp(`${etiqueta}:?\\s*([^\\n|]+)`, 'i').exec(texto);
+      return m ? m[1].trim() : '';
+    };
+
+    return {
+      estado: leerTexto('Estado'),
+      efectivoRecibido: leerMonto('Efectivo recibido'),
+      vuelto: leerMonto('Vuelto'),
+      tarjeta: leerMonto('Tarjeta'),
+      sinpe: leerMonto('SINPE'),
+      transaccion: leerMonto('Transacci[oó]n'),
     };
   }
 }
