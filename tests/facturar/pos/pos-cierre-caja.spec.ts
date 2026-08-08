@@ -5,6 +5,8 @@ import {
 } from './pos.page';
 import { PosTaller } from './pos-taller.page';
 import { PosPermisos, PERMISO, ROL_ADMINISTRADOR } from './pos-permisos.page';
+import { HistoricoVentasPage } from '../../ventas/historico-ventas.page';
+import { CuentasPorCobrarPage } from '../../ventas/cuentas-por-cobrar.page';
 
 /**
  * Crea un cliente real NUEVO, con perfil completo (Nombre, Correo,
@@ -475,39 +477,23 @@ test('Tab Facturas: Fact. Contado y Fact. Crédito reflejan correctamente una ve
 /**
  * Anula la factura MÁS RECIENTE (primera tarjeta de la lista, orden
  * confirmado en vivo como más-reciente-primero) desde "Historial de
- * Facturas" — investigado en vivo abriendo el popup real que
- * `abrirHistorialFacturas()` ya expone: el detalle de una factura
- * (`#delete_invoice_btn`, confirmado en vivo con un `id` DUPLICADO real en
- * el DOM — hay una segunda copia dentro de un menú `<li>` — de ahí
- * `.first()`) muestra el botón "Anular Factura"
- * (`onclick="confirm_delete_invoice(...)"`), que dispara el SweetAlert v1
- * estándar de esta suite ("¿Está seguro de eliminar la factura No.X?",
- * confirmado en vivo que agrega el mismo texto real sin traducir "Not
- * valid!" ya documentado como bug de i18n en otro flujo de este proyecto —
- * no bloquea la eliminación). Cierra el popup al terminar para volver al
- * POS principal.
+ * Facturas" (popup abierto vía `abrirHistorialFacturas()` — mismo
+ * `/receip/printPosReceip` real que `HistoricoVentasPage`, confirmado en
+ * vivo por `pos-navegacion.spec.ts`). La lógica real (localizar la
+ * factura, "Anular Factura", confirmar el SweetAlert) vive en
+ * `HistoricoVentasPage.abrirPrimeraFacturaDelListado()`/
+ * `anularFacturaAbierta()` — migrada ahí para reutilizarse también desde
+ * `historico-ventas.spec.ts` sin duplicar esta función. Cierra el popup al
+ * terminar para volver al POS principal.
  */
 async function anularFacturaMasReciente(pos: PosPage, page: Page): Promise<void> {
   await pos.abrirMenuTresPuntos();
   const historial = await pos.abrirHistorialFacturas();
   await historial.waitForLoadState('domcontentloaded').catch(() => {});
 
-  const primeraFactura = historial.locator('text=/Consec\\./').first();
-  await expect(primeraFactura, 'No apareció ninguna factura en el Historial de Ventas').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
-  await primeraFactura.click();
-
-  const btnAnular = historial.locator('#delete_invoice_btn').first();
-  await expect(btnAnular, 'El botón "Anular Factura" no apareció en el detalle de la factura').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
-  await btnAnular.click();
-
-  const sweetAlert = historial.locator('.sweet-alert.visible');
-  await expect(sweetAlert, 'El SweetAlert de confirmación de eliminar factura no apareció').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
-  await sweetAlert.locator('button.confirm').click();
-
-  await expect(
-    historial.locator('.noty_bar', { hasText: /elimin|anul/i }),
-    'No apareció el toast de confirmación de factura eliminada'
-  ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL }).catch(() => {});
+  const historico = new HistoricoVentasPage(historial);
+  await historico.abrirPrimeraFacturaDelListado();
+  await historico.anularFacturaAbierta();
 
   await historial.close();
 }
@@ -579,107 +565,22 @@ test('Tab Facturas: Fact. Eliminadas refleja correctamente una factura anulada d
 
 /**
  * Aplica una devolución COMPLETA sobre la factura MÁS RECIENTE, desde
- * "Historial de Ventas" → detalle de factura → "Apl. Devolución" —
- * investigado en vivo con más de una decena de intentos hasta encontrar el
- * flujo real completo (varios pasos NO documentados por el propio texto de
- * la UI, confirmados solo abriendo la página real):
- *
- * 1. "Apl. Devolución" (`a[title="Aplicar Devolución"]`) abre una PÁGINA
- *    NUEVA (`refund/addRefund?invoice_number=<id>`), no un modal.
- * 2. Cada línea de producto exige marcar su propio checkbox
- *    (`.refund_checkbox`, slider CSS oculto — mismo patrón de esta suite:
- *    click programático vía `evaluate`, un `.check()` normal falla con
- *    "outside of the viewport" por el scroll horizontal de la tabla), lo
- *    que habilita su campo de cantidad (`.quantity_to_refund`, ya viene con
- *    la cantidad total por defecto).
- * 3. Cada línea EXIGE ADEMÁS abrir su propio modal "Tipo de devolución"
- *    (botón `.sr-refund-type-btn`) y confirmarlo con "Aplicar" — sin este
- *    paso el monto de la línea queda en $0.00 y "Procesar devolución"
- *    rechaza con "El monto de la devolución debe ser mayor a cero."
- * 4. Dentro de ese modal, "Reembolso" (`refund_money`) es la única opción
- *    real disponible para un cliente de contado (confirmado en vivo:
- *    "Crédito a favor del cliente" queda deshabilitado/oculto sin un
- *    cliente real asociado) — y ADEMÁS exige marcar un método de pago
- *    (`#sr_pay_cash_check`, Efectivo) y llenar su monto
- *    (`#sr_pay_cash_amount`) antes de "Aplicar", o el paso 5 vuelve a
- *    rechazar con "Monto requerido".
- * 5. "Procesar devolución" (`#refund_sale`) dispara el SweetAlert v1
- *    estándar de esta suite (mismo bug de i18n "Not valid!" ya documentado
- *    en otro flujo de este proyecto) — confirmarlo dispara la petición real
- *    `addSaleRefund` (confirmado en vivo, respuesta 200).
+ * "Historial de Ventas" → detalle de factura → "Apl. Devolución". El flujo
+ * real completo (varios pasos NO documentados por el propio texto de la UI,
+ * investigado en vivo con más de una decena de intentos) vive en
+ * `HistoricoVentasPage.aplicarDevolucionCompleta()` — migrado ahí para
+ * reutilizarse también desde `historico-ventas.spec.ts` sin duplicar esta
+ * función.
  */
 async function aplicarDevolucionCompletaFacturaMasReciente(pos: PosPage, page: Page, context: BrowserContext, montoFactura: number): Promise<void> {
   await pos.abrirMenuTresPuntos();
   const historial = await pos.abrirHistorialFacturas();
   await historial.waitForLoadState('domcontentloaded').catch(() => {});
 
-  const primeraFactura = historial.locator('text=/Consec\\./').first();
-  await expect(primeraFactura, 'No apareció ninguna factura en el Historial de Ventas').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
-  await primeraFactura.click();
+  const historico = new HistoricoVentasPage(historial);
+  await historico.abrirPrimeraFacturaDelListado();
+  await historico.aplicarDevolucionCompleta(context, montoFactura);
 
-  const btnDevolucion = historial.locator('a[title="Aplicar Devolución"]').first();
-  await expect(btnDevolucion, 'El botón "Apl. Devolución" no apareció en el detalle de la factura').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
-
-  const popupPromise = context.waitForEvent('page', { timeout: TIMEOUTS.PAYMENT_MODAL });
-  await btnDevolucion.click();
-  const devolucionPage = await popupPromise;
-  await devolucionPage.waitForLoadState('domcontentloaded').catch(() => {});
-
-  // Paso 2: marcar el checkbox de la línea (slider CSS oculto, click programático).
-  const checkboxId = await devolucionPage.evaluate(() => {
-    const el = document.querySelector('.refund_checkbox');
-    return el ? el.id : null;
-  });
-  expect(checkboxId, 'No se encontró ninguna línea de producto para devolver').not.toBeNull();
-  await devolucionPage.evaluate((id) => {
-    (document.getElementById(id as string) as HTMLInputElement).click();
-  }, checkboxId);
-
-  await expect(
-    devolucionPage.locator('.quantity_to_refund').first(),
-    'El campo de cantidad a devolver no se habilitó tras marcar la línea'
-  ).toBeEnabled({ timeout: TIMEOUTS.PAYMENT_MODAL });
-
-  // Paso 3-4: modal "Tipo de devolución" — Reembolso + método de pago Efectivo.
-  await devolucionPage.locator('.sr-refund-type-btn').first().click({ force: true });
-  await expect(
-    devolucionPage.locator('#sr_refund_type_modal'),
-    'El modal "Tipo de devolución" no apareció'
-  ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
-
-  await devolucionPage.evaluate(() => {
-    const check = document.getElementById('sr_pay_cash_check') as HTMLInputElement;
-    check.checked = true;
-    check.dispatchEvent(new Event('change', { bubbles: true }));
-  });
-  await expect(
-    devolucionPage.locator('#sr_pay_cash_amount'),
-    'El campo de monto en efectivo no se reveló tras marcar "Efectivo"'
-  ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
-  await devolucionPage.locator('#sr_pay_cash_amount').fill(String(montoFactura));
-
-  await devolucionPage.locator('#sr_refund_type_modal button[onclick="saveRowRefundType()"]').click({ force: true });
-  await expect(
-    devolucionPage.locator('#sr_refund_type_modal'),
-    'El modal "Tipo de devolución" no se cerró tras "Aplicar"'
-  ).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
-
-  // Paso 5: procesar y confirmar.
-  const respuestaPromise = devolucionPage.waitForResponse(
-    (res) => res.url().includes('addSaleRefund'),
-    { timeout: TIMEOUTS.PAYMENT_MODAL }
-  );
-  await devolucionPage.locator('#refund_sale').click();
-  await expect(
-    devolucionPage.locator('.sweet-alert.visible'),
-    'El SweetAlert de confirmación de devolución no apareció'
-  ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
-  await devolucionPage.locator('.sweet-alert.visible button.confirm').click();
-
-  const respuesta = await respuestaPromise;
-  expect(respuesta.ok(), `addSaleRefund no respondió OK (status ${respuesta.status()})`).toBe(true);
-
-  await devolucionPage.close();
   await historial.close();
 }
 
@@ -755,64 +656,20 @@ test('Tab Facturas: Fact. Devoluciones refleja correctamente una devolución apl
  * Aplica un abono COMPLETO (100% del saldo, valor por defecto que el propio
  * formulario precarga) sobre la PRIMERA factura pendiente del PRIMER
  * cliente de la lista de "Ventas → Abono Cuentas por Cobrar" — investigado
- * en vivo. No se busca un cliente específico: confirmado en vivo que esta
- * lista NO está ordenada por actividad más reciente (crear un cliente y una
- * venta a crédito propios justo antes de llamar esta función no los pone de
- * primero — el criterio real de orden no se identificó), así que no hay
- * forma determinística de apuntar a un cliente propio sin buscar/scrollear
- * (con sus propios problemas ya documentados). Por eso esta función no
- * asume NADA sobre a quién le abona — el llamador debe leer el monto real
- * devuelto y comparar contra el estado real de "Fact. Abonos", no contra un
- * monto esperado de antemano.
+ * en vivo. No se busca un cliente específico: la lista NO está ordenada por
+ * actividad más reciente, así que esta función no asume NADA sobre a quién
+ * le abona — el llamador debe leer el monto real devuelto y comparar contra
+ * el estado real de "Fact. Abonos", no contra un monto esperado de
+ * antemano.
  *
- * Flujo real confirmado:
- * 1. Sidebar de Histórico de Ventas → "Abono Cuentas por Cobrar"
- *    (`credit_sale/clientCreditSales`) — lista de clientes con saldo
- *    pendiente, cada uno con su botón "Abonar" (fila real: `div.brand-card`).
- * 2. Ese botón entra al detalle del cliente con sus facturas pendientes;
- *    cada factura tiene su PROPIO botón "Abonar" (`get_credit_payment(id)`)
- *    que abre un modal de pago.
- * 3. El modal reutiliza los MISMOS ids del modal de pago normal del POS
- *    (`#payment_cash_total`) — confirmado en vivo. Ya viene con "Efectivo"
- *    marcado y el monto precargado al 100% del saldo.
- * 4. "Realizar Abono" (`#add_credit_payment_btn`) corre 2 validaciones
- *    silenciosas (cuenta bancaria / email de envío — normalmente ambas
- *    pasan si no se usó tarjeta/transacción/cheque ni "Enviar por correo")
- *    y SÍ dispara un SweetAlert real de confirmación
- *    (`swal({title: "¡Realizar abono!", confirmButtonText: 'Abonar', ...})`
- *    — confirmado leyendo el JS real de la app, `js/credit_customer.js`).
- *    Su botón de confirmación real dice literalmente "Abonar" (no "Sí"). El
- *    callback de esa confirmación ejecuta `add_payment()`, que hace el POST
- *    real a `addPosSalesCreditInvoice` (con un `setTimeout` interno de
- *    200ms). "Abono Seleccionado" (`#selected_payment_invoice`) es un
- *    submit en bloque aparte, no relacionado, que queda `disabled` sin
- *    antes activar un toggle "Seleccionar" por fila.
- *
- * **Bug de sistema confirmado en vivo**: el botón de confirmación del
- * SweetAlert queda visualmente por encima, pero un `.modal-backdrop` de
- * Bootstrap (residuo del propio modal `#dialog_cedit_payment` que este
- * flujo abre por debajo) queda posicionado con un z-index mayor e
- * INTERCEPTA cualquier click real en las coordenadas del botón — confirmado
- * con `document.elementFromPoint()` sobre esas coordenadas, que devuelve el
- * backdrop en vez del botón. Ni un click real de Playwright (que
- * correctamente se niega a clickear un elemento tapado) ni un
- * `HTMLElement.click()` nativo vía `.evaluate()` (que sí debería invocar el
- * `.onclick` asignado directamente por SweetAlert, confirmado leyendo su
- * propio código fuente) logran completar la confirmación en este ambiente.
- * Como red de seguridad real (mismo criterio que
- * `PosPermisos.establecerPermisoViaApiDirecta()` para el bug de "Admin
- * roles"), tras el intento de click real se invoca directamente la función
- * real de la app `add_payment()` (ya expuesta en `window`, la misma que el
- * callback del SweetAlert habría llamado) — seguro de hacer en este punto
- * porque el SweetAlert ya visible confirma que las 2 validaciones previas
- * del botón "Realizar Abono" ya pasaron.
- *
- * Señal de éxito real: la respuesta del propio POST a
- * `addPosSalesCreditInvoice` (un id numérico > 0 en texto plano) — mucho
- * más confiable que el toast (aparece y se auto-oculta demasiado rápido
- * para capturarlo con un simple `toBeVisible`) o que releer la lista de
- * pendientes (confirmado en vivo que NO se actualiza dinámicamente en el
- * DOM sin un `reload`).
+ * HALLAZGO de esta sesión (2026-08-08): "Cuentas por Cobrar" fue
+ * REDISEÑADA POR COMPLETO por la propia aplicación desde la última vez que
+ * se investigó este flujo — la lista de clientes ya no usa
+ * `div.brand-card`/botón "Abonar" (ver `CuentasPorCobrarPage` para la
+ * evidencia completa del rediseño). El flujo real y el bug de sistema del
+ * backdrop de Bootstrap (mismo `#add_credit_payment_btn`/`add_payment()`,
+ * sin cambios) viven migrados en `CuentasPorCobrarPage` — reutilizados aquí
+ * en vez de duplicar la lógica.
  */
 async function aplicarAbonoCompletoPrimeraFacturaPendiente(pos: PosPage): Promise<number> {
   await pos.abrirMenuTresPuntos();
@@ -822,75 +679,30 @@ async function aplicarAbonoCompletoPrimeraFacturaPendiente(pos: PosPage): Promis
   const linkAbono = historial.locator('text=/Abono Cuentas por Cobrar/i').first();
   await expect(linkAbono, 'El link "Abono Cuentas por Cobrar" no apareció en el sidebar').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
   await linkAbono.click();
+  await historial.waitForLoadState('networkidle', { timeout: TIMEOUTS.PAYMENT_MODAL }).catch(() => {});
 
-  const btnAbonarCliente = historial.locator('div.brand-card button:has-text("Abonar")').first();
-  await expect(btnAbonarCliente, 'No apareció ningún cliente con saldo pendiente en "Cuentas por Cobrar"').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
-  await btnAbonarCliente.click();
+  const cxc = new CuentasPorCobrarPage(historial);
+  await cxc.abrirGestionCliente(0);
 
-  const btnAbonarFactura = historial.locator('button[onclick^="get_credit_payment("]').first();
-  await expect(btnAbonarFactura, 'No apareció ninguna factura pendiente para este cliente').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
-  // Se identifica la factura por su id real (extraído del propio onclick) en vez de
-  // contar botones: confirmado en vivo que un cliente puede tener docenas de
-  // facturas pendientes (42 en una corrida real), y la fila de la factura recién
-  // abonada NO se retira del DOM dinámicamente de esa lista — solo tras recargar
-  // la página. Contar botones antes/después es una señal falsa en ese caso (el
-  // conteo total no baja sin recargar); comparar por id específico tras un reload sí lo es.
-  const onclickFactura = await btnAbonarFactura.getAttribute('onclick');
-  const idFactura = onclickFactura?.match(/get_credit_payment\((\d+)\)/)?.[1];
-  expect(idFactura, `No se pudo extraer el id de la factura del atributo onclick="${onclickFactura}"`).toBeTruthy();
-  await btnAbonarFactura.click();
+  const idsFacturas = await cxc.obtenerIdsFacturasPendientes();
+  expect(idsFacturas.length, 'No apareció ninguna factura pendiente para este cliente').toBeGreaterThan(0);
+  const idFactura = idsFacturas[0];
 
-  const campoEfectivo = historial.locator('#payment_cash_total');
-  await expect(campoEfectivo, 'El campo de efectivo precargado no apareció en el modal de abono').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
-  const montoAbono = parseFloat((await campoEfectivo.inputValue()).replace(/[^0-9.]/g, '')) || 0;
+  await cxc.abrirRegistrarAbono(idFactura);
+  const montoAbono = await cxc.obtenerMontoPrellenado();
   expect(montoAbono, 'El monto de abono precargado no es mayor a 0').toBeGreaterThan(0);
 
-  const btnRealizarAbono = historial.locator('#add_credit_payment_btn');
-  await expect(btnRealizarAbono, 'El botón "Realizar Abono" no apareció').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
-  await btnRealizarAbono.click();
-
-  // Confirmado en vivo leyendo el JS real de la app (js/credit_customer.js): el
-  // click de "Realizar Abono" SÍ dispara un SweetAlert real de confirmación
-  // (`swal({title: "¡Realizar abono!", ..., confirmButtonText: 'Abonar'}, ...)`)
-  // — su botón de confirmación real dice literalmente "Abonar" (no "Sí"), lo que
-  // en un intento anterior llevó a la conclusión equivocada de que era la MISMA
-  // fila "Abonar" de fondo y no un SweetAlert genuino. Sin este click, el
-  // callback de `swal(...)` (que ejecuta `add_payment()` → POST real a
-  // `addPosSalesCreditInvoice`) nunca se ejecuta y el abono nunca se guarda —
-  // confirmado en vivo capturando las respuestas de red: sin este click, NINGÚN
-  // POST a `addPosSalesCreditInvoice` se dispara.
-  const confirmBtn = historial.locator('.sa-button-container button.confirm');
-  await expect(confirmBtn, 'El SweetAlert de confirmación de abono no apareció').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
-
-  // Intento "fiel" (click nativo sobre el botón real) primero, con margen
-  // corto; si el bug del backdrop lo bloquea (ver docstring), se cae a
-  // invocar la función real de la app directamente como red de seguridad.
-  const esperaRespuestaClick = historial
-    .waitForResponse((r) => r.url().includes('addPosSalesCreditInvoice') && r.request().method() === 'POST', { timeout: 6_000 })
-    .then((r) => r.text())
-    .catch(() => null);
-  await confirmBtn.evaluate((el) => (el as HTMLElement).click());
-  let respuestaAbono = await esperaRespuestaClick;
-  if (respuestaAbono === null) {
-    const esperaRespuestaDirecta = historial
-      .waitForResponse((r) => r.url().includes('addPosSalesCreditInvoice') && r.request().method() === 'POST', { timeout: TIMEOUTS.PAYMENT_MODAL })
-      .then((r) => r.text());
-    await historial.evaluate(() => {
-      // @ts-expect-error función global real de la app, no expuesta por tipos — ver docstring
-      if (typeof add_payment === 'function') add_payment();
-    });
-    respuestaAbono = await esperaRespuestaDirecta;
-  }
-  expect(parseInt(respuestaAbono ?? '0', 10), `El backend respondió "${respuestaAbono}" (0/no numérico = abono no guardado)`).toBeGreaterThan(0);
+  await cxc.confirmarAbono();
 
   // Verificación final: la factura abonada ya no aparece como pendiente tras
-  // recargar la página (confirmado en vivo que esta lista NO se actualiza
-  // dinámicamente en el DOM sin un reload real).
+  // recargar la página (confirmado en vivo, flujo legado, que esta lista NO
+  // se actualiza dinámicamente en el DOM sin un reload real — mismo criterio
+  // aplicado aquí con el componente nuevo).
   await historial.reload({ waitUntil: 'domcontentloaded' });
-  await expect(
-    historial.locator(`button[onclick="get_credit_payment(${idFactura})"]`),
-    'La factura abonada sigue apareciendo como pendiente tras recargar la página'
-  ).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  await historial.waitForLoadState('networkidle', { timeout: TIMEOUTS.PAYMENT_MODAL }).catch(() => {});
+  await cxc.abrirGestionCliente(0);
+  const idsFacturasDespues = await cxc.obtenerIdsFacturasPendientes();
+  expect(idsFacturasDespues, 'La factura abonada sigue apareciendo como pendiente tras recargar la página').not.toContain(idFactura);
 
   await historial.close();
   return montoAbono;

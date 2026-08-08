@@ -733,6 +733,20 @@ export function erroresJSRelevantes(errores: string[]): string[] {
   return errores.filter((error) => !ERRORES_JS_CONOCIDOS.includes(error));
 }
 
+/**
+ * Assertion estándar de "sin errores" reutilizada al final de prácticamente
+ * todo test de este módulo (antes duplicada de forma idéntica en cada
+ * archivo `recepcion-<tab>.spec.ts` — centralizada aquí tras la separación
+ * por tab para no repetirla).
+ */
+export function validarSinErrores(page: Page, errores: string[]) {
+  return async () => {
+    await expect(page.locator('.noty_bar', { hasText: /error/i })).toHaveCount(0);
+    const erroresRelevantes = erroresJSRelevantes(errores);
+    expect(erroresRelevantes, `Errores de JavaScript detectados: ${erroresRelevantes.join(' | ')}`).toEqual([]);
+  };
+}
+
 /** Convierte un monto mostrado en formato "es-CR" (punto de millar, coma decimal — p. ej. "$ 1.000,00") a un número. */
 function parseMonedaCR(texto: string): number {
   const limpio = texto.replace(/[^\d.,-]/g, '').replace(/\./g, '').replace(',', '.');

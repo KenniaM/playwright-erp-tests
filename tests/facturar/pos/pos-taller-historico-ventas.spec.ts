@@ -1,7 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
 import { PosPage, TIMEOUTS, PESTANA_POS_FACTURACION, espiarErroresJS } from './pos.page';
 import { PosTaller } from './pos-taller.page';
-import { VentasPage } from '../../ventas/ventas.page';
+import { HistoricoVentasPage } from '../../ventas/historico-ventas.page';
 
 // Fixture `page` estándar por test (no worker-compartida): mismo criterio ya
 // usado en pos-cierre-caja.spec.ts para varios de sus escenarios — con solo
@@ -32,7 +32,7 @@ async function cargarOrdenYPresionarFacturar(pos: PosPage, taller: PosTaller, pa
 // Histórico de Ventas" (`/receip/printPosReceip`) es la fuente de verdad
 // pedida por el negocio para esta relación — su propio panel de detalle de
 // factura muestra un campo real "Número Orden de Reparación"
-// (`VentasPage.leerDetalleFacturaAbierta()`, confirmado en vivo con su HTML
+// (`HistoricoVentasPage.leerDetalleFacturaAbierta()`, confirmado en vivo con su HTML
 // real: `.receip-v2-order-item` > `.order-label`/`.order-value`).
 //
 // Confirmado en vivo, comparando los flujos reales de facturación de
@@ -64,7 +64,7 @@ test('Facturar Orden POS (una sola orden, Contado) SÍ queda vinculada en Histó
   test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
   const pos = new PosPage(page);
   const taller = new PosTaller(pos, page);
-  const ventas = new VentasPage(page);
+  const ventas = new HistoricoVentasPage(page);
   const erroresJS = espiarErroresJS(page);
 
   await test.step('Cargar el POS y asegurar caja abierta', async () => {
@@ -133,7 +133,7 @@ test('Facturación Masiva (varias Órdenes de Taller -> 1 factura) NO queda rela
   test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
   const pos = new PosPage(page);
   const taller = new PosTaller(pos, page);
-  const ventas = new VentasPage(page);
+  const ventas = new HistoricoVentasPage(page);
   const erroresJS = espiarErroresJS(page);
 
   await test.step('Cargar el POS y asegurar caja abierta', async () => {
