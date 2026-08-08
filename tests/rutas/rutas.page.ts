@@ -44,6 +44,30 @@ const L = {
   TBODY_REPARTIDORES_VINCULADOS: '#tbody_dialog_add_dealer_route_linked',
 } as const;
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Cierra el banner "Activar notificaciones" del navegador si aparece —
+ * elemento opcional del sistema, ajeno a Rutas/Comisiones, que puede quedar
+ * sobre el encabezado e interceptar el primer click real tras cargar la
+ * página (mismo hallazgo ya documentado en POS: `PosCore.cerrarModalNotificacionesSiAparece()`,
+ * en `pos-core.page.ts`). No se importa esa versión porque es un método de
+ * instancia de `PosCore`, acoplado a construir toda la fachada de POS solo
+ * para esto — se reproduce aquí como función suelta (mismo criterio que
+ * `espiarErroresJS`/`esperarQuedaActivo` en `pos.utils.ts`), reutilizable
+ * también desde `comision.page.ts` (mismo módulo "Rutas").
+ */
+export async function cerrarBannerNotificacionesSiAparece(page: Page) {
+  const banner = page.locator('#workshop-web-notification-permission');
+  if (await banner.isVisible().catch(() => false)) {
+    await banner
+      .getByRole('button', { name: 'Cerrar' })
+      .first()
+      .click({ force: true, timeout: 5_000 })
+      .catch(() => {});
+  }
+}
+
 // ─── Page Object ──────────────────────────────────────────────────────────────
 
 export class RutasPage {
@@ -160,10 +184,29 @@ export class RutasPage {
     return textos.map((t) => t.trim());
   }
 
-  /** Abre el modal "Agregar Nueva Ruta". */
+  /**
+   * Abre el modal "Agregar Nueva Ruta".
+   *
+   * CORRECCIÓN DE AUTOMATIZACIÓN confirmada en vivo: un único `click()` sin
+   * reintentos sobre `botonAgregar` (justo el primer click real tras
+   * `irARutas()`) podía perderse contra el banner "Activar notificaciones"
+   * reapareciendo de forma asíncrona — confirmado en la traza real: el click
+   * fue interceptado primero por ese banner y, en un reintento posterior,
+   * por el menú de usuario del encabezado, hasta agotar el timeout de
+   * accionabilidad por defecto. Mismo patrón de reintentos acotados (5
+   * intentos, cerrando el banner antes de cada uno) ya usado en
+   * `PosCore.abrirProductoRapido()` en vez de un único intento con timeout
+   * largo.
+   */
   async abrirFormularioAgregar() {
-    await this.botonAgregar.click();
-    await expect(this.modalAgregar).toBeVisible({ timeout: TIMEOUTS.TABLE_LOAD });
+    const MAX_INTENTOS = 5;
+    let modalVisible = false;
+    for (let intento = 1; intento <= MAX_INTENTOS && !modalVisible; intento++) {
+      await cerrarBannerNotificacionesSiAparece(this.page);
+      await this.botonAgregar.click({ timeout: 5_000 }).catch(() => {});
+      modalVisible = await this.modalAgregar.waitFor({ state: 'visible', timeout: 3_000 }).then(() => true).catch(() => false);
+    }
+    expect(modalVisible, `El modal "Agregar Nueva Ruta" no quedó visible tras ${MAX_INTENTOS} intentos`).toBe(true);
   }
 
   /**
@@ -221,10 +264,24 @@ export class RutasPage {
     }
   }
 
-  /** Busca una ruta por nombre usando el buscador del listado. */
+  /**
+   * Busca una ruta por nombre usando el buscador del listado.
+   *
+   * Mismo hallazgo y corrección que `abrirFormularioAgregar()`: confirmado
+   * en vivo que este click también puede ser el primer click real de un
+   * test (p. ej. CP-131, que no pasa antes por `abrirFormularioAgregar()`)
+   * y perderse contra el banner "Activar notificaciones".
+   */
   async buscarRuta(nombre: string) {
     await this.buscador.fill(nombre);
-    await this.botonBuscar.click();
+
+    const MAX_INTENTOS = 5;
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      await cerrarBannerNotificacionesSiAparece(this.page);
+      const resultado = await this.botonBuscar.click({ timeout: 5_000 }).then(() => true).catch(() => false);
+      if (resultado) return;
+    }
+    throw new Error(`El click en el botón de búsqueda no tuvo éxito tras ${MAX_INTENTOS} intentos`);
   }
 
   /** Fila del listado correspondiente a una ruta por nombre. */

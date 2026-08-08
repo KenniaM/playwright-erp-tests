@@ -44,7 +44,12 @@ export const SUBMODULOS_VENTAS: SubmoduloVentas[] = [
     url: BASE_URL + '/credit_sale/clientCreditSales',
     rutaEsperada: 'clientCreditSales',
     tituloEsperado: /cuentas por cobrar/i,
-    obtenerLocatorDeCarga: (page) => page.locator('#btn_search'),
+    // CORRECCIÓN DE AUTOMATIZACIÓN confirmada en vivo: esta pantalla fue
+    // rediseñada por la propia aplicación (mismo hallazgo que "Bodegas" en
+    // inventario.page.ts) — `#btn_search` ya no existe; el contenido real
+    // hoy es un encabezado `<h1>Cuentas por cobrar</h1>` dentro de una UI de
+    // filtros/tabla completamente nueva.
+    obtenerLocatorDeCarga: (page) => page.getByRole('heading', { name: 'Cuentas por cobrar', level: 1 }),
   },
   {
     nombre: 'Lista de Cobros',
@@ -161,8 +166,30 @@ export class VentasPage {
     await tarjeta.waitFor({ state: 'visible', timeout: TIMEOUTS.CARGA });
     await tarjeta.click();
 
-    await this.page.locator('.receip-v2-order-item', { hasText: 'Número Orden de Reparación' })
+    // CORRECCIÓN DE AUTOMATIZACIÓN confirmada en vivo: `.receip-v2-order-item`
+    // ("Número Orden de Compra"/"Número Orden de Reparación") NO se renderiza
+    // visible para una venta de contado simple sin orden de taller asociada
+    // (confirmado en vivo: `.receip-v2-order-item` cuenta 1 en el DOM pero sin
+    // texto visible — vive detrás del toggle "Ver detalles", no expandido por
+    // defecto) — a diferencia de lo asumido antes (que el bloque "siempre se
+    // renderiza"), válido solo para facturas provenientes de una Orden de
+    // Taller (único caso confirmado en `pos-taller-historico-ventas.spec.ts`).
+    // "Forma de pago" sí es un encabezado real siempre visible al abrir
+    // cualquier factura, sin depender de su origen — señal de listo robusta
+    // para ambos casos.
+    await this.page.getByText('Forma de pago', { exact: true })
       .waitFor({ state: 'visible', timeout: TIMEOUTS.CARGA });
+
+    // CORRECCIÓN DE AUTOMATIZACIÓN adicional confirmada en vivo: el
+    // encabezado "Forma de pago" puede quedar visible ANTES de que la
+    // propia línea del método (p. ej. "Tarjeta: $888,00") termine de
+    // poblarse vía AJAX — confirmado en vivo (factura proveniente de una
+    // Orden de Caja pagada con Tarjeta): `leerFormaDePagoFacturaAbierta()`
+    // leyó `tarjeta: null` pese a que la línea real SÍ aparecía
+    // milisegundos después en el DOM. Mismo criterio ya usado en
+    // `buscarEnHistoricoVentas()` de este archivo: esperar la red en reposo
+    // (best-effort, nunca bloqueante) antes de devolver el control.
+    await this.page.waitForLoadState('networkidle', { timeout: TIMEOUTS.CARGA }).catch(() => {});
   }
 
   /**
@@ -194,7 +221,21 @@ export class VentasPage {
    * ambos casos legítimos, confirmados en vivo, investigación 2026-08-06).
    */
   async leerFormaDePagoFacturaAbierta(): Promise<FormaDePagoFacturaHistorico> {
-    const texto = await this.page.locator('body').innerText();
+    const bodyTexto = await this.page.locator('body').innerText();
+
+    // CORRECCIÓN DE AUTOMATIZACIÓN confirmada en vivo: buscar sobre el
+    // `body` completo puede capturar una etiqueta "Estado:" AJENA a esta
+    // sección (confirmado en vivo: una factura mostró `estado: "electrónico"`
+    // en vez del real "Procesado" que sí aparece dentro de "Forma de pago") —
+    // hay más de un bloque "Estado:" en la página. Se acota el texto a lo que
+    // va desde el encabezado real "Forma de pago" hasta el siguiente
+    // encabezado real "Resumen de totales" (ambos confirmados en vivo,
+    // presentes en toda factura), para no cruzar datos de otras secciones.
+    const inicio = bodyTexto.indexOf('Forma de pago');
+    const fin = bodyTexto.indexOf('Resumen de totales', inicio);
+    const texto = inicio >= 0
+      ? bodyTexto.slice(inicio, fin >= 0 ? fin : undefined)
+      : bodyTexto;
 
     // No reutiliza PosCore._leerMontoDeTexto() (asume coma=miles/punto=decimal,
     // correcto para los montos que expone el propio modal de pago del POS) —

@@ -48,7 +48,13 @@ export const SUBMODULOS_REPORTES_INVENTARIO: SubmoduloReportes[] = [
     url: BASE_URL + '/reports/inventoryReport',
     rutaEsperada: 'inventoryReport',
     tituloEsperado: /toma f[ií]sica/i,
-    obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /toma f[ií]sica/i),
+    // CORRECCIÓN DE AUTOMATIZACIÓN confirmada en vivo: esta pantalla fue
+    // rediseñada por la propia aplicación (mismo hallazgo que "Bodegas" en
+    // inventario.page.ts) — ya no renderiza ningún `.content-header`; el
+    // contenido real hoy es un encabezado `<h1> Reporte de Toma Física</h1>`
+    // dentro de una UI de tarjetas/dashboard nueva. Regex (no exacto) porque
+    // el texto real incluye un ícono/prefijo y "Reporte de".
+    obtenerLocatorDeCarga: (page) => page.getByRole('heading', { name: /reporte de toma f[ií]sica/i, level: 1 }),
   },
   {
     nombre: 'Movimientos de productos',

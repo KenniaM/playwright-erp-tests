@@ -31,26 +31,34 @@ export const SUBMODULOS_REPORTES_CLIENTES: SubmoduloReportes[] = [
     tituloEsperado: /clientes por vendedor/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /clientes por vendedor/i),
   },
-  {
-    // El <title> de esta pantalla es "Reporte de ventas por cliente"
-    // (confirmado en vivo) — no corresponde a "Redes Sociales", parece un
-    // título desactualizado/copiado de otra pantalla del lado de la
-    // aplicación. Se mantiene tal cual porque es lo que realmente se
-    // renderiza; la validación real recae en el encabezado de contenido, que
-    // sí es propio de esta pantalla.
-    nombre: 'Redes Sociales',
-    url: BASE_URL + '/reports/customerBySocialNetworks',
-    rutaEsperada: 'customerBySocialNetworks',
-    tituloEsperado: /reporte de ventas por cliente/i,
-    obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /redes sociales/i),
-  },
+  // "Redes Sociales" queda fuera de este listado — ver hallazgo documentado
+  // junto a REDES_SOCIALES_ROTO más abajo.
 ];
+
+/**
+ * Hallazgo confirmado en vivo (3 veces, en intentos separados en el tiempo):
+ * el link "Redes Sociales" SÍ está visible en el Sidebar (dentro de
+ * Reportes > Clientes), pero navegar a su URL real (`customerBySocialNetworks`)
+ * redirige a `/help/unauthorized` ("NO AUTORIZADO — Póngase en contacto con
+ * un administrador para validar acceso") para la cuenta Administrador nivel
+ * 1 — una inconsistencia real entre lo que el Sidebar ofrece y lo que el
+ * backend autoriza (misma categoría de bug ya documentada en este repo para
+ * "Admin roles" del POS, ver CLAUDE.md). Se documenta como hallazgo (mismo
+ * criterio que "Reporte de Inspección" en gestion-navegacion.spec.ts) en vez
+ * de omitirlo silenciosamente.
+ */
+export const REDES_SOCIALES_ROTO = {
+  nombre: 'Redes Sociales',
+  url: BASE_URL + '/reports/customerBySocialNetworks',
+} as const;
 
 const URL_BITACORA_CLIENTES = SUBMODULOS_REPORTES_CLIENTES[0].url;
 const URL_ESTADO_CUENTA = SUBMODULOS_REPORTES_CLIENTES[1].url;
 const URL_CLIENTES_FRECUENTES = SUBMODULOS_REPORTES_CLIENTES[2].url;
 const URL_CLIENTES_POR_VENDEDOR = SUBMODULOS_REPORTES_CLIENTES[3].url;
-const URL_REDES_SOCIALES = SUBMODULOS_REPORTES_CLIENTES[4].url;
+// "Redes Sociales" ya no vive en SUBMODULOS_REPORTES_CLIENTES (ver
+// REDES_SOCIALES_ROTO arriba) — se referencia directo.
+const URL_REDES_SOCIALES = REDES_SOCIALES_ROTO.url;
 
 // ─── Utilidades de fecha ────────────────────────────────────────────────────
 

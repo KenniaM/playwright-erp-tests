@@ -3,6 +3,7 @@ import { ReportesPage, TIMEOUTS } from './reportes.page';
 import {
   hoyISO,
   hoyMenosDiasISO,
+  REDES_SOCIALES_ROTO,
   ReporteBitacoraClientesPage,
   ReporteClientesFrecuentesPage,
   ReporteClientesPorVendedorPage,
@@ -37,6 +38,27 @@ for (const submodulo of SUBMODULOS_REPORTES_CLIENTES) {
     });
   });
 }
+
+// Hallazgo confirmado en vivo (3 veces, en intentos separados en el tiempo):
+// el link "Redes Sociales" está visible en el Sidebar (Reportes > Clientes)
+// pero navegar a su URL real redirige a la página "NO AUTORIZADO" del
+// sistema para la cuenta Administrador nivel 1 — el Sidebar ofrece una
+// opción que el backend no autoriza a este rol. Se documenta la falla en vez
+// de forzar un "passing test" sobre una función que realmente está
+// bloqueada (mismo criterio que "Reporte de Inspección" en
+// gestion-navegacion.spec.ts).
+test('Cargar el submódulo "Redes Sociales" — hallazgo esperado: NO AUTORIZADO', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const reportes = new ReportesPage(page);
+
+  await test.step('Navegar a "Redes Sociales"', async () => {
+    await reportes.irA(REDES_SOCIALES_ROTO.url);
+  });
+
+  await test.step('Confirmar que la navegación termina en la página "NO AUTORIZADO"', async () => {
+    await expect(page.getByText('NO AUTORIZADO')).toBeVisible();
+  });
+});
 
 // ─── Reporte de Clientes Frecuentes ────────────────────────────────────────
 //
