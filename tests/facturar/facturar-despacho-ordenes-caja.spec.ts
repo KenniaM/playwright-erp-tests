@@ -5,7 +5,7 @@ import { FacturarDespachoOrdenesCajaPage, TIMEOUTS } from './facturar-despacho-o
 
 // ═══════════════════════════════════════════════════════════════════════════
 // IMPORTANTE — proyecto dedicado obligatorio, mismo criterio que
-// pos-restaurante.spec.ts/pos-posmovi: este spec corre EXCLUSIVAMENTE con
+// tests/facturar/pos-restaurante/pos-posmovi: este spec corre EXCLUSIVAMENTE con
 //
 //   POS_COMPANIA=HONDURAS npx playwright test tests/facturar/facturar-despacho-ordenes-caja.spec.ts --project=firefox-super-admin
 //

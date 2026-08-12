@@ -1692,27 +1692,72 @@ export class PosCore {
    * Presiona el botón "+" de una línea del carrito una vez y espera que la
    * cantidad realmente suba (nunca asume el resultado) antes de devolver el
    * control.
+   *
+   * CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO (root-cause real, mismo
+   * antipatrón ya documentado y corregido en otros puntos de esta clase —
+   * `abrirCrearProducto()`, `abrirMenuOrdenCaja()`, etc. — nunca visto antes
+   * en este método específico): un único `.click()` sin timeout propio sobre
+   * `.btn_set_input_quantity_up_<clave>` puede quedar esperando
+   * indefinidamente su propia accionabilidad y agotar el timeout COMPLETO
+   * del test (este proyecto no configura `actionTimeout`), en vez de fallar
+   * rápido con un mensaje claro. Reproducido en vivo (4/4) específicamente
+   * tras `establecerMostrarPrecioConIva()`, que re-renderiza la fila del
+   * carrito (cambia la columna de total mostrada) — la hipótesis real es que
+   * ese re-render regenera también los botones +/-, dejando el selector por
+   * clase apuntando momentáneamente a un elemento que Playwright espera
+   * quede estable pero nunca lo hace a tiempo. Se corrige con el mismo
+   * patrón de reintento acotado ya usado en el resto del repo para este
+   * antipatrón: re-localizar el botón EN CADA intento (nunca reutilizar el
+   * mismo Locator resuelto una sola vez) con un timeout corto por intento,
+   * en vez de un único intento con timeout largo.
    */
   async incrementarCantidadProducto(clave: string) {
     const cantidadAntes = await this.obtenerCantidadProducto(clave);
-    await this.page.locator(`.${L.CARRITO_CANTIDAD_BTN_MAS_CLASE}${clave}`).click();
-    await expect.poll(
-      () => this.obtenerCantidadProducto(clave),
-      { timeout: TIMEOUTS.PAYMENT_MODAL, message: `La cantidad de "${clave}" no subió tras presionar "+"` }
+    const MAX_INTENTOS = 4;
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      const clickeado = await this.page
+        .locator(`.${L.CARRITO_CANTIDAD_BTN_MAS_CLASE}${clave}`)
+        .click({ timeout: 5_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!clickeado) continue;
+      const subio = await expect.poll(
+        () => this.obtenerCantidadProducto(clave),
+        { timeout: 5_000 }
+      ).toBeGreaterThan(cantidadAntes).then(() => true).catch(() => false);
+      if (subio) return;
+    }
+    expect(
+      await this.obtenerCantidadProducto(clave),
+      `La cantidad de "${clave}" no subió tras ${MAX_INTENTOS} intentos del botón "+"`
     ).toBeGreaterThan(cantidadAntes);
   }
 
 
   /**
    * Presiona el botón "−" de una línea del carrito una vez y espera que la
-   * cantidad realmente baje.
+   * cantidad realmente baje. Mismo reintento acotado que
+   * `incrementarCantidadProducto()` y mismo motivo real (ver su comentario).
    */
   async decrementarCantidadProducto(clave: string) {
     const cantidadAntes = await this.obtenerCantidadProducto(clave);
-    await this.page.locator(`.${L.CARRITO_CANTIDAD_BTN_MENOS_CLASE}${clave}`).click();
-    await expect.poll(
-      () => this.obtenerCantidadProducto(clave),
-      { timeout: TIMEOUTS.PAYMENT_MODAL, message: `La cantidad de "${clave}" no bajó tras presionar "−"` }
+    const MAX_INTENTOS = 4;
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      const clickeado = await this.page
+        .locator(`.${L.CARRITO_CANTIDAD_BTN_MENOS_CLASE}${clave}`)
+        .click({ timeout: 5_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!clickeado) continue;
+      const bajo = await expect.poll(
+        () => this.obtenerCantidadProducto(clave),
+        { timeout: 5_000 }
+      ).toBeLessThan(cantidadAntes).then(() => true).catch(() => false);
+      if (bajo) return;
+    }
+    expect(
+      await this.obtenerCantidadProducto(clave),
+      `La cantidad de "${clave}" no bajó tras ${MAX_INTENTOS} intentos del botón "−"`
     ).toBeLessThan(cantidadAntes);
   }
 

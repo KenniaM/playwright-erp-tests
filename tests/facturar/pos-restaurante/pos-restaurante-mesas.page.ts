@@ -1,6 +1,7 @@
 import { expect, Locator, Page } from '@playwright/test';
-import { PosPage, TIMEOUTS, type MetadatoProducto } from './pos.page';
-import { L } from './pos.locators';
+import { PosPage, TIMEOUTS, type MetadatoProducto } from '../pos/pos.page';
+import { L } from '../pos/pos.locators';
+import { esperarVentanaImpresion } from '../pos/pos.utils';
 
 // Locators propios del módulo "Restaurante" (Mesas) del POS — confirmado en
 // vivo ÚNICAMENTE contra el ambiente qa_restaurant
@@ -10,6 +11,15 @@ import { L } from './pos.locators';
 // (compartido con el resto de la suite) — mismo criterio ya usado por
 // PosCrearCliente/PosProductosExternos para locators acotados a un dominio
 // nuevo. Todos confirmados inspeccionando el DOM real (no asumidos):
+//
+// Migrado desde tests/facturar/pos/pos-restaurante.page.ts a
+// tests/facturar/pos-restaurante/pos-restaurante-mesas.page.ts (módulo
+// dedicado, ver el informe de la migración): la clase pasó de
+// `PosRestaurante` a `PosRestauranteMesas` (el nombre de archivo manda,
+// convención del repo) y toda la suite quedó scopeada a un salón propio
+// (`NOMBRE_SALON_QA`, "QA Automatizacion Playwright") con 8 mesas dedicadas,
+// creado en vivo vía /lounge/index — nunca depende de mesas/órdenes de los
+// salones reales de la compañía ("Gordo da", "Oscar", "Pruebas", "QA3").
 //
 // - El sub-tab "MESAS" del POS vive en un pie de página con 3 posiciones
 //   fijas por id técnico estable (footer_tab_rest_table/_fast/_express, este
@@ -133,7 +143,34 @@ const L_MESA = {
   // la orden actual sin facturar (confirmado en vivo: la orden permanece
   // intacta, "reabrir" es simplemente volver a clickear la misma mesa).
   BTN_CERRAR_ORDEN_SIN_FACTURAR: '#close_selected_rest_order',
+
+  // ─── Selección de Salón ──────────────────────────────────────────────────
+  // Cada salón visible en el panel de Mesas es un botón real
+  // `.rest-lounge-top-tab` en la barra superior (`#rest_lounge_top_tabs`),
+  // con `title="<nombre real del salón>"` y
+  // `onclick="load_rest_table_by_lounge(<id>)"` — confirmado en vivo
+  // inspeccionando el DOM real del POS tras abrir "MESAS". Se localiza
+  // SIEMPRE por `title` (nombre visible real), nunca por el id numérico del
+  // onclick — mismo criterio de todo el repo (nunca hardcodear ids
+  // específicos de un ambiente, ver CLAUDE.md).
+  TAB_SALON: (nombreSalon: string) => `.rest-lounge-top-tab[title="${nombreSalon}"]`,
+  TAB_SALON_ACTIVA_CLASE: 'rest-lounge-top-tab-active',
 } as const;
+
+/**
+ * Nombre real del salón creado EXCLUSIVAMENTE para esta suite de
+ * automatización (investigado y creado en vivo vía /lounge/index — ver el
+ * informe de la migración a facturar/pos-restaurante/), con 8 mesas propias
+ * dedicadas (ids reales 1857-1864, capacidades/formas variadas: mesas
+ * rectangulares, una mesa circular, una barra, una barra larga y una mesa
+ * individual). Separado de los salones reales de la compañía ("Gordo da",
+ * "Oscar", "Pruebas", "QA3") para que la suite nunca dependa de mesas/órdenes
+ * ajenas del ambiente compartido — todos los métodos de este Page Object que
+ * leen/seleccionan mesas del plano operan EXCLUSIVAMENTE sobre este salón:
+ * `abrirMesas()` lo selecciona por su nombre real (nunca por id) antes de
+ * devolver el control.
+ */
+export const NOMBRE_SALON_QA = 'QA Automatizacion Playwright';
 
 /** Datos reales de una mesa del plano, leídos de su propio `.fig` (nunca por posición). */
 export type DatosMesaPlano = {
@@ -143,20 +180,66 @@ export type DatosMesaPlano = {
   ocupada: boolean;
 };
 
-export class PosRestaurante {
+export class PosRestauranteMesas {
   constructor(private readonly pos: PosPage, private readonly page: Page) {}
 
 
   // ─── Navegación al módulo Mesas ─────────────────────────────────────────
 
   /**
-   * Abre el sub-tab "MESAS" del POS y asegura la vista de cuadrícula/plano
+   * Selecciona el tab del salón QA (`NOMBRE_SALON_QA`) si todavía no está
+   * activo — no-op si ya lo está (mismo criterio que
+   * `PosCore.desactivarDescuentoGeneral()`: solo actuar cuando el estado
+   * difiere del pedido). Reintento acotado cerrando overlays conocidos antes
+   * de cada intento (el modal de tipo de cambio del Dashboard puede
+   * reaparecer de forma asíncrona sobre esta barra — confirmado en vivo,
+   * mismo mecanismo ya documentado en `PosCore._cerrarModalMonedaSiAparece`),
+   * en vez de un único intento con timeout largo.
+   */
+  async _seleccionarSalonQA() {
+    const tab = this.page.locator(L_MESA.TAB_SALON(NOMBRE_SALON_QA));
+    await expect(tab, `El tab del salón "${NOMBRE_SALON_QA}" no existe en el panel de Mesas`).toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+
+    const yaActivo = await tab.evaluate((el, clase) => el.className.includes(clase), L_MESA.TAB_SALON_ACTIVA_CLASE).catch(() => false);
+    if (yaActivo) return;
+
+    const MAX_INTENTOS = 4;
+    let activado = false;
+    for (let intento = 1; intento <= MAX_INTENTOS && !activado; intento++) {
+      await this.pos.cerrarOverlaysConocidos();
+      await this.pos._cerrarModalMonedaSiAparece();
+      await tab.click({ timeout: 5_000 }).catch(() => {});
+      activado = await tab.evaluate((el, clase) => el.className.includes(clase), L_MESA.TAB_SALON_ACTIVA_CLASE).catch(() => false);
+    }
+    expect(activado, `El tab del salón "${NOMBRE_SALON_QA}" no quedó activo tras ${MAX_INTENTOS} intentos`).toBe(true);
+  }
+
+
+  /**
+   * Abre el sub-tab "MESAS" del POS, asegura la vista de cuadrícula/plano
    * (la única de las 2 vistas —cuadrícula/lista— donde una mesa DISPONIBLE
    * es clickeable directamente; la vista de lista solo enumera órdenes ya
-   * creadas, confirmado en vivo).
+   * creadas, confirmado en vivo) y selecciona el salón QA de esta suite
+   * (`_seleccionarSalonQA()`) — todo el resto del módulo asume que el plano
+   * ya está scopeado a `NOMBRE_SALON_QA`.
    */
   async abrirMesas() {
-    await this.page.locator(L_MESA.TAB_MESAS).click();
+    // Corrección de automatización confirmada en vivo: este click (el
+    // primero del método) puede quedar bloqueado por el modal de tipo de
+    // cambio del Dashboard (BCCR) reapareciendo de forma asíncrona
+    // ("<div id=dashbmBccrCurrencyModal> ... subtree intercepts pointer
+    // events"), agotando el timeout completo del test — mismo mecanismo ya
+    // documentado en PosCore._cerrarModalMonedaSiAparece()/_seleccionarSalonQA()
+    // de este archivo, aplicado aquí también en vez de un único intento largo.
+    const tabMesas = this.page.locator(L_MESA.TAB_MESAS);
+    const MAX_INTENTOS_TAB = 4;
+    let tabAbierta = false;
+    for (let intento = 1; intento <= MAX_INTENTOS_TAB && !tabAbierta; intento++) {
+      await this.pos.cerrarOverlaysConocidos();
+      await this.pos._cerrarModalMonedaSiAparece();
+      tabAbierta = await tabMesas.click({ timeout: 5_000 }).then(() => true).catch(() => false);
+    }
+    expect(tabAbierta, `El tab "MESAS" no se pudo abrir tras ${MAX_INTENTOS_TAB} intentos`).toBe(true);
     await this.page.waitForTimeout(1_000);
 
     const cuadriculaActiva = await this.page.locator(L_MESA.BTN_VISTA_CUADRICULA)
@@ -167,16 +250,38 @@ export class PosRestaurante {
       await this.page.waitForTimeout(1_000);
     }
 
+    // Seleccionar el salón QA ANTES de validar que el plano cargó mesas: el
+    // salón activo por defecto (el primero de la compañía, p. ej. "Gordo
+    // da") no es el que esta suite usa, y cambiar de salón vuelve a pedir el
+    // listado de mesas al servidor — validar visibilidad ANTES del cambio
+    // solo confirmaría el salón equivocado.
+    await this._seleccionarSalonQA();
+
     await expect(
       this.page.locator(L_MESA.TODAS_LAS_FIGS).first(),
-      'El plano de mesas no cargó ninguna mesa'
+      `El plano de mesas no cargó ninguna mesa para el salón "${NOMBRE_SALON_QA}"`
     ).toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
   }
 
 
-  /** Vuelve al sub-tab "PRODUCTOS" (catálogo) para agregar ítems a la mesa/orden ya seleccionada. */
+  /**
+   * Vuelve al sub-tab "PRODUCTOS" (catálogo) para agregar ítems a la
+   * mesa/orden ya seleccionada. Mismo reintento acotado cerrando overlays
+   * conocidos que `abrirMesas()`/`_seleccionarSalonQA()` — confirmado en
+   * vivo que este click también puede quedar bloqueado por el modal de tipo
+   * de cambio (BCCR) reapareciendo de forma asíncrona.
+   */
   async volverAProductos() {
-    await this.page.locator(L_MESA.TAB_PRODUCTOS).click();
+    const tab = this.page.locator(L_MESA.TAB_PRODUCTOS);
+    const MAX_INTENTOS = 4;
+    let abierto = false;
+    for (let intento = 1; intento <= MAX_INTENTOS && !abierto; intento++) {
+      await this.pos.cerrarOverlaysConocidos();
+      await this.pos._cerrarModalMonedaSiAparece();
+      abierto = await tab.click({ timeout: 5_000 }).then(() => true).catch(() => false);
+    }
+    expect(abierto, `El tab "PRODUCTOS" no se pudo abrir tras ${MAX_INTENTOS} intentos`).toBe(true);
+
     await expect(
       this.pos.primerProducto,
       'El catálogo de productos no quedó visible tras volver desde Mesas'
@@ -261,9 +366,27 @@ export class PosRestaurante {
    * que es el MISMO click que el ítem "Seleccionar Orden" del menú de
    * hamburguesa dispara sobre una mesa ya ocupada).
    */
+  /**
+   * Corrección de automatización confirmada en vivo: este click, igual que
+   * el de `abrirMesas()`/`volverAProductos()`/`_seleccionarSalonQA()`, puede
+   * quedar bloqueado por overlays asíncronos del Dashboard (moneda BCCR) o
+   * por el modal "Ver mesa" — reintento acotado (4 intentos) cerrando
+   * overlays conocidos antes de cada uno, en vez de un único intento con
+   * timeout largo. Root-cause real de varias fallas intermitentes de
+   * `asignarCarritoFlotanteAMesaDisponible()` (Escenario 16), que llama a
+   * este método una segunda vez como parte de su propia recuperación.
+   */
   async clickMesa(mesaId: string) {
-    await this._cerrarModalVerMesaSiAparece();
-    await this.page.locator(L_MESA.FIG_MESA(mesaId)).click();
+    const fig = this.page.locator(L_MESA.FIG_MESA(mesaId));
+    const MAX_INTENTOS = 4;
+    let clickeado = false;
+    for (let intento = 1; intento <= MAX_INTENTOS && !clickeado; intento++) {
+      await this._cerrarModalVerMesaSiAparece();
+      await this.pos.cerrarOverlaysConocidos();
+      await this.pos._cerrarModalMonedaSiAparece();
+      clickeado = await fig.click({ timeout: 5_000 }).then(() => true).catch(() => false);
+    }
+    expect(clickeado, `No se pudo clickear la mesa ${mesaId} tras ${MAX_INTENTOS} intentos`).toBe(true);
   }
 
 
@@ -305,6 +428,24 @@ export class PosRestaurante {
    * ambos tipos de fila).
    */
   async agregarProductoAlCarritoDeMesa(metadato: MetadatoProducto): Promise<void> {
+    // Corrección de automatización confirmada en vivo (corrida real contra
+    // el salón QA, 11/16 escenarios fallando en cascada): el popup
+    // AUTOMÁTICO de Aditivos/Modificadores (`#dialog_rest_mod_view`, ver el
+    // comentario completo de `agregarProductoConAditivo()`) no está
+    // restringido a `PosRestauranteMesas.PRODUCTO_CON_ADITIVOS` — CUALQUIER
+    // producto del catálogo con aditivos configurados lo dispara al
+    // agregarse, y "primer producto no presente" (obtenerPrimerProductoNoPresenteEnCarrito())
+    // no filtra por eso. Este método genérico nunca lo esperaba ni lo
+    // cerraba (a diferencia de agregarProductoConAditivo(), que sí), así que
+    // quedaba abierto tapando el resto de la pantalla ("... subtree
+    // intercepts pointer events") y colgaba el SIGUIENTE click hasta agotar
+    // el timeout completo del test. Se cierra defensivamente en ambos
+    // extremos: antes del click (por si quedó abierto de un agregado
+    // anterior) y después de confirmar el agregado (por si este mismo
+    // producto lo disparó) — mismo criterio de "cerrar overlays conocidos
+    // antes de cada intento" que el resto del repo.
+    await this._cerrarModalAditivosSiApareceAutomaticamente();
+
     const filasAntes = await this.pos.obtenerClavesFilasCarrito();
     const modalMontoACompra = this.page.locator(L.DIALOG_MONTO_A_COMPRAR);
 
@@ -325,6 +466,28 @@ export class PosRestaurante {
       async () => (await this.pos.obtenerClavesFilasCarrito()).length,
       { timeout: TIMEOUTS.PRODUCTS_LOAD, message: `El producto "${metadato.nombre}" no quedó agregado al carrito de la mesa` }
     ).toBeGreaterThan(filasAntes.length);
+
+    await this._cerrarModalAditivosSiApareceAutomaticamente();
+  }
+
+
+  /**
+   * Cierra el modal de Aditivos/Modificadores (`#dialog_rest_mod_view`) si
+   * está visible en este momento — ver el comentario de
+   * `agregarProductoAlCarritoDeMesa()`. Espera corta y acotada (no bloquea
+   * el flujo normal cuando el producto agregado no tiene aditivos, el caso
+   * más común): confirma primero si el modal realmente abrió antes de
+   * intentar cerrarlo.
+   */
+  async _cerrarModalAditivosSiApareceAutomaticamente() {
+    const abierto = await this.modalAditivos
+      .waitFor({ state: 'visible', timeout: 3_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (!abierto) return;
+
+    await this.page.locator(L_MESA.MODAL_ADITIVOS_BTN_CERRAR).click().catch(() => {});
+    await this.modalAditivos.waitFor({ state: 'hidden', timeout: TIMEOUTS.PAYMENT_MODAL }).catch(() => {});
   }
 
 
@@ -367,6 +530,29 @@ export class PosRestaurante {
     if (await lista.isVisible().catch(() => false)) return;
     await this.page.locator(L_MESA.DROPDOWN_DIVISION_TRIGGER).click();
     await expect(lista, 'El dropdown de "División de cuentas" no se abrió').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+
+  /**
+   * Fuerza un refresco real del dropdown de "División de cuentas" (cerrar +
+   * reabrir) — CORRECCIÓN DE AUTOMATIZACIÓN confirmada en vivo:
+   * `abrirDropdownDivisionCuentas()` es un no-op si el dropdown ya está
+   * visible, y confirmado en vivo (2/2, interceptando el DOM) que el total
+   * de una cuenta que NO es la recién creada/activada (ej. "Principal"
+   * justo después de `agregarClienteDivision()`) puede quedar mostrando un
+   * valor desactualizado ("0") dentro de ese MISMO dropdown ya abierto,
+   * hasta que se cierra y se vuelve a abrir — un simple re-lectura del DOM
+   * sin cerrar/reabrir puede seguir leyendo ese valor obsoleto
+   * indefinidamente (confirmado: un `expect.poll()` de 15s sobre
+   * `obtenerTotalClienteDivision()` sin este refresco nunca se resolvía).
+   */
+  async refrescarDropdownDivisionCuentas() {
+    const lista = this.page.locator(L_MESA.DROPDOWN_DIVISION_LISTA);
+    if (await lista.isVisible().catch(() => false)) {
+      await this.page.locator(L_MESA.DROPDOWN_DIVISION_TRIGGER).click();
+      await lista.waitFor({ state: 'hidden', timeout: TIMEOUTS.PAYMENT_MODAL }).catch(() => {});
+    }
+    await this.abrirDropdownDivisionCuentas();
   }
 
 
@@ -533,7 +719,7 @@ export class PosRestaurante {
    * seleccionada.
    */
   async agregarProductoConAditivo(): Promise<string> {
-    const nombre = PosRestaurante.PRODUCTO_CON_ADITIVOS;
+    const nombre = PosRestauranteMesas.PRODUCTO_CON_ADITIVOS;
     const producto = this.pos.productoPorNombre(nombre);
     await expect(
       producto,
@@ -596,6 +782,12 @@ export class PosRestaurante {
    * cambia el botón inferior de "FACTURAR" al enlace real "Asignar Mesa".
    */
   async agregarProductoSinMesaSeleccionada(): Promise<string> {
+    // Mismo mecanismo de "cerrar antes/después" que agregarProductoAlCarritoDeMesa()
+    // (ver su comentario): el popup automático de Aditivos no depende de que
+    // haya una mesa seleccionada, así que este flujo "carrito flotante" está
+    // igual de expuesto.
+    await this._cerrarModalAditivosSiApareceAutomaticamente();
+
     const metadato = await this.pos.obtenerPrimerProductoNoPresenteEnCarrito();
     const filasAntes = await this.pos.obtenerClavesFilasCarrito();
     await metadato.locator.click();
@@ -603,6 +795,8 @@ export class PosRestaurante {
       async () => (await this.pos.obtenerClavesFilasCarrito()).length,
       { timeout: TIMEOUTS.PRODUCTS_LOAD, message: `"${metadato.nombre}" no quedó agregado al carrito flotante (sin mesa)` }
     ).toBeGreaterThan(filasAntes.length);
+
+    await this._cerrarModalAditivosSiApareceAutomaticamente();
     return metadato.nombre;
   }
 
@@ -639,6 +833,16 @@ export class PosRestaurante {
       this.page.locator(L_MESA.TODAS_LAS_FIGS).first(),
       'El plano de mesas no cargó tras "Asignar Mesa"'
     ).toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
+
+    // Corrección de automatización confirmada en vivo: "Asignar Mesa" abre el
+    // plano de Mesas pero NO garantiza que el salón QA quede activo (puede
+    // aterrizar en el salón por defecto de la compañía) — a diferencia de
+    // abrirMesas(), este camino nunca pasaba por _seleccionarSalonQA().
+    // Confirmado en vivo que esto hacía que localizarMesaDisponible() leyera
+    // un mesaId de un salón que no era el actualmente renderizado, dejando
+    // clickMesa() sin ningún elemento real que clickear ("no existe en el DOM",
+    // no un overlay bloqueando el click).
+    await this._seleccionarSalonQA();
 
     const mesa = await this.localizarMesaDisponible();
     const [respuestaAsignacion] = await Promise.all([
@@ -712,42 +916,36 @@ export class PosRestaurante {
    * facturada la orden, la mesa volverá al nombre original" — el
    * comportamiento real que valida el Escenario 5, no una suposición).
    *
-   * Investigación corregida en vivo (feedback directo confirmó un error de
-   * automatización inicial): existen DOS controles reales distintos que
-   * abren el mismo modal, ambos invocando `change_rest_table_name(...)`:
+   * Investigación corregida en vivo dos veces (la primera corrección, y
+   * luego una segunda tras feedback directo del usuario que insistió en que
+   * el flujo SÍ funciona manualmente — insistencia que resultó certera):
+   * existen DOS controles reales distintos que abren el mismo modal, ambos
+   * invocando `change_rest_table_name(...)`:
    *   1. El ítem "Renombrar mesa" del menú hamburguesa de la mesa en el
-   *      plano (`ITEM_RENOMBRAR`, usado en la primera versión de este
-   *      método) — confirmado en vivo que su submit NUNCA dispara ninguna
-   *      petición de red, con ningún método de click probado.
-   *   2. El ícono de lápiz real (`#rename_selected_rest_order`,
-   *      `onclick="change_rest_table_name(0)"`) ubicado arriba a la derecha
-   *      del panel del carrito — SOLO visible cuando la mesa tiene una
-   *      orden real activa (con al menos un producto agregado). Es este
-   *      botón, no el del menú, el que la aplicación realmente expone para
-   *      renombrar la orden actualmente abierta.
-   * Usando el botón (2) con una mesa que ya tiene un producto agregado, el
-   * submit SÍ dispara una petición real (`updatePosRestOrderTableName`,
-   * confirmada en vivo con `page.waitForResponse`) que responde `200 OK`
-   * con cuerpo `"1"` (indicador de éxito típico de este backend), y el
-   * propio encabezado del carrito (`#tb_table_buy_list_name_new`) refleja
-   * el nombre nuevo de inmediato.
+   *      plano (`ITEM_RENOMBRAR`) — confirmado en vivo que su submit NUNCA
+   *      dispara ninguna petición de red, con ningún método de click probado.
+   *   2. El ícono de lápiz real (`#rename_selected_rest_order`) ubicado
+   *      arriba a la derecha del panel del carrito — SOLO visible cuando la
+   *      mesa tiene una orden real activa. Es este botón el que la
+   *      aplicación realmente expone para renombrar la orden abierta.
    *
-   * BUG DE SISTEMA CONFIRMADO EN VIVO, con evidencia más sólida que la
-   * versión anterior de este comentario: pese a la respuesta de éxito, el
-   * nombre nuevo NUNCA se refleja en el plano de mesas (`obtenerNombreMesa()`)
-   * — ni cambiando de tab, ni con una recarga COMPLETA de la página
-   * (`page.reload()`, que descarta cualquier caché del lado del cliente).
-   * El plano sigue mostrando el nombre original indefinidamente. Es decir:
-   * el backend responde éxito pero no persiste el cambio en la fuente real
-   * que alimenta el plano (o el endpoint de lectura del plano,
-   * `getRestTableListByLounge`, no incluye el nombre temporal) — un bug real
-   * del sistema, no de esta suite. Confirmado una vez más en una corrida
-   * `--headed` con una espera visual de 20s tras el click en "Renombrar
-   * mesa" (agregada solo para esa demo puntual, no forma parte del código
-   * final): el nombre nunca cambia en el plano ni observándolo en vivo
-   * durante ese tiempo. No se debilita la aserción para "hacerla pasar": el
-   * Escenario 5 queda fallando intencionalmente contra este bug real,
-   * documentado también en el informe final.
+   * ROOT-CAUSE REAL (100% de automatización, NO un bug de sistema — el
+   * diagnóstico anterior de este comentario estaba equivocado, confirmado en
+   * vivo con evidencia de red concluyente): el atributo `onclick` del botón
+   * (2) arranca en `change_rest_table_name(0)` y solo se actualiza al id
+   * REAL de la orden de forma ASÍNCRONA cuando termina de cargar (visto en
+   * el JS fuente real, `pos_rest.js`:
+   * `$('#rename_selected_rest_order').attr('onclick', 'change_rest_table_name('+order_id+')')`).
+   * Clickear el botón ANTES de que esa actualización asíncrona termine
+   * envía `updatePosRestOrderTableName` con `order_id=0` — el backend
+   * responde éxito (`200`, cuerpo `"1"`) igual, sin validar ese id, pero
+   * nunca toca la orden real: por eso el nombre nunca se reflejaba en
+   * ningún lado, ni con recarga completa. Confirmado en vivo interceptando
+   * la petición real: con el fix (esperar a que el onclick dejara de ser
+   * `change_rest_table_name(0)` antes de clickear), la petición viajó con
+   * el `order_id` real (ej. `12141`) y el nombre nuevo SÍ apareció de
+   * inmediato en `#fig_name_<mesaId>` (leído por `obtenerNombreMesa()`) y
+   * persistió tras volver al plano — reproducido limpio.
    *
    * Localizado por `getByRole('heading', ...)`, NUNCA `getByText()` a secas:
    * confirmado en vivo que el mismo texto exacto también vive, oculto
@@ -757,11 +955,40 @@ export class PosRestaurante {
    * esté visible.
    */
   async renombrarMesa(mesaId: string, nombreTemporal: string) {
+    // (Re)selecciona la mesa/orden ANTES de intentar renombrarla — nunca se
+    // asume que el panel del carrito ya está mostrando esta orden solo
+    // porque el llamador venía de abrirMesas()/el plano general. Confirmado
+    // en vivo que esto es justamente lo que dejaba el onclick del botón de
+    // renombrar (más abajo) atascado en el id "0" por defecto: el propio
+    // `click_rest_table_on_plane(...)` (disparado por clickMesa()) es lo que
+    // realmente actualiza ese onclick al id real de la orden.
+    await this.clickMesa(mesaId);
+
     const btnLapiz = this.page.locator('#rename_selected_rest_order');
     await expect(
       btnLapiz,
       `El ícono de renombrar (lápiz) no está visible — la mesa ${mesaId} necesita tener una orden activa (con al menos un producto) para que aparezca`
     ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    // CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO (root-cause real,
+    // interceptando red — no era un bug de sistema): el atributo real
+    // `onclick="change_rest_table_name(<order_id>)"` de este botón arranca
+    // en `change_rest_table_name(0)` y solo se actualiza al id real de la
+    // orden de forma ASÍNCRONA cuando termina de cargar (pos_rest.js:
+    // `$('#rename_selected_rest_order').attr('onclick', 'change_rest_table_name('+order_id+')')`).
+    // Clickearlo antes de que termine esa actualización envía
+    // `updatePosRestOrderTableName` con `order_id=0` — el backend responde
+    // éxito igual (probablemente sin validar ese id), pero nunca toca la
+    // orden real de la mesa, así que el nombre nunca se refleja en ningún
+    // lado. Se espera aquí a que el onclick real deje de ser "(0)" antes de
+    // clickear.
+    await expect
+      .poll(
+        () => btnLapiz.getAttribute('onclick'),
+        { timeout: TIMEOUTS.PAYMENT_MODAL, message: 'El ícono de renombrar nunca actualizó su onclick al id real de la orden (quedó en change_rest_table_name(0))' }
+      )
+      .not.toMatch(/change_rest_table_name\(0\)/);
+
     await btnLapiz.click();
 
     const titulo = this.page.getByRole('heading', { name: '¿Cambiar nombre de la mesa?' });
@@ -788,11 +1015,15 @@ export class PosRestaurante {
 
 
   /**
-   * Nombre actualmente mostrado en el plano para la mesa dada (leído de su
-   * propio `.fig`, nunca asumido). Solo existe con el plano de Mesas
-   * realmente cargado (abrirMesas() debe llamarse antes) — timeout corto y
-   * explícito (no el default de Playwright) para que un uso indebido falle
-   * rápido con un mensaje claro en vez de agotar el timeout completo del test.
+   * Nombre actualmente mostrado en el plano para la mesa dada (leído de
+   * `<span id="fig_name_<mesaId>">`, dentro de `.name-element.rest-table-plane-info`
+   * — distinto del `<span class="fig_name">` oculto/decorativo que usan las
+   * figuras puramente decorativas como maceteros; para una mesa real este
+   * elemento SÍ es el visible y SÍ se actualiza correctamente). Solo existe
+   * con el plano de Mesas realmente cargado (abrirMesas() debe llamarse
+   * antes) — timeout corto y explícito (no el default de Playwright) para
+   * que un uso indebido falle rápido con un mensaje claro en vez de agotar
+   * el timeout completo del test.
    */
   async obtenerNombreMesa(mesaId: string): Promise<string> {
     return (await this.page.locator(`#fig_name_${mesaId}`).textContent({ timeout: 10_000 }))?.trim() ?? '';
@@ -1102,11 +1333,14 @@ export class PosRestaurante {
    * automatización ni del sistema), y los Escenarios 6/7/8 validan
    * únicamente la señal de éxito real y observable: que la ventana de
    * impresión se abrió. Ver el informe final para la evidencia completa.
+   *
+   * Centralizado en `pos.utils.ts` (`esperarVentanaImpresion()`, función
+   * independiente reutilizable fuera de esta clase) — reutilizado también
+   * por `PosRestauranteOrdenesLlevar` para su propia impresión de
+   * Pre-Factura, mismo mecanismo real confirmado en vivo.
    */
   private async _confirmarVentanaImpresionAbierta(disparar: () => Promise<void>): Promise<void> {
-    const popupPromise = this.page.waitForEvent('popup', { timeout: TIMEOUTS.PRINT_POPUP });
-    await disparar();
-    await popupPromise;
+    return esperarVentanaImpresion(this.page, disparar, TIMEOUTS.PRINT_POPUP);
   }
 
 
