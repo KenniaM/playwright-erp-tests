@@ -891,6 +891,15 @@ export class PosRestauranteMesas {
    * mesa" (presente en el menú de CUALQUIER mesa, disponible u ocupada)
    * quedó visible, reintentando de forma acotada en vez de un único intento
    * con timeout largo.
+   *
+   * CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO: el `.evaluate()` del
+   * click no llevaba `timeout` propio — `Page.evaluate()` no acepta esa
+   * opción, pero `Locator.evaluate()` sí (mismo hallazgo ya documentado y
+   * corregido en `PosProforma.abrirCrearProforma()`). Sin él, si el botón no
+   * está listo en el primer intento, `.evaluate()` espera indefinidamente su
+   * propia accionabilidad (este proyecto no configura `actionTimeout`
+   * global) y NUNCA llega a los siguientes intentos del bucle — confirmado
+   * en vivo: un test se agotó a los 180s completo en esta única línea.
    */
   async abrirMenuMesa(mesaId: string) {
     const menu = this.page.locator(L_MESA.MENU_MESA(mesaId));
@@ -900,7 +909,9 @@ export class PosRestauranteMesas {
     let abierto = false;
     for (let intento = 1; intento <= MAX_INTENTOS && !abierto; intento++) {
       await this.pos.cerrarModalNotificacionesSiAparece();
-      await this.page.locator(L_MESA.BTN_MENU_MESA(mesaId)).evaluate((el: HTMLElement) => el.click());
+      await this.page.locator(L_MESA.BTN_MENU_MESA(mesaId))
+        .evaluate((el: HTMLElement) => el.click(), undefined, { timeout: 5_000 })
+        .catch(() => {});
       abierto = await itemAncla.waitFor({ state: 'visible', timeout: 2_000 }).then(() => true).catch(() => false);
     }
     expect(abierto, `El menú de opciones de la mesa ${mesaId} no se abrió tras ${MAX_INTENTOS} intentos`).toBe(true);

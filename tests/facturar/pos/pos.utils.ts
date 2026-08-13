@@ -97,9 +97,25 @@ export function formatearTablaMediciones(registro: MedicionAccion[]): string {
  * flujo de impresión de este estilo (Mesas, Órdenes para Llevar, y
  * cualquier módulo futuro que dispare un popup de impresión sin navegación
  * real) reutilice la misma señal, en vez de duplicar el mismo `waitForEvent`.
+ *
+ * CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO: cuando dos impresiones de
+ * este estilo se disparan en sucesión rápida (ej. "Imp. Comanda NUEVOS
+ * Items" seguido de "Imp. Comanda TODOS Items" sobre la misma mesa), la
+ * segunda puede nunca disparar el evento `popup` — confirmado en vivo (3/3)
+ * con evidencia de red: el `POST` real a `printInvoiceRestOrder` SÍ viaja y
+ * responde 200, pero el navegador bloquea el `window.open()` resultante.
+ * Aislado por descarte: la MISMA acción, sola y sin una ventana previa
+ * todavía abierta, sí dispara el popup de forma consistente — el bloqueo
+ * ocurre solo con una ventana previa aún sin cerrar en el momento del
+ * segundo click, ambos disparados por clicks sintéticos (`.evaluate()`, no
+ * un gesto de usuario real), que los navegadores tratan con más
+ * sospecha para `window.open()` sucesivos. Se cierra explícitamente la
+ * ventana propia tras confirmarla, en vez de asumir que el auto-cierre del
+ * lado de la app siempre gana la carrera contra el siguiente disparo.
  */
 export async function esperarVentanaImpresion(page: Page, disparar: () => Promise<void>, timeout: number): Promise<void> {
   const popupPromise = page.waitForEvent('popup', { timeout });
   await disparar();
-  await popupPromise;
+  const popup = await popupPromise;
+  await popup.close().catch(() => {});
 }

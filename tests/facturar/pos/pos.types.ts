@@ -343,6 +343,14 @@ export type MetadatoProducto = {
   locator: Locator;
   id: string;
   nombre: string;
+  // Nombre real del producto (argumento `name` de `add_to_table(...)`), SIN
+  // el código/barcode que la tarjeta del catálogo antepone a `nombre` cuando
+  // el producto tiene uno configurado (confirmado en vivo: tarjeta visible
+  // "12345 0001 - Prueba POS Restaurante..." vs. `add_to_table('16067','0001
+  // - Prueba POS Restaurante...', ...)`) — usar este campo, no `nombre`, al
+  // comparar contra pantallas que NO muestran ese prefijo (p. ej. las
+  // tarjetas de Cocina, ver pos-restaurante-cocina.spec.ts).
+  nombreReal: string;
   precio: number;
   cantidadDisponible: number;
   aplicaIva: boolean;

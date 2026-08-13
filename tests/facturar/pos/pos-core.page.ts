@@ -1170,6 +1170,7 @@ export class PosCore {
         locator: productos.nth(indice),
         id: String(id),
         nombre: textoVisible,
+        nombreReal: String(args[1] ?? '').trim(),
         precio: parseFloat(String(precio)),
         cantidadDisponible: parseFloat(String(cantidad)),
         aplicaIva: String(aplicaIva) === '1',
