@@ -68,11 +68,25 @@ Permiten correr la misma suite contra otra cuenta/compañía del ambiente sin to
 
 Si `admin.json` quedó obsoleto o la sesión expiró, regenerarlo con `npx playwright test --project=setup`.
 
+#### Sesiones adicionales — otros ambientes/compañías
+
+Además de `setup`/`admin.json` (ambiente original, cuenta admin, compañía por defecto), el repo tiene 3 proyectos de setup más, cada uno con su propio `testMatch`, su propio `storageState` y su propio proyecto de browser dependiente — nunca se mezclan con `setup`/`firefox`/`chromium`/`webkit` en la misma invocación de `npx playwright test`:
+
+| Setup | storageState | Browser dependiente | Ambiente/compañía |
+|---|---|---|---|
+| `tests/auth/super-admin.setup.ts` | `super-admin.json` | `firefox-super-admin` | Misma `BASE_URL` (`qa_talleralpha`), cuenta "Super Administrador" con acceso a 17 compañías — usa `PosCore.irAlPos()` para resolver la compañía "TALLER ALPHA  PREMIUM" (con doble espacio real) en vez de reimplementar esa lógica. |
+| `tests/auth/restaurant.setup.ts` | `restaurant.json` | `firefox-restaurant` | `BASE_URL` **distinto** (`qa_restaurant`), compañía "Restaurante Rancho Robertos" — usado por `tests/facturar/pos-restaurante/` (ver más abajo). |
+| `tests/auth/posmovi.setup.ts` | `posmovi.json` | `firefox-posmovi` | `BASE_URL` **distinto** (`qa_posmovi`), compañía "POSMOVI TIENDA", rol Super Admin. |
+
+Los dos últimos cambian `BASE_URL` (no solo la compañía dentro del mismo ambiente): como `BASE_URL` (`env.config.ts`) y `COMPANIA_POS` (`pos.types.ts`) son constantes de módulo resueltas una única vez al importarse, cada uno de estos setups fija `process.env.BASE_URL`/`process.env.POS_COMPANIA` vía `require()` (no un `import` ES, para garantizar el orden de ejecución) **antes** de que cualquier otro archivo del ambiente original los importe. Por diseño, cualquier spec de estos ambientes debe correrse en un comando dedicado (ver ejemplo en la cabecera de `restaurant.setup.ts`/`posmovi.setup.ts`), nunca mezclado con specs del ambiente original en la misma invocación — el módulo quedaría cacheado con el `BASE_URL` del primer archivo que lo importó dentro de ese proceso de worker.
+
 ### Aplicación objetivo y módulos cubiertos
 
 La suite cubre, además del login y el dashboard, los siguientes módulos del ERP (una carpeta por módulo dentro de `tests/`):
 
-`pos` (con mucho el más grande y complejo), `gestion-de-taller`, `bancos`, `compras`, `configuraciones`, `contabilidad`, `contactos`, `cotizaciones`, `crm`, `facturacion-electronica`, `inventario`, `reportes` (13 categorías de reporte, cada una en su propio `rp-*.page.ts`/`rp-*.spec.ts`), `rutas`, `tienda-en-linea`, `ventas`, `citas`.
+`pos` (con mucho el más grande y complejo), `gestion-de-taller`, `bancos`, `compras`, `configuraciones`, `contabilidad`, `contactos`, `cotizaciones`, `crm`, `facturacion-electronica`, `inventario`, `recursos-humanos` (patrón navegación, ambiente `qa_posmovi`), `reportes` (13 categorías de reporte, cada una en su propio `rp-*.page.ts`/`rp-*.spec.ts`), `rutas`, `tienda-en-linea`, `ventas`, `citas`.
+
+`tests/facturar/pos-restaurante/` (Mesas, Órdenes para Llevar, Cocina) es un tercer sub-área dedicada dentro de `facturar/`, hermana de `pos/`: cubre el sistema de Restaurante (POS con salón/mesas y un módulo Cocina aparte), corre exclusivamente contra el ambiente `qa_restaurant` (ver tabla de arriba) y reutiliza `PosPage`/`PosCore` del módulo `pos/` para todo lo transversal (catálogo, Chosen, overlays), agregando Page Objects propios (`pos-restaurante-mesas.page.ts`, `pos-restaurante-ordenes-llevar.page.ts`, `pos-restaurante-cocina.page.ts`) solo para lo específico del dominio Restaurante. Hallazgo real de arquitectura de Cocina: **no es un espejo en vivo del carrito** — cada acción real sobre una línea (agregar producto, cambiar cantidad, cambiar observación) genera una tarjeta nueva e independiente en Cocina, nunca reemplaza una existente; cualquier método que lea "la tarjeta de una orden" debe asumir que puede haber más de una.
 
 El Dashboard (`/dash/dashboard`) es el punto de partida real de casi todo flujo (maneja un modal de tipo de cambio al cargar — ver `CLAUDE_CONTEXT.md`) y "FACTURAR → Crear factura" es la puerta de entrada al POS (incluye la resolución de compañía cuando la cuenta tiene más de una).
 
@@ -82,7 +96,7 @@ El repositorio usa **dos patrones distintos**, según qué tan compleja sea la i
 
 ### 1. Patrón "navegación" (tabla de submódulos) — el más común
 
-Usado por la mayoría de los módulos: `bancos`, `compras`, `configuraciones`, `contabilidad`, `contactos`, `crm`, `facturacion-electronica`, `inventario`, `reportes`, `tienda-en-linea`, `ventas`, y la mitad de `gestion-de-taller` (`taller.page.ts`).
+Usado por la mayoría de los módulos: `bancos`, `compras`, `configuraciones`, `contabilidad`, `contactos`, `crm`, `facturacion-electronica`, `inventario`, `recursos-humanos`, `reportes`, `tienda-en-linea`, `ventas`, y la mitad de `gestion-de-taller` (`taller.page.ts`).
 
 - `<modulo>.page.ts` exporta: un `TIMEOUTS` propio del módulo, un tipo `Submodulo<Modulo>` (`nombre`, `url`, `rutaEsperada`, `tituloEsperado` como RegExp, `obtenerLocatorDeCarga(page)`), un arreglo de submódulos con esos datos confirmados en vivo, y una clase `<Modulo>Page` mínima con un único método `irA(url)`.
 - `<modulo>-navegacion.spec.ts` recorre el arreglo con un `for` generando **una prueba por submódulo**, cada una validando en `test.step`s: la URL final contiene `rutaEsperada`, el `<title>` coincide (si aplica — puede omitirse si dos pantallas comparten título, ver `gestion-de-taller/taller.page.ts`), el locator propio de contenido queda visible, y no queda ningún `.noty_bar` con texto de error.
@@ -278,6 +292,7 @@ El resto de los specs (todo el patrón "navegación", y los flujos simples de PO
 - Si un helper genérico casi sirve pero el widget real tiene una forma de DOM distinta (p. ej. Chosen de selección múltiple vs. simple), **no forzar el helper existente** — crear una variante acotada al caso nuevo, documentando por qué el existente no aplica (ver `_seleccionarPrimeraOpcionChosenMultiple` en `pos-crear-cliente.page.ts`).
 - Si un helper "elige la primera opción disponible" y esa opción alimenta un campo dependiente (p. ej. Marca → Modelo de vehículo), no asumir que la primera opción del catálogo tiene datos dependientes reales — validar el efecto observable (el campo dependiente quedó poblado) y probar la siguiente opción si no. Ver `_seleccionarMarcaVehiculoConModelosReales` en `pos-crear-cliente.page.ts` como plantilla.
 - No dupliques una función ya existente con otro nombre — impórtala. El repo ya tuvo (y corrigió) casos de `espiarErroresJS`/`esperarQuedaActivo` duplicadas de forma idéntica en varios specs antes de centralizarlas en `pos.utils.ts`.
+- `MetadatoProducto.nombre` (el texto VISIBLE completo de la tarjeta del catálogo) y `MetadatoProducto.nombreReal` (el argumento `name` real de `add_to_table(...)`) **no siempre son el mismo string**: cuando un producto tiene código/barcode configurado, la tarjeta antepone ese código al nombre visible (confirmado en vivo: `"12345 0001 - Prueba POS Restaurante..."` visible vs. `"0001 - Prueba POS Restaurante..."` real). Usar `nombre` para comparar contra el propio catálogo/carrito (documentado así en `pos-core.page.ts`, necesario para que `productoPorNombre()` encuentre lo que agregó); usar `nombreReal` para comparar contra pantallas que NO replican ese prefijo, como las tarjetas de Cocina (`pos-restaurante-cocina.spec.ts`).
 
 ## Buenas prácticas / qué evitar
 
