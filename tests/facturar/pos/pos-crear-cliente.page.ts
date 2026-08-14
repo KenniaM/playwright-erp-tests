@@ -253,11 +253,28 @@ export class PosCrearCliente {
   }
 
 
-  /** Llena todos los campos adicionales de "Principal" para el cliente completo (Escenario 2+), además de llenarClienteSencillo(). */
+  /**
+   * Llena todos los campos adicionales de "Principal" para el cliente
+   * completo (Escenario 2+), además de llenarClienteSencillo().
+   *
+   * CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO: pese al nombre del
+   * método, "Código del cliente" (`#cf_code`) y "Batch del cliente"
+   * (`#cf_batch`) NO viven en el tab "Principal" (`#cf_step_1`) — volcando
+   * el HTML real del modal se confirmó que ambos están dentro de
+   * `#cf_step_2`, el mismo panel de la tab "Opciones avanzadas". Sin cambiar
+   * de tab, el `.fill()` sobre `#cf_code` resolvía el locator (el input SÍ
+   * existe en el DOM) pero nunca lo encontraba visible — reintentando en
+   * silencio hasta agotar el timeout completo del test (confirmado en vivo:
+   * 1000+ reintentos de 500ms). El resto de los campos de este método
+   * (Dirección, Whatsapp, Teléfono) sí están confirmados en `#cf_step_1`,
+   * así que se vuelve a esa tab antes de llenarlos.
+   */
   async llenarPrincipalCompleto(datos: DatosClientePrincipal) {
     await this.llenarClienteSencillo(datos);
+    await this.irATabOpcionesAvanzadas();
     await this.modal.locator(L_CC.CODIGO).fill(datos.codigo);
     await this.modal.locator(L_CC.BATCH).fill(datos.batch);
+    await this.irATabPrincipal();
     await this.modal.locator(L_CC.DIRECCION).fill(datos.direccion);
     // Whatsapp/Teléfono exigen mínimo 8 caracteres (pattern real del campo,
     // confirmado en vivo) — el llamador es responsable de pasar valores que
@@ -333,8 +350,10 @@ export class PosCrearCliente {
    */
   async llenarVehiculoBasico(placa: string) {
     await this.modal.locator(L_CC.VEHICULO_PLACA).fill(placa);
+    // _seleccionarMarcaVehiculoConModelosReales() ya deja el Modelo
+    // seleccionado (ver su comentario actualizado) — no hace falta un
+    // segundo _seleccionarPrimeraOpcionChosen() aparte para Modelo.
     await this._seleccionarMarcaVehiculoConModelosReales();
-    await this.pos._seleccionarPrimeraOpcionChosen(`${L_CC.DIALOG} ${L_CC.VEHICULO_MODELO_CHOSEN}`);
     await this.pos._seleccionarPrimeraOpcionChosen(`${L_CC.DIALOG} ${L_CC.VEHICULO_ANIO_CHOSEN}`);
   }
 
@@ -361,24 +380,44 @@ export class PosCrearCliente {
    *
    * Se prueba cada opción real del Chosen, en el mismo orden en que
    * aparecen, hasta encontrar una cuyo `#vehicle_model` quede poblado con
-   * más de la opción placeholder — mismo widget/mismo mecanismo de click que
-   * usa `_seleccionarPrimeraOpcionChosen()` (Chosen sincroniza su propio
+   * una opción real seleccionable — mismo widget/mismo mecanismo de click
+   * que usa `_seleccionarPrimeraOpcionChosen()` (Chosen sincroniza su propio
    * `<select>` oculto y dispara el evento `change` real que la app escucha
    * para repoblar Modelo), así que un click real sobre cada opción sí
    * dispara la misma carga dependiente que se confirmó en la investigación.
    * Acotado a un máximo de intentos para no recorrer las 107 opciones si el
    * catálogo entero llegara a quedar sin ninguna marca utilizable.
+   *
+   * CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO (2026-08-14, reproducido
+   * 2/2 en Escenarios 4 y 5: "No se agregó ninguna fila nueva a la tabla de
+   * vehículos"): la versión anterior de este método clasificaba "tiene
+   * modelos" contando `#vehicle_model option` con `expect.poll()` (>1)
+   * ANTES de seleccionar ningún modelo, y ese conteo resultó ser una lectura
+   * transitoria poco fiable — confirmado en vivo interceptando la red que la
+   * marca "11111" (la primera del catálogo, ya documentada como SIN modelos
+   * reales) pasaba esa comprobación como si tuviera modelos, dejando
+   * `#cf_vehicle_model` vacío (0 `<option>`, ni siquiera el placeholder) al
+   * momento real de intentar seleccionarlo después — el resto del flujo
+   * entonces enviaba el formulario sin Modelo, y "Agregar" a la tabla nunca
+   * insertaba ninguna fila (fallando en silencio, sin ningún error visible
+   * en el propio formulario). Se elimina la comprobación de conteo indirecta
+   * y, en su lugar, se intenta seleccionar el Modelo DENTRO del mismo ciclo,
+   * confirmando el efecto observable real (el Chosen de Modelo queda en una
+   * opción real, no en el placeholder "Seleccione") antes de dar la marca
+   * por válida — mismo criterio que ya exige el resto del proyecto
+   * (comprobar el efecto real, no una señal indirecta).
    */
   private async _seleccionarMarcaVehiculoConModelosReales() {
-    const contenedor = `${L_CC.DIALOG} ${L_CC.VEHICULO_MARCA_CHOSEN}`;
-    const trigger = this.page.locator(`${contenedor} .chosen-single`);
+    const contenedorMarca = `${L_CC.DIALOG} ${L_CC.VEHICULO_MARCA_CHOSEN}`;
+    const contenedorModelo = `${L_CC.DIALOG} ${L_CC.VEHICULO_MODELO_CHOSEN}`;
+    const trigger = this.page.locator(`${contenedorMarca} .chosen-single`);
     const MAX_INTENTOS = 15;
 
     for (let intento = 0; intento < MAX_INTENTOS; intento++) {
       await trigger.scrollIntoViewIfNeeded({ timeout: TIMEOUTS.PAYMENT_MODAL });
       await trigger.click({ timeout: TIMEOUTS.PAYMENT_MODAL });
       const opcion = this.page
-        .locator(`${contenedor} .chosen-results li:not(.result-selected):not([data-option-array-index="0"])`)
+        .locator(`${contenedorMarca} .chosen-results li:not(.result-selected):not([data-option-array-index="0"])`)
         .nth(intento);
       const hayOpcion = await opcion.isVisible({ timeout: 3_000 }).catch(() => false);
       if (!hayOpcion) {
@@ -387,12 +426,22 @@ export class PosCrearCliente {
       const textoMarca = (await opcion.textContent())?.trim();
       await opcion.click();
 
-      const tieneModelos = await expect.poll(
-        () => this.modal.locator(`${L_CC.VEHICULO_MODELO_CHOSEN.replace('_chosen', '')} option`).count(),
-        { timeout: 5_000 }
-      ).toBeGreaterThan(1).then(() => true).catch(() => false);
-
-      if (tieneModelos) return;
+      const triggerModelo = this.page.locator(`${contenedorModelo} .chosen-single`);
+      await triggerModelo.click({ timeout: TIMEOUTS.PAYMENT_MODAL });
+      const opcionModelo = this.page.locator(`${contenedorModelo} .chosen-results li:not(.result-selected)`).first();
+      const hayModeloReal = await opcionModelo.isVisible({ timeout: 3_000 }).catch(() => false);
+      if (hayModeloReal) {
+        await opcionModelo.click();
+        return;
+      }
+      await this.page.keyboard.press('Escape');
+      // Esperar a que el dropdown de Modelo realmente termine de cerrarse
+      // antes de volver a interactuar con el de Marca — confirmado en vivo
+      // que, sin esto, el siguiente scrollIntoViewIfNeeded()/click() sobre
+      // Marca puede caer en medio de la animación de cierre de Modelo
+      // ("element is not stable", reintentado ~40 veces hasta agotar el
+      // timeout) cuando ambos dropdowns quedan en flujo visual a la vez.
+      await this.page.locator(`${contenedorModelo} .chosen-drop`).waitFor({ state: 'hidden', timeout: 3_000 }).catch(() => {});
       console.log(`[_seleccionarMarcaVehiculoConModelosReales] Marca "${textoMarca}" no tiene Modelos asociados — probando la siguiente.`);
     }
     throw new Error(`Ninguna de las primeras ${MAX_INTENTOS} Marcas de vehículo probadas tiene Modelos reales asociados.`);
@@ -424,6 +473,16 @@ export class PosCrearCliente {
     await expect(
       this.modal.locator(L_CC.LIMITE_CREDITO),
       'La tab "Opciones avanzadas" no quedó activa (Límite de crédito no visible)'
+    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+
+  /** Vuelve a la tab "Principal" — necesario tras irATabOpcionesAvanzadas() para llenar campos que sí viven en #cf_step_1 (ver llenarPrincipalCompleto()). */
+  async irATabPrincipal() {
+    await this.modal.locator(L_CC.TAB_PRINCIPAL).click();
+    await expect(
+      this.modal.locator(L_CC.DIRECCION),
+      'La tab "Principal" no quedó activa (Dirección no visible)'
     ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
   }
 

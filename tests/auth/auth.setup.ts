@@ -4,10 +4,8 @@ import { BASE_URL } from '../env.config';
 
 // Configurable vía variables de entorno para que la suite pueda correr
 // contra cualquier cuenta/compañía/ambiente (junto con BASE_URL en
-// env.config.ts y POS_COMPANIA en pos.page.ts) sin tocar este archivo —
-// kadmin queda como valor por defecto únicamente para no romper la suite
-// existente cuando no se define.
-const EMAIL = process.env.POS_USER_EMAIL ?? 'kadmin@gmail.com';
+// env.config.ts y POS_COMPANIA en pos.page.ts) sin tocar este archivo.
+const EMAIL = process.env.POS_USER_EMAIL ?? 'kenniam329@gmail.com';
 const PASSWORD = process.env.POS_USER_PASSWORD ?? 'qa0000';
 
 setup('authenticate as admin', async ({ page }) => {

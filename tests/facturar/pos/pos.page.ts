@@ -439,6 +439,9 @@ export class PosPage {
   get tabProductos() { return this.core.tabProductos; }
   get tabServicios() { return this.core.tabServicios; }
   get tabPintura() { return this.core.tabPintura; }
+  async asegurarPestanaServiciosActiva(...args: Parameters<PosCore['asegurarPestanaServiciosActiva']>) {
+    return this.core.asegurarPestanaServiciosActiva(...args);
+  }
   async tabEstaActivo(...args: Parameters<PosCore['tabEstaActivo']>) {
     return this.core.tabEstaActivo(...args);
   }
@@ -592,6 +595,26 @@ export class PosPage {
   }
   async abrirCrearServicio(...args: Parameters<PosCrearProducto['abrirCrearServicio']>) {
     return this.crearProducto.abrirCrearServicio(...args);
+  }
+  async llenarNombreGrupoServicio(...args: Parameters<PosCrearProducto['llenarNombreGrupoServicio']>) {
+    return this.crearProducto.llenarNombreGrupoServicio(...args);
+  }
+  async llenarDatosServicio(...args: Parameters<PosCrearProducto['llenarDatosServicio']>) {
+    return this.crearProducto.llenarDatosServicio(...args);
+  }
+  get checkboxIvaServicio() { return this.crearProducto.checkboxIvaServicio; }
+  get botonCabysServicio() { return this.crearProducto.botonCabysServicio; }
+  async activarIvaServicioConTasaManual(...args: Parameters<PosCrearProducto['activarIvaServicioConTasaManual']>) {
+    return this.crearProducto.activarIvaServicioConTasaManual(...args);
+  }
+  async llenarPrecioServicio(...args: Parameters<PosCrearProducto['llenarPrecioServicio']>) {
+    return this.crearProducto.llenarPrecioServicio(...args);
+  }
+  async agregarServicioALaLista(...args: Parameters<PosCrearProducto['agregarServicioALaLista']>) {
+    return this.crearProducto.agregarServicioALaLista(...args);
+  }
+  async guardarGrupoServicio(...args: Parameters<PosCrearProducto['guardarGrupoServicio']>) {
+    return this.crearProducto.guardarGrupoServicio(...args);
   }
   async llenarNombreProducto(...args: Parameters<PosCrearProducto['llenarNombreProducto']>) {
     return this.crearProducto.llenarNombreProducto(...args);

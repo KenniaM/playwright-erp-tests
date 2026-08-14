@@ -51,10 +51,24 @@ export class PosCrearProducto {
 
   /**
    * Lee el `percent` de la opción de tasa de IVA realmente seleccionada en
-   * "Crear Combo" (`#tax_rate_list`) — homólogo de obtenerTasaIvaSeleccionadaPct()
+   * "Crear Combo" (`#rc_tax_rate_list`) — homólogo de obtenerTasaIvaSeleccionadaPct()
    * pero para el select propio del combo, que solo queda sincronizado con el
    * CABYS aplicado si el checkbox ya estaba activado ANTES de aplicar ese
    * CABYS (ver el comentario de L.COMBO_TASA_IVA).
+   *
+   * PENDIENTE DE RECONFIRMAR tras la reescritura completa del componente
+   * "Crear Combo" (ver el comentario de L.DIALOG_CREAR_COMBO en
+   * pos.locators.ts): confirmado en vivo que las `<option>` de este select
+   * nuevo YA NO tienen el atributo `percent` (`getAttribute('percent')`
+   * devuelve `null`) — a diferencia del select nativo homólogo de "Crear
+   * Producto" (`PRODUCTO_TASA_IVA`), que sí lo conserva. No se pudo
+   * confirmar en vivo el reemplazo real (posible candidato: parsear el
+   * `%` del propio texto de la opción, ej. "Segundo impuesto (20.0000%)",
+   * visto en el payload real de Producto Rápido) porque este método solo se
+   * invoca cuando CABYS se aplicó (validarIvaCoincideConCabysCombo()), y
+   * CABYS nunca estuvo alcanzable para "Crear Combo" en esta sesión (botón
+   * siempre oculto, ver COMBO_BTN_CABYS) — código sin ejercitar en este
+   * ambiente, no confirmar en vivo antes de confiar en él en otro ambiente.
    */
   async obtenerTasaIvaSeleccionadaComboPct(): Promise<number> {
     return this.page.locator(L.COMBO_TASA_IVA).evaluate(
@@ -136,7 +150,7 @@ export class PosCrearProducto {
     const toggle = this.page.locator(L.FAB_TOGGLE);
     const item = this.page.locator(L.FAB_ITEM_CREAR_COMBO);
 
-    const MAX_INTENTOS = 10;
+    const MAX_INTENTOS = 5;
     for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
       await this.core.cerrarModalNotificacionesSiAparece();
       await toggle.click({ force: true, timeout: 3_000 }).catch(() => {});
@@ -145,7 +159,14 @@ export class PosCrearProducto {
       if (expandido) {
         const clickeado = await item.click({ force: true, timeout: 2_000 }).then(() => true).catch(() => false);
         if (clickeado) {
-          const abrio = await this.modalCrearCombo.waitFor({ state: 'visible', timeout: 3_000 }).then(() => true).catch(() => false);
+          // Presupuesto propio más generoso en este último paso (el modal
+          // carga su contenido vía AJAX — add_restaurant_combo(0) +
+          // get_combo_pharmaceutical() — y puede tardar más que un modal
+          // Bootstrap simple), a diferencia de las fases de click de arriba
+          // (esas sí son una carrera real y rápida contra el banner de
+          // notificaciones). MAX_INTENTOS se redujo de 10 a 5 para mantener
+          // acotado el peor caso total con este timeout mayor.
+          const abrio = await this.modalCrearCombo.waitFor({ state: 'visible', timeout: 10_000 }).then(() => true).catch(() => false);
           if (abrio) return;
         }
       }
@@ -175,10 +196,15 @@ export class PosCrearProducto {
    * agrega el primer resultado disponible: mismo criterio de "primera opción
    * disponible" que ya usa el resto de la suite para catálogos configurables
    * por compañía sin nombre estable (CABYS, IVA, parte/pieza/servicio de End.
-   * Pintura). Los resultados son `<div onclick="get_product_combo(...)">`,
-   * no `<a>` ni filas con un botón propio — confirmado inspeccionando el DOM
-   * en vivo — así que se clickean vía evaluate() en vez de un locator.click()
-   * normal, que no encuentra un target accionable estándar ahí.
+   * Pintura).
+   *
+   * CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO: tras la reescritura
+   * completa de este componente (ver el comentario de L.DIALOG_CREAR_COMBO),
+   * los resultados ahora son `<div class="rc-search-item" data-rc-pick-product="<id>">`
+   * reales y clickeables — a diferencia del componente legacy
+   * (`<div onclick="get_product_combo(...)">`, sin target accionable
+   * estándar), ya no hace falta el `evaluate()` con `querySelector`: un
+   * `.click()` normal de Playwright funciona directo.
    */
   async buscarYAgregarPrimerProductoAlCombo(termino: string) {
     const buscador = this.page.locator(L.COMBO_BUSCADOR_PRODUCTO);
@@ -189,9 +215,7 @@ export class PosCrearProducto {
     await expect(resultado, `No hubo resultados de producto para "${termino}" al crear el combo`).toBeVisible({ timeout: TIMEOUTS.PRODUCTS_LOAD });
 
     const productosAntes = await this.page.locator(L.COMBO_PRODUCTO_EN_LISTA).count();
-    await this.page.evaluate((selector) => {
-      (document.querySelector(selector) as HTMLElement | null)?.click();
-    }, L.COMBO_RESULTADO_ITEM);
+    await resultado.click();
 
     await expect(
       this.page.locator(L.COMBO_PRODUCTO_EN_LISTA),
@@ -497,6 +521,118 @@ export class PosCrearProducto {
       }
     }
     throw new Error(`El modal "Crear Servicio" no apareció tras ${MAX_INTENTOS} intentos de clickear la tarjeta "Crear Servicio" del grid.`);
+  }
+
+
+  /**
+   * Llena el nombre del NUEVO grupo de servicio (`SERVICIO_NOMBRE_GRUPO`) —
+   * solo tiene sentido cuando `SERVICIO_USAR_GRUPO_EXISTENTE` sigue
+   * desmarcado (el modal abre así por defecto), que es el único camino que
+   * esta suite ejercita (crear grupo nuevo, no reutilizar uno existente).
+   */
+  async llenarNombreGrupoServicio(nombre: string) {
+    await this.page.locator(L.SERVICIO_NOMBRE_GRUPO).fill(nombre);
+  }
+
+
+  /**
+   * Llena los datos del servicio individual dentro del grupo (código,
+   * nombre del servicio y descuento máximo) — investigado en vivo: ninguno
+   * de los tres bloquea "Agregar servicio" si se deja vacío (confirmado
+   * dejando descuento vacío y guardando con éxito), pero el propio
+   * placeholder de "Nombre del servicio" ("Servicio") sugiere que sí se
+   * usa como nombre real de la línea si se llena — se llena siempre para
+   * tener un nombre predecible con el que buscarlo después en el catálogo.
+   */
+  async llenarDatosServicio(codigo: string, nombre: string, descuentoMaximo?: string) {
+    await this.page.locator(L.SERVICIO_CODIGO).fill(codigo);
+    await this.page.locator(L.SERVICIO_NOMBRE).fill(nombre);
+    if (descuentoMaximo !== undefined) {
+      await this.page.locator(L.SERVICIO_DESCUENTO_MAXIMO).fill(descuentoMaximo);
+    }
+  }
+
+
+  /** Locator del checkbox "¿Aplicar IVA?" propio de "Crear Servicio". */
+  get checkboxIvaServicio() {
+    return this.page.locator(L.SERVICIO_APLICAR_IVA);
+  }
+
+
+  /** Locator del botón "CABYS" propio de "Crear Servicio" — para usar con `PosCore.existeCampoCabys()`, mismo criterio que el resto de formularios de creación. */
+  get botonCabysServicio() {
+    return this.page.locator(L.SERVICIO_BTN_CABYS);
+  }
+
+
+  /**
+   * Activa "¿Aplicar IVA?" y selecciona manualmente el primer Impuesto y la
+   * primera Tarifa reales disponibles (ambos Chosen, a diferencia de "Crear
+   * Combo" reescrito) — confirmado en vivo que activar el checkbox NO deja
+   * ninguna opción real preseleccionada en ninguno de los dos Chosen (quedan
+   * en el placeholder "Seleccionar opción"), mismo criterio que
+   * seleccionarIvaManualmenteProducto().
+   */
+  async activarIvaServicioConTasaManual() {
+    await this.core._asegurarCheckboxEstado(this.checkboxIvaServicio, 'dialog_apply_iva_check', true);
+    await this.core._seleccionarPrimeraOpcionChosen(L.SERVICIO_TIPO_IMPUESTO_CHOSEN);
+    await this.core._seleccionarPrimeraOpcionChosen(L.SERVICIO_TASA_CHOSEN);
+  }
+
+
+  /**
+   * Llena "Precio" y "Precio con IVA" del servicio.
+   *
+   * CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO: el propio formulario
+   * calcula "Precio con IVA" automáticamente a partir de "Precio"
+   * (`onkeyup="calculatePrice(0)"`/`calculatePriceWithIva(0)`), pero ese
+   * cálculo depende de un evento `keyup` real — `.fill()` de Playwright no
+   * lo dispara (solo un evento `input`), así que "Precio con IVA" quedaba
+   * vacío. Al guardar, el backend recibía `"price":"NaN"` para ese campo y
+   * la petición fallaba con `500` real
+   * (`SQLSTATE[HY000]: Incorrect decimal value: 'NaN' for column
+   * 'in_price_with_iva'`, confirmado leyendo el cuerpo completo de la
+   * respuesta de error) — no es un problema del backend, es que nunca se
+   * envió un valor real. Se llenan ambos campos explícitamente en vez de
+   * depender del auto-cálculo del formulario.
+   */
+  async llenarPrecioServicio(precioSinIva: string, precioConIva: string = precioSinIva) {
+    await this.page.locator(L.SERVICIO_PRECIO_SIN_IVA).fill(precioSinIva);
+    await this.page.locator(L.SERVICIO_PRECIO_CON_IVA).fill(precioConIva);
+  }
+
+
+  /**
+   * Agrega el servicio individual ya lleno a "Lista de servicios asignados
+   * al grupo" — obligatorio antes de poder guardar (el propio modal lo
+   * advierte: "Debe agregar al menos un servicio al grupo antes de
+   * guardar"), mismo patrón de dos pasos que "Crear Combo".
+   */
+  async agregarServicioALaLista() {
+    const filasAntes = await this.page.locator(L.SERVICIO_LISTA_AGREGADOS_FILAS).count();
+    await this.page.locator(L.SERVICIO_BTN_AGREGAR_SERVICIO).click();
+    await expect.poll(
+      async () => this.page.locator(L.SERVICIO_LISTA_AGREGADOS_FILAS).count(),
+      { timeout: TIMEOUTS.PAYMENT_MODAL, message: 'No se agregó ninguna fila nueva a "Lista de servicios asignados al grupo"' }
+    ).toBeGreaterThan(filasAntes);
+  }
+
+
+  /**
+   * Guarda el grupo de servicio completo (con todos los servicios ya
+   * agregados a la lista) y espera la respuesta real de red
+   * (save_dialog_service_update, endpoint leído en vivo desde
+   * `#save_dialog_service_update_route`).
+   */
+  async guardarGrupoServicio(): Promise<Response> {
+    const respuestaPromise = this.page.waitForResponse(
+      (res) => res.url().includes(L.AJAX_GUARDAR_SERVICIO),
+      { timeout: TIMEOUTS.PAYMENT_MODAL }
+    );
+    await this.page.locator(L.SERVICIO_BTN_GUARDAR).click();
+    const respuesta = await respuestaPromise;
+    await expect(this.modalCrearServicio).toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    return respuesta;
   }
 
 
@@ -812,12 +948,22 @@ export class PosCrearProducto {
    *
    * IMPORTANTE (confirmado en vivo, contradice lo asumido originalmente):
    * si este checkbox se activa ANTES de aplicar un CABYS, el select de tasa
-   * (`#tax_rate_list`) SÍ se autosincroniza con la tasa real del CABYS —
+   * (`#rc_tax_rate_list`) SÍ se autosincroniza con la tasa real del CABYS —
    * ver L.COMBO_TASA_IVA y validarIvaCoincideConCabysCombo(). El orden
    * activar→CABYS es entonces obligatorio para el escenario "con IVA".
+   *
+   * CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO: el `idParaClick` real
+   * es `rc_apply_tax_check` (id real tras la reescritura del componente, ver
+   * el comentario de L.DIALOG_CREAR_COMBO), no `apply_tax_combo` — el id
+   * viejo no existía en el DOM, así que `_asegurarCheckboxEstado()` nunca
+   * lograba clickear nada y dependía por completo de que el checkbox ya
+   * estuviera en el estado pedido de entrada. El comportamiento de
+   * autopoblado del tipo/tasa de impuesto SÍ sigue confirmado en vivo con el
+   * componente nuevo (values reales no vacíos leídos inmediatamente después
+   * del click, sin necesidad de seleccionarlos a mano).
    */
   async activarIvaCombo() {
-    await this.core._asegurarCheckboxEstado(this.page.locator(L.COMBO_APLICAR_IVA), 'apply_tax_combo', true);
+    await this.core._asegurarCheckboxEstado(this.page.locator(L.COMBO_APLICAR_IVA), 'rc_apply_tax_check', true);
   }
 
 
@@ -831,6 +977,6 @@ export class PosCrearProducto {
    * cuenta, tampoco hay garantía de que no lo haga en otro ambiente/versión).
    */
   async desactivarIvaCombo() {
-    await this.core._asegurarCheckboxEstado(this.page.locator(L.COMBO_APLICAR_IVA), 'apply_tax_combo', false);
+    await this.core._asegurarCheckboxEstado(this.page.locator(L.COMBO_APLICAR_IVA), 'rc_apply_tax_check', false);
   }
 }

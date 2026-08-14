@@ -430,9 +430,17 @@ async function configurarIvaProductoEnPasoDos(pos: PosPage, activarIva: boolean,
  * nueva" nunca detectaría nada (el click posterior solo incrementaría la
  * cantidad de esa misma línea, no crearía una clave distinta).
  */
-async function buscarProductoYAgregarAlCarrito(pos: PosPage, nombre: string, esFraccionado = false): Promise<string> {
+async function buscarProductoYAgregarAlCarrito(pos: PosPage, nombre: string, esFraccionado = false, esServicio = false): Promise<string> {
   await pos.cargarPosDesdeDashboard();
   await pos.cerrarOverlaysConocidos();
+  // Un Servicio vive en el tab "Servicios" del grid, no en "Productos" (el
+  // tab activo por defecto tras recargar el POS) — confirmado en vivo que
+  // el buscador del grid está acotado al tab activo: buscar un servicio
+  // recién creado con el tab "Productos" activo nunca lo encuentra, sin
+  // importar cuánto se espere.
+  if (esServicio) {
+    await pos.asegurarPestanaServiciosActiva();
+  }
 
   const clavesAntes = await pos.obtenerClavesProductos();
   await pos.buscarProductoEnGrid(nombre);
@@ -725,6 +733,98 @@ test('crear un Producto Fraccionado sin IVA desde el POS y validar que se agrega
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Crear Servicio — investigado en vivo el 2026-08-14: tipo de producto real
+// del POS (tarjeta "Crear Producto" del tab "Servicios", `abrirCrearServicio()`
+// ya existía en el Page Object pero solo se ejercitaba en pos-permisos.spec.ts
+// para validar que el modal abre/no abre según permiso, nunca un flujo
+// completo de creación + carrito + persistencia. El modal real
+// ("Agregar grupo de servicio y servicios") NO es un wizard: crea un GRUPO
+// de servicios (obligatorio nombrarlo, salvo que se use uno existente) que
+// contiene uno o más servicios individuales, cada uno con su propio código/
+// nombre/descuento/IVA/precio — hay que "Agregar servicio" (lo suma a una
+// lista) ANTES de poder "Guardar" el grupo completo, mismo patrón de dos
+// pasos que "Crear Combo".
+// ═══════════════════════════════════════════════════════════════════════════
+
+test('crear un Servicio Sencillo con IVA desde el POS y validar que se agrega correctamente al carrito', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const pos = new PosPage(page);
+  const sufijo = Date.now();
+  const nombreServicio = `Servicio QA con IVA ${sufijo}`;
+
+  await test.step('Cargar el POS pasando por el Dashboard', async () => {
+    await pos.cargarPosDesdeDashboard();
+    await pos.cerrarOverlaysConocidos();
+  });
+
+  await test.step('Abrir "Crear Servicio" y llenar nombre del grupo + datos del servicio', async () => {
+    await pos.abrirCrearServicio();
+    await pos.llenarNombreGrupoServicio(`Grupo QA ${sufijo}`);
+    await pos.llenarDatosServicio(`COD-QA-${sufijo}`, nombreServicio);
+  });
+
+  await test.step('Activar IVA con tipo/tasa manual (CABYS no aplica en este ambiente) y llenar el precio', async () => {
+    const cabysExiste = await pos.existeCampoCabys(pos.botonCabysServicio);
+    console.log(`[crear un Servicio Sencillo con IVA] CABYS existe: ${cabysExiste}`);
+    await pos.activarIvaServicioConTasaManual();
+    await pos.llenarPrecioServicio(PRODUCTO_PRECIO_VENTA);
+  });
+
+  await test.step('Agregar el servicio a la lista del grupo y guardar', async () => {
+    await pos.agregarServicioALaLista();
+    const respuesta = await pos.guardarGrupoServicio();
+    expect(respuesta.ok(), `La petición a save_dialog_service_update no respondió OK (status ${respuesta.status()})`).toBe(true);
+  });
+
+  let claveServicio = '';
+  await test.step('Buscar el servicio en el catálogo del POS y agregarlo al carrito', async () => {
+    claveServicio = await buscarProductoYAgregarAlCarrito(pos, nombreServicio, false, true);
+  });
+
+  await test.step('Validar que el servicio se agregó con IVA aplicado, el nombre coincide y no hay errores', async () => {
+    await validarProductoEnCarrito(pos, page, claveServicio, nombreServicio, true);
+  });
+});
+
+test('crear un Servicio Sencillo sin IVA desde el POS y validar que se agrega correctamente al carrito', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const pos = new PosPage(page);
+  const sufijo = Date.now();
+  const nombreServicio = `Servicio QA sin IVA ${sufijo}`;
+
+  await test.step('Cargar el POS pasando por el Dashboard', async () => {
+    await pos.cargarPosDesdeDashboard();
+    await pos.cerrarOverlaysConocidos();
+  });
+
+  await test.step('Abrir "Crear Servicio" y llenar nombre del grupo + datos del servicio', async () => {
+    await pos.abrirCrearServicio();
+    await pos.llenarNombreGrupoServicio(`Grupo QA ${sufijo}`);
+    await pos.llenarDatosServicio(`COD-QA-${sufijo}`, nombreServicio);
+  });
+
+  await test.step('Dejar IVA desactivado (por defecto) y llenar el precio', async () => {
+    await expect(pos.checkboxIvaServicio, 'El checkbox "¿Aplicar IVA?" no debería estar marcado por defecto').not.toBeChecked();
+    await pos.llenarPrecioServicio(PRODUCTO_PRECIO_VENTA);
+  });
+
+  await test.step('Agregar el servicio a la lista del grupo y guardar', async () => {
+    await pos.agregarServicioALaLista();
+    const respuesta = await pos.guardarGrupoServicio();
+    expect(respuesta.ok(), `La petición a save_dialog_service_update no respondió OK (status ${respuesta.status()})`).toBe(true);
+  });
+
+  let claveServicio = '';
+  await test.step('Buscar el servicio en el catálogo del POS y agregarlo al carrito', async () => {
+    claveServicio = await buscarProductoYAgregarAlCarrito(pos, nombreServicio, false, true);
+  });
+
+  await test.step('Validar que el servicio quedó realmente sin IVA, el nombre coincide y no hay errores', async () => {
+    await validarProductoEnCarrito(pos, page, claveServicio, nombreServicio, false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Crear Cliente — investigado en vivo (ver el informe final de esta suite):
 // el modal real es #dialog_customer_form (componente CustomerForm, migrado
 // desde el legacy #dialog_add_customer — ver el comentario completo en
@@ -979,7 +1079,17 @@ testCliente.describe('Crear Cliente', () => {
       await expect(cc.modal.locator('#cf_address')).toHaveValue(datosPrincipal.direccion);
 
       await cc.irATabOpcionesAvanzadas();
-      await expect(cc.modal.locator('#cf_limit')).toHaveValue(datosAvanzados.limiteCredito);
+      // CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO: el backend persiste
+      // "Límite de crédito" con la precisión decimal real del campo
+      // (`step="0.0001"`) — al reabrir el cliente, #cf_limit trae
+      // "5000.000000" en vez del literal "5000" enviado, un formato de
+      // servidor, no un bug de guardado. toHaveValue() con el string
+      // original fallaba por esto pese a que el valor numérico persistió
+      // correctamente; se compara el valor parseado en su lugar.
+      await expect(
+        cc.modal.locator('#cf_limit'),
+        'El Límite de crédito no persistió con el valor numérico correcto'
+      ).toHaveValue(new RegExp(`^${datosAvanzados.limiteCredito}(\\.0+)?$`));
       await expect(cc.modal.locator('#cf_is_exempt')).toBeChecked();
 
       await cc.irATabUbicacion();

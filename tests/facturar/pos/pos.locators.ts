@@ -439,53 +439,76 @@ export const L = {
   AJAX_GUARDAR_PRODUCTO: 'getPosProductSaleItem',
 
   // ─── "Crear Combo" (mismo FAB que "Producto Rápido") ───────────────────────
-  DIALOG_CREAR_COMBO:        '#dialog_add_restaurant_combo',
-  COMBO_NOMBRE:              '#combo_rest_name',
-  COMBO_PRECIO_FINAL:        '#combo_rest_total',
-  COMBO_CANTIDAD:            '#combo_rest_quantity',
-  COMBO_BUSCADOR_PRODUCTO:   '#search_parameter',
-  // Los resultados de búsqueda son <div onclick="get_product_combo(...)">,
-  // no <a> — confirmado inspeccionando el DOM en vivo (a diferencia de los
-  // resultados de CABYS o de cliente, que sí son enlaces/filas normales).
-  COMBO_RESULTADO_ITEM:      '#product_option_view [onclick]',
-  COMBO_LISTA_PRODUCTOS:     '#content_combo_product_list',
-  COMBO_PRODUCTO_EN_LISTA:   '#content_combo_product_list [id^="product_combo_"]',
-  COMBO_PRECIO_REAL:         '#real_price_combo',
-  COMBO_BTN_GUARDAR:         '#btn_save_combo',
-  // Botón "CABYS" propio de este formulario. A diferencia de lo asumido
-  // inicialmente, NO reutiliza el sub-modal de "Producto Rápido"
-  // (#dialog_add_cabys_code): abre uno propio y completamente separado
-  // (#dialog_add_cabys_code_combo, con su propio input/botón/tabla, todos
-  // con sufijo "_combo") — confirmado en vivo interceptando qué modal
-  // realmente queda visible tras el click.
-  COMBO_BTN_CABYS:              'a[href="javascript:show_add_cabys_code_combo();"]',
-  COMBO_DIALOG_BUSCAR_CABYS:    '#dialog_add_cabys_code_combo',
-  COMBO_CABYS_BUSCADOR_INPUT:   '#cabys_code_search_combo',
-  COMBO_CABYS_BUSCADOR_BOTON:   '#btn_cabys_code_search_combo',
-  COMBO_CABYS_FILAS_RESULTADO:  '#table_cabys_code_combo tr',
-  // Checkbox "¿Aplicar impuesto?" propio de "Crear Combo" — a diferencia del
-  // de "Producto Rápido" (#check_quick_product_apply_tax), no tiene el bug
-  // de reseteo de pos.js:680-699 y sus "Chosen" de tipo/tasa ya quedan en una
-  // opción real (no un placeholder) apenas se marca — confirmado en vivo.
-  COMBO_APLICAR_IVA:         '#apply_tax_combo',
-  // Select "Seleccione la tarifa" propio de "Crear Combo" — homólogo de
-  // QUICK_PRODUCT_TASA_IVA, pero solo se sincroniza con el CABYS aplicado si
-  // el checkbox COMBO_APLICAR_IVA ya estaba marcado ANTES de aplicar el
-  // CABYS: confirmado en vivo que con el checkbox desmarcado el CABYS no
-  // toca este select (queda en la opción "0% Exento" por defecto), pero con
-  // el checkbox ya marcado, aplicar un CABYS de tasa 13% deja este select
-  // realmente seleccionado en "13%" — a diferencia de lo documentado
-  // anteriormente ("el de Combo no tiene ese autocompletado"), sí lo tiene,
-  // pero condicionado al orden checkbox→CABYS.
-  COMBO_TASA_IVA:            '#tax_rate_list',
-  // Texto con la tasa que el CABYS aplicado sugiere, propio de "Crear Combo"
-  // — homólogo de QUICK_PRODUCT_CABYS_TAX_SUGERIDO. Mismo formato observado
-  // en vivo (fracción, ej. "0.13", no porcentaje).
-  COMBO_CABYS_TAX_SUGERIDO:  '#lbl_search_product_cabys_tax',
+  // CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO: el id real del modal es
+  // "dialog_restaurant_combo" (sin "add_") — confirmado volcando todos los
+  // `.modal`/`[role="dialog"]` reales del DOM tras abrirlo, el id configurado
+  // aquí no coincidía con ningún elemento (count()=0). El modal SÍ abría
+  // correctamente (confirmado con el propio accessibility snapshot de los
+  // fallos que este locator equivocado causaba: `dialog [active]` con heading
+  // "Agregar combo" visible), pero abrirCrearCombo() nunca lo detectaba y
+  // agotaba sus reintentos completos (~1.3-2.4min) antes de fallar.
+  // REESCRITURA COMPLETA CONFIRMADA EN VIVO: "Crear Combo" migró a un
+  // componente nuevo (prefijo real "rc_"/"rc-", ids/clases completamente
+  // distintos de los usados aquí antes — mismo tipo de migración ya
+  // documentado para "Agregar Cliente" en pos-crear-cliente.page.ts, CABYS
+  // dentro de "Crear Combo" propio del modal nuevo `.rc-cabys-box`, no
+  // confundir con "Producto Rápido"/"Crear Producto"). Confirmado volcando
+  // el HTML real del modal (`#dialog_restaurant_combo`, ver el comentario de
+  // DIALOG_CREAR_COMBO) antes y después de agregar un producto.
+  DIALOG_CREAR_COMBO:        '#dialog_restaurant_combo',
+  COMBO_NOMBRE:              '#rc_name',
+  COMBO_PRECIO_FINAL:        '#rc_price',
+  COMBO_CANTIDAD:            '#rc_quantity',
+  COMBO_BUSCADOR_PRODUCTO:   '#rc_product_search',
+  // Resultados de búsqueda: <div class="rc-search-item" data-rc-pick-product="<id>">
+  // reales, clickeables directamente (a diferencia del componente legacy,
+  // que usaba onclick="get_product_combo(...)").
+  COMBO_RESULTADO_ITEM:      '.rc-search-item[data-rc-pick-product]',
+  COMBO_LISTA_PRODUCTOS:     '#rc_product_list',
+  COMBO_PRODUCTO_EN_LISTA:   '#rc_product_list .rc-product-row',
+  COMBO_PRECIO_REAL:         '#rc_total_real',
+  COMBO_BTN_GUARDAR:         '#rc_btn_save',
+  // Bloque CABYS (`#rc_cabys_block`, clase `.rc-cabys-box`) — confirmado en
+  // vivo que llega con la clase `is-hidden` YA en el HTML inicial del modal
+  // (no se oculta condicionalmente después): para esta compañía/país CABYS
+  // está deshabilitado también en "Crear Combo", mismo hallazgo ya
+  // confirmado en el resto de formularios de creación (Producto
+  // Rápido/Sencillo/Completo/Fraccionado, todos con "CABYS: sección NO
+  // encontrada/visible" en este ambiente) — existeCampoCabys() ya maneja
+  // esto correctamente vía isVisible(), sin necesidad de cambiar esa lógica.
+  // El id del sub-modal SÍ se confirmó en vivo (#dialog_restaurant_combo_cabys,
+  // encontrado en el DOM junto al resto de modales), pero sus campos internos
+  // (input/botón buscar/filas) NO pudieron confirmarse en esta sesión — nunca
+  // llegó a abrirse en este ambiente (botón siempre oculto) — se dejan con un
+  // valor best-effort siguiendo la misma convención "rc_"/data- del resto del
+  // componente, PENDIENTE de confirmar en vivo en un ambiente donde CABYS sí
+  // esté habilitado para Combo antes de confiar en ellos.
+  COMBO_BTN_CABYS:              '[data-rc-open-cabys]',
+  COMBO_DIALOG_BUSCAR_CABYS:    '#dialog_restaurant_combo_cabys',
+  COMBO_CABYS_BUSCADOR_INPUT:   '#rc_cabys_search_input',
+  COMBO_CABYS_BUSCADOR_BOTON:   '#rc_cabys_search_btn',
+  COMBO_CABYS_FILAS_RESULTADO:  '#rc_cabys_results tr',
+  // Checkbox "¿Aplicar impuesto?" — fila contenedora `#rc_apply_tax_row`
+  // (clase `is-hidden` hasta agregar al menos un producto al combo,
+  // confirmado en vivo: visible/clickeable justo después de
+  // buscarYAgregarPrimerProductoAlCombo()). El estado real que el backend
+  // guarda vive en el input oculto homólogo `#rc_apply_tax` (0/1) — el
+  // checkbox visible es solo el control de UI.
+  COMBO_APLICAR_IVA:         '#rc_apply_tax_check',
+  COMBO_APLICAR_IVA_FILA:    '#rc_apply_tax_row',
+  // Selects NATIVOS de tipo/tasa de impuesto (sin Chosen, a diferencia del
+  // componente legacy) — homólogos de PRODUCTO_TIPO_IVA/PRODUCTO_TASA_IVA,
+  // se seleccionan con selectOption({index:1}), no clic-y-elegir de Chosen.
+  COMBO_TIPO_IVA:            '#rc_tax_list',
+  COMBO_TASA_IVA:            '#rc_tax_rate_list',
+  // Homólogo de QUICK_PRODUCT_CABYS_TAX_SUGERIDO para "Crear Combo" — sin
+  // confirmar en vivo en esta sesión (CABYS nunca alcanzable, ver arriba).
+  COMBO_CABYS_TAX_SUGERIDO:  '#rc_cabys_tax',
 
-  // Petición AJAX real que persiste el combo (save_restaurant_combo() en
-  // pos.js) — confirmado en vivo inspeccionando la red tras un guardado
-  // exitoso.
+  // Petición AJAX real que persiste el combo — PENDIENTE de reconfirmar tras
+  // la reescritura del componente (el nombre real usado por el JS nuevo no
+  // se confirmó en esta sesión; se mantiene el último valor conocido como
+  // mejor esfuerzo, ver el comentario de guardarComboYObtenerRespuesta()).
   AJAX_GUARDAR_COMBO: 'save_company_combo',
 
   // ─── "Crear Producto" (primera tarjeta del grid de productos del POS) ──────
@@ -501,6 +524,53 @@ export const L = {
   // tab "Servicios" (onclick="add_quick_service_modal(...)") — id real del
   // modal confirmado en vivo (distinto del de "Crear Producto").
   DIALOG_CREAR_SERVICIO:      '#dialog_add_quick_service_update_form',
+  // Campos investigados en vivo (2026-08-14): el modal real se titula
+  // "Agregar grupo de servicio y servicios" — NO es un wizard, es un único
+  // formulario con dos niveles: el "grupo" (obligatorio si no se marca
+  // SERVICIO_USAR_GRUPO_EXISTENTE) y uno o más "servicios" individuales
+  // dentro de ese grupo, cada uno con su propio código/nombre/descuento/IVA/
+  // precio(s). El propio modal advierte explícitamente: "Debe agregar al
+  // menos un servicio al grupo antes de guardar" — SERVICIO_BTN_AGREGAR_SERVICIO
+  // (que corre `addNewSubserviceDialog()`) es obligatorio ANTES de
+  // SERVICIO_BTN_GUARDAR, mismo patrón de dos pasos que "Crear Combo"
+  // (agregar a una lista, luego guardar el conjunto).
+  SERVICIO_USAR_GRUPO_EXISTENTE: '#dialog_select_service_check',
+  SERVICIO_NOMBRE_GRUPO:         '#dialog_service_name',
+  SERVICIO_GRUPO_EXISTENTE_CHOSEN: '#dialog_select_service_list_content_chosen',
+  SERVICIO_CODIGO:               '#dialog-service-update-code',
+  SERVICIO_NOMBRE:               '#dialog-service-update-subname',
+  SERVICIO_DESCUENTO_MAXIMO:     '#dialog-service-update-discount',
+  SERVICIO_APLICAR_IVA:          '#dialog_apply_iva_check',
+  // Ambos son Chosen reales (con <select> nativo debajo, igual que el resto
+  // de la suite) — a diferencia de "Crear Combo" reescrito, este formulario
+  // SÍ conserva Chosen aquí. SERVICIO_TASA_CHOSEN sí trae `percent` en sus
+  // <option> (confirmado en vivo, ej. percent="10.00000"); SERVICIO_TIPO_IMPUESTO_CHOSEN
+  // no lo trae (solo un atributo `code`).
+  SERVICIO_TIPO_IMPUESTO_CHOSEN: '#dialog_tax_type_chosen',
+  SERVICIO_TASA_CHOSEN:          '#dialog_rate_type_chosen',
+  SERVICIO_PRECIO_SIN_IVA:       '#dial_price_without_iva_0',
+  SERVICIO_PRECIO_CON_IVA:       '#dial_price_with_iva_0',
+  // Botón CABYS propio de este formulario — mismo hallazgo que en el resto
+  // de flujos de creación de esta compañía/país (Producto Rápido/Sencillo/
+  // Completo/Fraccionado/Combo): no confirmado como visible en este
+  // ambiente, se maneja con el mismo criterio "isVisible con timeout corto,
+  // omitir si no aparece" que existeCampoCabys() ya usa.
+  SERVICIO_BTN_CABYS:            '#quick_service_cabys_content a[href*="validate_pos_cabys_code"]',
+  // Agrega el servicio individual ya lleno a "Lista de servicios asignados
+  // al grupo" (`#dialog_subservice_price_list_content`) — obligatorio antes
+  // de guardar, ver el comentario de arriba.
+  SERVICIO_BTN_AGREGAR_SERVICIO: '#btn_add_new_price',
+  SERVICIO_LISTA_AGREGADOS:      '#dialog_subservice_price_list_content',
+  SERVICIO_LISTA_AGREGADOS_FILAS: '#dialog_subservice_price_list_content > *',
+  // Guarda el grupo completo con todos los servicios ya agregados a la
+  // lista. CORRECCIÓN CONFIRMADA EN VIVO: el texto de
+  // `#save_dialog_service_update_route` en el DOM ("device_brand/save_dialog_service_update")
+  // NO es la URL real que dispara el click en "Guardar" — es el mismo
+  // nombre de la función `onclick="save_dialog_service_update(this)"`, no el
+  // endpoint. Interceptando la red real, el POST que efectivamente persiste
+  // el grupo va a `WorkshopServices/dialogServicesUpdate`.
+  SERVICIO_BTN_GUARDAR:          '#btn_save_dialog_service_update',
+  AJAX_GUARDAR_SERVICIO:         'dialogServicesUpdate',
   PRODUCTO_NOMBRE:            '#product_name_app',
   PRODUCTO_MARCA:             '#product_brand_app',
   PRODUCTO_PROVEEDOR_CODIGO:  '#product_provider_code_app',
