@@ -61,8 +61,18 @@ export const SUBMODULOS_REPORTES_TALLER: SubmoduloReportes[] = [
     nombre: 'Servicios y recordatorios de próximo cambio',
     url: BASE_URL + '/reports/oil_change_report',
     rutaEsperada: 'oil_change_report',
-    tituloEsperado: /cambio de aceite/i,
-    obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /servicios y recordatorios de pr[oó]ximo cambio/i),
+    // CORRECCIÓN DE AUTOMATIZACIÓN confirmada en vivo: el `<title>` real de
+    // esta pantalla cambió de "Cambio de aceite..." (nombre antiguo) al
+    // nombre real y actual del submódulo ("Servicios y recordatorios de
+    // próximo cambio | Sistema Web ERP") — ya consistente con el nombre que
+    // el propio Sidebar siempre mostró.
+    tituloEsperado: /servicios y recordatorios de pr[oó]ximo cambio/i,
+    // CORRECCIÓN DE AUTOMATIZACIÓN confirmada en vivo: esta pantalla fue
+    // rediseñada por la propia aplicación (mismo hallazgo que "Bodegas" en
+    // inventario.page.ts) — ya no renderiza ningún `.content-header`; el
+    // contenido real hoy es un encabezado `<h1>Servicios y recordatorios de
+    // próximo cambio</h1>` dentro de una UI de tarjetas/dashboard nueva.
+    obtenerLocatorDeCarga: (page) => page.getByRole('heading', { name: 'Servicios y recordatorios de próximo cambio', level: 1 }),
   },
   {
     // El <title> de esta pantalla es "Reporte de órdenes" (confirmado en

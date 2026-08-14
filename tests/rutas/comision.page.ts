@@ -1,5 +1,6 @@
 import { expect, Locator, Page } from '@playwright/test';
 import { BASE_URL } from '../env.config';
+import { cerrarBannerNotificacionesSiAparece } from './rutas.page';
 
 // ─── URL ──────────────────────────────────────────────────────────────────────
 
@@ -95,9 +96,24 @@ export class ComisionPage {
     return match ? match[1] : null;
   }
 
-  /** Abre el menú de acciones de una fila y hace clic en "Editar Comision". */
+  /**
+   * Abre el menú de acciones de una fila y hace clic en "Editar Comision".
+   *
+   * Mismo hallazgo y corrección que `RutasPage.abrirFormularioAgregar()`
+   * (ver ese comentario): el primer click real de la prueba, justo tras
+   * `irAComisiones()`, puede perderse contra el banner "Activar
+   * notificaciones" reapareciendo de forma asíncrona.
+   */
   async abrirModalEditar(fila: Locator) {
-    await fila.locator(L.BTN_MENU_ACCIONES).click();
+    const MAX_INTENTOS = 5;
+    let menuVisible = false;
+    for (let intento = 1; intento <= MAX_INTENTOS && !menuVisible; intento++) {
+      await cerrarBannerNotificacionesSiAparece(this.page);
+      await fila.locator(L.BTN_MENU_ACCIONES).click({ timeout: 5_000 }).catch(() => {});
+      menuVisible = await fila.getByRole('link', { name: /editar comisi/i }).waitFor({ state: 'visible', timeout: 3_000 }).then(() => true).catch(() => false);
+    }
+    expect(menuVisible, `El menú de acciones de la fila no quedó visible tras ${MAX_INTENTOS} intentos`).toBe(true);
+
     await fila.getByRole('link', { name: /editar comisi/i }).click();
     await expect(this.modalComision).toBeVisible({ timeout: TIMEOUTS.TABLE_LOAD });
   }

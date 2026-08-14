@@ -97,6 +97,16 @@ export const L = {
   // Modal de pago
   DIALOG_PAGO:       '#dialog_payment',
   TOTAL_MODAL:       'total_sale_txt',         // ID sin # — se lee vía evaluate()
+  // Valor numérico crudo (sin formato de moneda) detrás de TOTAL_MODAL —
+  // confirmado en vivo (investigación del "modal atascado" al facturar
+  // Órdenes de Caja/Taller) que, para ventas que provienen de una orden ya
+  // existente, este valor se RECALCULA de forma asíncrona justo después de
+  // abrir el modal (ej. de $22,663.18 a $22,488.00 ~1s después) — leerlo
+  // antes de que se estabilice llena el monto del método de pago con un
+  // total viejo, que la propia app rechaza ("El monto no puede ser mayor
+  // al total a pagar"), dejando la venta sin completar sin ningún error
+  // visible para quien automatiza. Ver PosPayment._esperarTotalEstable().
+  TOTAL_HIDE:        '#total_hide',
   BTN_CONFIRMAR:     '#make_payment',
   EFECTIVO_MONTO:    '#payment_cash_total',    // señal confiable de apertura del modal
   EFECTIVO_RECIBIDO: '#received_mount',
@@ -113,6 +123,10 @@ export const L = {
   // abierta — descubierto inspeccionando el DOM real, no asumido.
   MENU_CAJA_BTN:        '#menu_cash',
   MENU_CAJA_ITEM_F12:   'Abrir/Cerrar Caja',
+  // "(F8) Historial Mov. de Caja" — confirmado en vivo que es un ítem propio
+  // del menú "Caja" del encabezado, distinto de "(F9) Movimientos de caja"
+  // (ese no depende del permiso "Ver reporte de movimientos de caja").
+  MENU_CAJA_ITEM_HISTORIAL_MOVIMIENTOS: 'Historial Mov. de Caja',
   // El <ul> del menú "Caja" (componente MDL, mismo patrón que el menú de tres
   // puntos): al upgradearse queda envuelto en un div.mdl-menu__container, que es
   // el que gana la clase "is-visible" mientras el menú está desplegado —
@@ -121,6 +135,22 @@ export const L = {
   // refleja el estado.
   MENU_CAJA_UL:          'ul.mdl-menu[for="menu_cash"]',
 
+  // Menú "Caja" → "(F9) Movimientos de caja" — abre el modal para registrar
+  // una ENTRADA o SALIDA de efectivo manual. Confirmado en vivo (volcando el
+  // HTML real del modal): #cash_movement_type es un input oculto que el
+  // propio toggle de switches actualiza (1 = Entradas [checked por
+  // defecto], 2 = Salidas) — ninguno de los dos checkboxes reales
+  // (#movenment_cash_in/#movenment_cash_out) es la fuente de verdad para el
+  // backend, solo dispara el cambio de ese campo via onchange.
+  MENU_CAJA_ITEM_MOVIMIENTOS: '#add_cash_movement',
+  DIALOG_MOVIMIENTO_CAJA:     '#dialog_cash_movement',
+  MOVIMIENTO_CAJA_TIPO_ENTRADA: '#movenment_cash_in',
+  MOVIMIENTO_CAJA_TIPO_SALIDA:  '#movenment_cash_out',
+  MOVIMIENTO_CAJA_CANTIDAD:     '#movenment_cash_quantity',
+  MOVIMIENTO_CAJA_OBSERVACION:  '#movenment_cash_observation',
+  MOVIMIENTO_CAJA_BTN_PROCESAR: '#btn_send_movement',
+  MOVIMIENTO_CAJA_TIPO_HIDDEN:  '#cash_movement_type',
+
   // Modal "Detalle de Cierre" (cerrar caja)
   DIALOG_CERRAR_CAJA:      '#dialog_cash_closing',
   CIERRE_EFECTIVO_CAJA:    '#closure_posted_balance',
@@ -128,6 +158,173 @@ export const L = {
   CIERRE_OBSERVACION:      '#closuse_cash_observation', // sic: typo real de la app ("closuse")
   CIERRE_BTN_CERRAR:       '#btn_close_cash',
   CIERRE_BTN_CANCELAR:     'button[data-dismiss="modal"]',
+  // Píldora "Total general: $X" del encabezado del modal — confirmado en vivo
+  // que es el elemento real que controla el permiso "Ocultar total general en
+  // cierre de caja" (id 558).
+  CIERRE_TOTAL_GENERAL:    '#total_cash_entries',
+
+  // ─── Modal "Detalle de Cierre" — Tab General ────────────────────────────────
+  // Confirmado en vivo (investigación dedicada, con una venta de contado y una
+  // a crédito reales ya facturadas): las 2 tabs propias ("General"/"Facturas")
+  // SÍ tienen id único y estable, pero cada tab de MONEDA adicional (Colón,
+  // Dobra, Dólar, Euro, Lempira, Peso Dominicano) comparte exactamente el
+  // MISMO id "pos_tab_invoice_by_currency_list" repetido — bug real de
+  // markup del sistema (ids duplicados, HTML inválido), no un error de esta
+  // suite. La única forma confiable de localizar una tab de moneda específica
+  // es por su atributo `onclick="closing_cash_by_currency(<id>)"` (el id
+  // numérico real de esa moneda) o por su texto visible, nunca por su `id`.
+  CIERRE_TAB_GENERAL:   '#pos_tab_general',
+  CIERRE_TAB_FACTURAS:  '#pos_tab_invoice_list',
+  CIERRE_TAB_MONEDA:    'li[onclick^="closing_cash_by_currency("]',
+  CIERRE_TAB_CLASE_ACTIVA: 'active',
+
+  // ─── Modal "Detalle de Cierre" — Tab Facturas ───────────────────────────────
+  // Investigado en vivo (con una venta de contado y una a crédito ya
+  // facturadas): 7 sub-tabs reales, todas `<a class="btn_movement_state">`
+  // dentro del mismo contenedor — la activa gana la clase
+  // "btn_movement_selected". El contenido de las 7 (tablas incluidas) ya
+  // está en el DOM en todo momento; cada sub-tab solo alterna qué tabla(s)
+  // quedan con `style="display: none"` o no.
+  FACTURAS_SUBTAB_CONTADO:   '#movement_cash_invoice_list',
+  FACTURAS_SUBTAB_CREDITO:   '#movement_credit_invoice_list',
+  FACTURAS_SUBTAB_DEVOLUCIONES: '#movement_refund_invoice_list',
+  FACTURAS_SUBTAB_ELIMINADAS:   '#movement_deleted_invoice_list',
+  FACTURAS_SUBTAB_ABONOS:       '#movement_credit_payment_invoice_list',
+  FACTURAS_SUBTAB_ENTRADAS:     '#movement_state_in',
+  FACTURAS_SUBTAB_SALIDAS:      '#movement_state_out',
+  FACTURAS_SUBTAB_CLASE_ACTIVA: 'btn_movement_selected',
+
+  // Tablas reales de cada sub-tab. "Contado" y "Crédito" se dividen cada una
+  // en 2 tablas (Ventas directas / Órdenes de Taller) con columnas propias
+  // (la de Órdenes agrega "N orden"); Devoluciones/Eliminadas/Abonos usan
+  // una tabla más simple (sin Tipo Pago ni N orden); Entradas/Salidas usan
+  // la más simple de todas (sin No. Consecutivo/No. Fact).
+  //
+  // Columnas confirmadas en vivo por tabla:
+  //  - *_CONTADO_DIRECTAS / *_CREDITO_DIRECTAS: No. Consecutivo | No. Fact | Fecha | Observ. | Tipo Pago | Monto
+  //  - *_CONTADO_ORDENES / *_CREDITO_ORDENES:   No. Consecutivo | No. Fact | Fecha | Observ. | Tipo Pago | N orden | Monto
+  //  - *_DEVOLUCIONES / *_ELIMINADAS / *_ABONOS: No. Consecutivo | No. Fact | Fecha | Observ. | Monto
+  //  - *_ENTRADAS / *_SALIDAS:                   Comprobante | Fecha | Observ. | Monto
+  TABLA_FACTURAS_CONTADO_DIRECTAS: '#table_movement_list_cash_invoice_content_direct',
+  TABLA_FACTURAS_CONTADO_ORDENES:  '#table_movement_list_cash_invoice_content_orders',
+  TABLA_FACTURAS_CREDITO_DIRECTAS: '#table_movement_list_credit_invoice_content_direct',
+  TABLA_FACTURAS_CREDITO_ORDENES:  '#table_movement_list_credit_invoice_content_orders',
+  TABLA_FACTURAS_DEVOLUCIONES:     '#table_movement_list_refund_invoice_content',
+  TABLA_FACTURAS_ELIMINADAS:       '#table_movement_list_deleted_invoice_content',
+  // sic: comparte el mismo id genérico "credit_invoice_content" (sin sufijo
+  // _direct/_orders) que en cualquier otro contexto significaría "Crédito"
+  // — confirmado en vivo que esta es en realidad la tabla real de "Fact.
+  // Abonos" (única tabla de esa sub-tab, sin división directas/órdenes).
+  TABLA_FACTURAS_ABONOS:           '#table_movement_list_credit_invoice_content',
+  TABLA_FACTURAS_ENTRADAS:         '#table_movement_list_input_content',
+  TABLA_FACTURAS_SALIDAS:          '#table_movement_list_output_content',
+
+  // Fila superior de KPIs: "Ventas Totales" con su desglose Contado/Crédito.
+  CIERRE_VENTAS_TOTALES:        '#closure_sales_total_display',
+  CIERRE_VENTAS_CONTADO:        '#closure_cash_sales_display',
+  CIERRE_VENTAS_CONTADO_CANTIDAD: '#closure_cash_count',
+  CIERRE_VENTAS_CREDITO:        '#closure_credit_sales_display',
+  CIERRE_DESCUENTO:             '#closure_discount_total_display',
+  CIERRE_IMPUESTOS:             '#closure_tax_total_display',
+  // Tile "Utilidad" — gobernado por el permiso "Ver resumen de utilidad de
+  // caja en el detalle de cierre de caja" (id 619): puede no existir en el
+  // DOM en absoluto con el permiso desactivado, nunca asumir su presencia.
+  CIERRE_UTILIDAD:              '#closure_profit_total_display',
+
+  // "Consolidado Tarjeta" (4 tarjetas: Ingreso/Abonos/Pago Inicial/Total).
+  CIERRE_CONSOLIDADO_TARJETA_INGRESO:      '#bento_card_total_amount',
+  CIERRE_CONSOLIDADO_TARJETA_ABONOS:       '#bento_credit_payment_card_amount',
+  CIERRE_CONSOLIDADO_TARJETA_PAGO_INICIAL: '#bento_initial_card_amount',
+  CIERRE_CONSOLIDADO_TARJETA_TOTAL:        '#bento_card_total_consolidated',
+
+  // "Ingresos por Método de Pago" (4 tarjetas).
+  CIERRE_METODO_PAGO_EFECTIVO:    '#payment_method_cash_display',
+  CIERRE_METODO_PAGO_TARJETA:     '#payment_method_card_display',
+  CIERRE_METODO_PAGO_SINPE:       '#payment_method_sinpe_display',
+  CIERRE_METODO_PAGO_TRANSACCION: '#payment_method_transaction_display',
+
+  // "Resumen de cierre" (columna izquierda de "Datos de Cierre").
+  CIERRE_RESUMEN_APERTURA:               '#aperture_cash_new',
+  CIERRE_RESUMEN_VENTAS_EFECTIVO:        '#total_cash_new',
+  CIERRE_RESUMEN_INGRESO_PAGO_INICIAL:   '#closure_panel_total_initial_payment_closing_summary',
+  CIERRE_RESUMEN_INGRESO_ABONOS:         '#closure_panel_total_credit_payment_closing_summary',
+  CIERRE_RESUMEN_ENTRADAS_MOV_CAJA:      '#closure_panel_total_input_cash_closing_summary',
+  CIERRE_RESUMEN_TOTAL_SALIDAS:          '#aperture_total_output_cash_new',
+
+  // "Datos de Cierre" (columna derecha): Total, Diferencia — Efectivo en caja
+  // y Efectivo para siguiente caja ya cubiertos por CIERRE_EFECTIVO_CAJA/
+  // CIERRE_EFECTIVO_SIGUIENTE de arriba.
+  CIERRE_DATOS_TOTAL:      '#closure_total',
+  CIERRE_DATOS_DIFERENCIA: '#closure_missing_balance',
+
+  // Checkbox-toggle real de "Mostrar Reporte Avanzado" — confirmado en vivo
+  // que NO es un botón, es un <input type="checkbox"> con este id.
+  CIERRE_TOGGLE_REPORTE_AVANZADO: '#checkbox_more_details_cash',
+
+  // ─── Modal "Detalle de Cierre" — Reporte Avanzado ───────────────────────────
+  // Estructura investigada en vivo (mismo modal, todo el contenido ya está en
+  // el DOM en todo momento — igual que el Tab Facturas — el checkbox de
+  // arriba solo alterna su visibilidad). Confirmado con una venta de contado
+  // real ya facturada: el bloque "Entradas → Ventas" termina en un total
+  // real ("Total: 15,200.00" en esa corrida) con id `closure_title_sale_total`
+  // — es el valor que debe coincidir exactamente con "Ventas Totales" del Tab
+  // General (mismo dato, dos vistas distintas del mismo cierre).
+  // Nota: cada id de este bloque se confirmó cruzando su etiqueta visible
+  // real en el HTML (no por suposición de nombre) — varios ids con nombres
+  // engañosos NO corresponden a lo que su nombre sugiere (ver el caso real
+  // de "check_sale_amount", cuya etiqueta real es "+ Ventas ( SINPE MOVIL )",
+  // no "Ventas con cheque"/tarjeta).
+  REPORTE_AVANZADO_VENTAS_EFECTIVO:      '#total_cash_new',            // mismo campo que Resumen de Cierre del Tab General
+  REPORTE_AVANZADO_VENTAS_TARJETA:       '#closure_in_card_total',
+  REPORTE_AVANZADO_VENTAS_SINPE:         '#check_sale_amount',
+  REPORTE_AVANZADO_VENTAS_TRANSACCION:   '#transaction_sale_amount',
+  REPORTE_AVANZADO_VENTAS_CREDITO:       '#credit_sale_amount',
+  REPORTE_AVANZADO_NOTAS_DEBITO:         '#debit_note_amount',
+  REPORTE_AVANZADO_TOTAL_DEVOLUCIONES:   '#refund_sales_amount',
+  // "Total" real de la sección "Entradas → Ventas" — LA cifra a comparar
+  // contra Tab General → Ventas Totales (#closure_sales_total_display).
+  REPORTE_AVANZADO_TOTAL_ENTRADAS:       '#closure_title_sale_total',
+
+  REPORTE_AVANZADO_IMPUESTOS_ADICIONALES: '#service_tax_amount',
+
+  // "Total Consolidado Otros" (Transacción/SINPE: ingreso, pago inicial, abonos).
+  // Su total real (`reported_check_and_transaction_output`) está fuera del
+  // <div> de esta sección en el DOM (confirmado en vivo) — no asumir que el
+  // total sigue el mismo patrón que las demás secciones.
+  REPORTE_AVANZADO_OTROS_INGRESO_TRANSACCION:      '#closure_in_transaction_total_amount',
+  REPORTE_AVANZADO_OTROS_PAGO_INICIAL_TRANSACCION: '#closure_in_in_initial_transaction_amount',
+  REPORTE_AVANZADO_OTROS_ABONOS_TRANSACCION:       '#closure_in_credit_payment_transaction_amount',
+  REPORTE_AVANZADO_TOTAL_CONSOLIDADO_OTROS:        '#reported_check_and_transaction_output',
+
+  // "Total Consolidado Tarjeta" (mismo desglose que los "bento" del Tab General).
+  REPORTE_AVANZADO_TARJETA_INGRESO:      '#closure_in_card_total_amount',
+  REPORTE_AVANZADO_TARJETA_PAGO_INICIAL: '#closure_in_in_initial_card_amount',
+  REPORTE_AVANZADO_TARJETA_ABONOS:       '#closure_in_credit_payment_card_amount',
+  REPORTE_AVANZADO_TOTAL_CONSOLIDADO_TARJETA: '#reported_card_output',
+
+  REPORTE_AVANZADO_OTRAS_ENTRADAS: '#closure_title_credit_payment_total',
+
+  REPORTE_AVANZADO_ENTRADAS_MOV_CAJA: '#closure_in_cash_movement',
+  // "Abonos" + "Pago Inicial" + "Entradas (Mov. Caja)" — un único total combinado.
+  REPORTE_AVANZADO_TOTAL_OTRAS_VENTAS: '#closure_title_sale_other_total',
+
+  // "Ingresos por facturas": Ventas por órdenes + Ventas directas.
+  REPORTE_AVANZADO_VENTAS_ORDENES_TOTAL:  '#invoiced_orders',
+  REPORTE_AVANZADO_VENTAS_DIRECTAS_TOTAL: '#total_sales_directs',
+  REPORTE_AVANZADO_TOTAL_FACTURAS:        '#total_directas_taller',
+
+  // "Salidas".
+  REPORTE_AVANZADO_RETIRADO_EFECTIVO:  '#closure_out_efective_total',
+  REPORTE_AVANZADO_RETIRADO_TARJETA:   '#closure_out_card_total',
+  REPORTE_AVANZADO_NOTAS_CREDITO:      '#closure_credit_total',
+  REPORTE_AVANZADO_SALIDAS_DEVOLUCIONES: '#closure_refund_total',
+  REPORTE_AVANZADO_TOTAL_SALIDAS:      '#reported_output',
+
+  // "Ingresos por Abonos": Órdenes / Ventas a crédito / Apartados.
+  REPORTE_AVANZADO_ABONOS_ORDENES:  '#total_payments_for_orders',
+  REPORTE_AVANZADO_ABONOS_CREDITO:  '#total_payments_for_sales_credit',
+  REPORTE_AVANZADO_ABONOS_APARTADOS: '#total_payments_for_sales_set_asides',
+  REPORTE_AVANZADO_TOTAL_ABONOS:     '#total_payments',
 
   // Menú de tres puntos del encabezado y sus opciones de historial. El botón
   // (#demo-menu-lower-left) solo recibe el upgrade "MaterialButton" (estilo);
@@ -242,53 +439,76 @@ export const L = {
   AJAX_GUARDAR_PRODUCTO: 'getPosProductSaleItem',
 
   // ─── "Crear Combo" (mismo FAB que "Producto Rápido") ───────────────────────
-  DIALOG_CREAR_COMBO:        '#dialog_add_restaurant_combo',
-  COMBO_NOMBRE:              '#combo_rest_name',
-  COMBO_PRECIO_FINAL:        '#combo_rest_total',
-  COMBO_CANTIDAD:            '#combo_rest_quantity',
-  COMBO_BUSCADOR_PRODUCTO:   '#search_parameter',
-  // Los resultados de búsqueda son <div onclick="get_product_combo(...)">,
-  // no <a> — confirmado inspeccionando el DOM en vivo (a diferencia de los
-  // resultados de CABYS o de cliente, que sí son enlaces/filas normales).
-  COMBO_RESULTADO_ITEM:      '#product_option_view [onclick]',
-  COMBO_LISTA_PRODUCTOS:     '#content_combo_product_list',
-  COMBO_PRODUCTO_EN_LISTA:   '#content_combo_product_list [id^="product_combo_"]',
-  COMBO_PRECIO_REAL:         '#real_price_combo',
-  COMBO_BTN_GUARDAR:         '#btn_save_combo',
-  // Botón "CABYS" propio de este formulario. A diferencia de lo asumido
-  // inicialmente, NO reutiliza el sub-modal de "Producto Rápido"
-  // (#dialog_add_cabys_code): abre uno propio y completamente separado
-  // (#dialog_add_cabys_code_combo, con su propio input/botón/tabla, todos
-  // con sufijo "_combo") — confirmado en vivo interceptando qué modal
-  // realmente queda visible tras el click.
-  COMBO_BTN_CABYS:              'a[href="javascript:show_add_cabys_code_combo();"]',
-  COMBO_DIALOG_BUSCAR_CABYS:    '#dialog_add_cabys_code_combo',
-  COMBO_CABYS_BUSCADOR_INPUT:   '#cabys_code_search_combo',
-  COMBO_CABYS_BUSCADOR_BOTON:   '#btn_cabys_code_search_combo',
-  COMBO_CABYS_FILAS_RESULTADO:  '#table_cabys_code_combo tr',
-  // Checkbox "¿Aplicar impuesto?" propio de "Crear Combo" — a diferencia del
-  // de "Producto Rápido" (#check_quick_product_apply_tax), no tiene el bug
-  // de reseteo de pos.js:680-699 y sus "Chosen" de tipo/tasa ya quedan en una
-  // opción real (no un placeholder) apenas se marca — confirmado en vivo.
-  COMBO_APLICAR_IVA:         '#apply_tax_combo',
-  // Select "Seleccione la tarifa" propio de "Crear Combo" — homólogo de
-  // QUICK_PRODUCT_TASA_IVA, pero solo se sincroniza con el CABYS aplicado si
-  // el checkbox COMBO_APLICAR_IVA ya estaba marcado ANTES de aplicar el
-  // CABYS: confirmado en vivo que con el checkbox desmarcado el CABYS no
-  // toca este select (queda en la opción "0% Exento" por defecto), pero con
-  // el checkbox ya marcado, aplicar un CABYS de tasa 13% deja este select
-  // realmente seleccionado en "13%" — a diferencia de lo documentado
-  // anteriormente ("el de Combo no tiene ese autocompletado"), sí lo tiene,
-  // pero condicionado al orden checkbox→CABYS.
-  COMBO_TASA_IVA:            '#tax_rate_list',
-  // Texto con la tasa que el CABYS aplicado sugiere, propio de "Crear Combo"
-  // — homólogo de QUICK_PRODUCT_CABYS_TAX_SUGERIDO. Mismo formato observado
-  // en vivo (fracción, ej. "0.13", no porcentaje).
-  COMBO_CABYS_TAX_SUGERIDO:  '#lbl_search_product_cabys_tax',
+  // CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO: el id real del modal es
+  // "dialog_restaurant_combo" (sin "add_") — confirmado volcando todos los
+  // `.modal`/`[role="dialog"]` reales del DOM tras abrirlo, el id configurado
+  // aquí no coincidía con ningún elemento (count()=0). El modal SÍ abría
+  // correctamente (confirmado con el propio accessibility snapshot de los
+  // fallos que este locator equivocado causaba: `dialog [active]` con heading
+  // "Agregar combo" visible), pero abrirCrearCombo() nunca lo detectaba y
+  // agotaba sus reintentos completos (~1.3-2.4min) antes de fallar.
+  // REESCRITURA COMPLETA CONFIRMADA EN VIVO: "Crear Combo" migró a un
+  // componente nuevo (prefijo real "rc_"/"rc-", ids/clases completamente
+  // distintos de los usados aquí antes — mismo tipo de migración ya
+  // documentado para "Agregar Cliente" en pos-crear-cliente.page.ts, CABYS
+  // dentro de "Crear Combo" propio del modal nuevo `.rc-cabys-box`, no
+  // confundir con "Producto Rápido"/"Crear Producto"). Confirmado volcando
+  // el HTML real del modal (`#dialog_restaurant_combo`, ver el comentario de
+  // DIALOG_CREAR_COMBO) antes y después de agregar un producto.
+  DIALOG_CREAR_COMBO:        '#dialog_restaurant_combo',
+  COMBO_NOMBRE:              '#rc_name',
+  COMBO_PRECIO_FINAL:        '#rc_price',
+  COMBO_CANTIDAD:            '#rc_quantity',
+  COMBO_BUSCADOR_PRODUCTO:   '#rc_product_search',
+  // Resultados de búsqueda: <div class="rc-search-item" data-rc-pick-product="<id>">
+  // reales, clickeables directamente (a diferencia del componente legacy,
+  // que usaba onclick="get_product_combo(...)").
+  COMBO_RESULTADO_ITEM:      '.rc-search-item[data-rc-pick-product]',
+  COMBO_LISTA_PRODUCTOS:     '#rc_product_list',
+  COMBO_PRODUCTO_EN_LISTA:   '#rc_product_list .rc-product-row',
+  COMBO_PRECIO_REAL:         '#rc_total_real',
+  COMBO_BTN_GUARDAR:         '#rc_btn_save',
+  // Bloque CABYS (`#rc_cabys_block`, clase `.rc-cabys-box`) — confirmado en
+  // vivo que llega con la clase `is-hidden` YA en el HTML inicial del modal
+  // (no se oculta condicionalmente después): para esta compañía/país CABYS
+  // está deshabilitado también en "Crear Combo", mismo hallazgo ya
+  // confirmado en el resto de formularios de creación (Producto
+  // Rápido/Sencillo/Completo/Fraccionado, todos con "CABYS: sección NO
+  // encontrada/visible" en este ambiente) — existeCampoCabys() ya maneja
+  // esto correctamente vía isVisible(), sin necesidad de cambiar esa lógica.
+  // El id del sub-modal SÍ se confirmó en vivo (#dialog_restaurant_combo_cabys,
+  // encontrado en el DOM junto al resto de modales), pero sus campos internos
+  // (input/botón buscar/filas) NO pudieron confirmarse en esta sesión — nunca
+  // llegó a abrirse en este ambiente (botón siempre oculto) — se dejan con un
+  // valor best-effort siguiendo la misma convención "rc_"/data- del resto del
+  // componente, PENDIENTE de confirmar en vivo en un ambiente donde CABYS sí
+  // esté habilitado para Combo antes de confiar en ellos.
+  COMBO_BTN_CABYS:              '[data-rc-open-cabys]',
+  COMBO_DIALOG_BUSCAR_CABYS:    '#dialog_restaurant_combo_cabys',
+  COMBO_CABYS_BUSCADOR_INPUT:   '#rc_cabys_search_input',
+  COMBO_CABYS_BUSCADOR_BOTON:   '#rc_cabys_search_btn',
+  COMBO_CABYS_FILAS_RESULTADO:  '#rc_cabys_results tr',
+  // Checkbox "¿Aplicar impuesto?" — fila contenedora `#rc_apply_tax_row`
+  // (clase `is-hidden` hasta agregar al menos un producto al combo,
+  // confirmado en vivo: visible/clickeable justo después de
+  // buscarYAgregarPrimerProductoAlCombo()). El estado real que el backend
+  // guarda vive en el input oculto homólogo `#rc_apply_tax` (0/1) — el
+  // checkbox visible es solo el control de UI.
+  COMBO_APLICAR_IVA:         '#rc_apply_tax_check',
+  COMBO_APLICAR_IVA_FILA:    '#rc_apply_tax_row',
+  // Selects NATIVOS de tipo/tasa de impuesto (sin Chosen, a diferencia del
+  // componente legacy) — homólogos de PRODUCTO_TIPO_IVA/PRODUCTO_TASA_IVA,
+  // se seleccionan con selectOption({index:1}), no clic-y-elegir de Chosen.
+  COMBO_TIPO_IVA:            '#rc_tax_list',
+  COMBO_TASA_IVA:            '#rc_tax_rate_list',
+  // Homólogo de QUICK_PRODUCT_CABYS_TAX_SUGERIDO para "Crear Combo" — sin
+  // confirmar en vivo en esta sesión (CABYS nunca alcanzable, ver arriba).
+  COMBO_CABYS_TAX_SUGERIDO:  '#rc_cabys_tax',
 
-  // Petición AJAX real que persiste el combo (save_restaurant_combo() en
-  // pos.js) — confirmado en vivo inspeccionando la red tras un guardado
-  // exitoso.
+  // Petición AJAX real que persiste el combo — PENDIENTE de reconfirmar tras
+  // la reescritura del componente (el nombre real usado por el JS nuevo no
+  // se confirmó en esta sesión; se mantiene el último valor conocido como
+  // mejor esfuerzo, ver el comentario de guardarComboYObtenerRespuesta()).
   AJAX_GUARDAR_COMBO: 'save_company_combo',
 
   // ─── "Crear Producto" (primera tarjeta del grid de productos del POS) ──────
@@ -304,6 +524,53 @@ export const L = {
   // tab "Servicios" (onclick="add_quick_service_modal(...)") — id real del
   // modal confirmado en vivo (distinto del de "Crear Producto").
   DIALOG_CREAR_SERVICIO:      '#dialog_add_quick_service_update_form',
+  // Campos investigados en vivo (2026-08-14): el modal real se titula
+  // "Agregar grupo de servicio y servicios" — NO es un wizard, es un único
+  // formulario con dos niveles: el "grupo" (obligatorio si no se marca
+  // SERVICIO_USAR_GRUPO_EXISTENTE) y uno o más "servicios" individuales
+  // dentro de ese grupo, cada uno con su propio código/nombre/descuento/IVA/
+  // precio(s). El propio modal advierte explícitamente: "Debe agregar al
+  // menos un servicio al grupo antes de guardar" — SERVICIO_BTN_AGREGAR_SERVICIO
+  // (que corre `addNewSubserviceDialog()`) es obligatorio ANTES de
+  // SERVICIO_BTN_GUARDAR, mismo patrón de dos pasos que "Crear Combo"
+  // (agregar a una lista, luego guardar el conjunto).
+  SERVICIO_USAR_GRUPO_EXISTENTE: '#dialog_select_service_check',
+  SERVICIO_NOMBRE_GRUPO:         '#dialog_service_name',
+  SERVICIO_GRUPO_EXISTENTE_CHOSEN: '#dialog_select_service_list_content_chosen',
+  SERVICIO_CODIGO:               '#dialog-service-update-code',
+  SERVICIO_NOMBRE:               '#dialog-service-update-subname',
+  SERVICIO_DESCUENTO_MAXIMO:     '#dialog-service-update-discount',
+  SERVICIO_APLICAR_IVA:          '#dialog_apply_iva_check',
+  // Ambos son Chosen reales (con <select> nativo debajo, igual que el resto
+  // de la suite) — a diferencia de "Crear Combo" reescrito, este formulario
+  // SÍ conserva Chosen aquí. SERVICIO_TASA_CHOSEN sí trae `percent` en sus
+  // <option> (confirmado en vivo, ej. percent="10.00000"); SERVICIO_TIPO_IMPUESTO_CHOSEN
+  // no lo trae (solo un atributo `code`).
+  SERVICIO_TIPO_IMPUESTO_CHOSEN: '#dialog_tax_type_chosen',
+  SERVICIO_TASA_CHOSEN:          '#dialog_rate_type_chosen',
+  SERVICIO_PRECIO_SIN_IVA:       '#dial_price_without_iva_0',
+  SERVICIO_PRECIO_CON_IVA:       '#dial_price_with_iva_0',
+  // Botón CABYS propio de este formulario — mismo hallazgo que en el resto
+  // de flujos de creación de esta compañía/país (Producto Rápido/Sencillo/
+  // Completo/Fraccionado/Combo): no confirmado como visible en este
+  // ambiente, se maneja con el mismo criterio "isVisible con timeout corto,
+  // omitir si no aparece" que existeCampoCabys() ya usa.
+  SERVICIO_BTN_CABYS:            '#quick_service_cabys_content a[href*="validate_pos_cabys_code"]',
+  // Agrega el servicio individual ya lleno a "Lista de servicios asignados
+  // al grupo" (`#dialog_subservice_price_list_content`) — obligatorio antes
+  // de guardar, ver el comentario de arriba.
+  SERVICIO_BTN_AGREGAR_SERVICIO: '#btn_add_new_price',
+  SERVICIO_LISTA_AGREGADOS:      '#dialog_subservice_price_list_content',
+  SERVICIO_LISTA_AGREGADOS_FILAS: '#dialog_subservice_price_list_content > *',
+  // Guarda el grupo completo con todos los servicios ya agregados a la
+  // lista. CORRECCIÓN CONFIRMADA EN VIVO: el texto de
+  // `#save_dialog_service_update_route` en el DOM ("device_brand/save_dialog_service_update")
+  // NO es la URL real que dispara el click en "Guardar" — es el mismo
+  // nombre de la función `onclick="save_dialog_service_update(this)"`, no el
+  // endpoint. Interceptando la red real, el POST que efectivamente persiste
+  // el grupo va a `WorkshopServices/dialogServicesUpdate`.
+  SERVICIO_BTN_GUARDAR:          '#btn_save_dialog_service_update',
+  AJAX_GUARDAR_SERVICIO:         'dialogServicesUpdate',
   PRODUCTO_NOMBRE:            '#product_name_app',
   PRODUCTO_MARCA:             '#product_brand_app',
   PRODUCTO_PROVEEDOR_CODIGO:  '#product_provider_code_app',

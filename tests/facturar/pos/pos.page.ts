@@ -71,6 +71,9 @@ export class PosPage {
   async cargarPosDesdeDashboard(...args: Parameters<PosCore['cargarPosDesdeDashboard']>) {
     return this.core.cargarPosDesdeDashboard(...args);
   }
+  async cargarPosDesdeDashboardConReintento(...args: Parameters<PosCore['cargarPosDesdeDashboardConReintento']>) {
+    return this.core.cargarPosDesdeDashboardConReintento(...args);
+  }
   async irAlPosConOpcion(...args: Parameters<PosCore['irAlPosConOpcion']>) {
     return this.core.irAlPosConOpcion(...args);
   }
@@ -114,6 +117,60 @@ export class PosPage {
   }
   async confirmarCerrarCaja(...args: Parameters<PosCierreCaja['confirmarCerrarCaja']>) {
     return this.cierreCaja.confirmarCerrarCaja(...args);
+  }
+  async registrarMovimientoCaja(...args: Parameters<PosCierreCaja['registrarMovimientoCaja']>) {
+    return this.cierreCaja.registrarMovimientoCaja(...args);
+  }
+  async abrirDetalleDeCierre(...args: Parameters<PosCierreCaja['abrirDetalleDeCierre']>) {
+    return this.cierreCaja.abrirDetalleDeCierre(...args);
+  }
+  async cancelarModalCerrarCaja(...args: Parameters<PosCierreCaja['cancelarModalCerrarCaja']>) {
+    return this.cierreCaja.cancelarModalCerrarCaja(...args);
+  }
+  async irATabGeneralCierre(...args: Parameters<PosCierreCaja['irATabGeneralCierre']>) {
+    return this.cierreCaja.irATabGeneralCierre(...args);
+  }
+  async leerResumenTabGeneral(...args: Parameters<PosCierreCaja['leerResumenTabGeneral']>) {
+    return this.cierreCaja.leerResumenTabGeneral(...args);
+  }
+  async reporteAvanzadoEstaActivo(...args: Parameters<PosCierreCaja['reporteAvanzadoEstaActivo']>) {
+    return this.cierreCaja.reporteAvanzadoEstaActivo(...args);
+  }
+  async activarReporteAvanzado(...args: Parameters<PosCierreCaja['activarReporteAvanzado']>) {
+    return this.cierreCaja.activarReporteAvanzado(...args);
+  }
+  async leerReporteAvanzado(...args: Parameters<PosCierreCaja['leerReporteAvanzado']>) {
+    return this.cierreCaja.leerReporteAvanzado(...args);
+  }
+  async irASubTabFacturas(...args: Parameters<PosCierreCaja['irASubTabFacturas']>) {
+    return this.cierreCaja.irASubTabFacturas(...args);
+  }
+  async leerFacturasContadoDirectas(...args: Parameters<PosCierreCaja['leerFacturasContadoDirectas']>) {
+    return this.cierreCaja.leerFacturasContadoDirectas(...args);
+  }
+  async leerFacturasContadoOrdenes(...args: Parameters<PosCierreCaja['leerFacturasContadoOrdenes']>) {
+    return this.cierreCaja.leerFacturasContadoOrdenes(...args);
+  }
+  async leerFacturasCreditoDirectas(...args: Parameters<PosCierreCaja['leerFacturasCreditoDirectas']>) {
+    return this.cierreCaja.leerFacturasCreditoDirectas(...args);
+  }
+  async leerFacturasCreditoOrdenes(...args: Parameters<PosCierreCaja['leerFacturasCreditoOrdenes']>) {
+    return this.cierreCaja.leerFacturasCreditoOrdenes(...args);
+  }
+  async leerFacturasDevoluciones(...args: Parameters<PosCierreCaja['leerFacturasDevoluciones']>) {
+    return this.cierreCaja.leerFacturasDevoluciones(...args);
+  }
+  async leerFacturasEliminadas(...args: Parameters<PosCierreCaja['leerFacturasEliminadas']>) {
+    return this.cierreCaja.leerFacturasEliminadas(...args);
+  }
+  async leerFacturasAbonos(...args: Parameters<PosCierreCaja['leerFacturasAbonos']>) {
+    return this.cierreCaja.leerFacturasAbonos(...args);
+  }
+  async leerEntradasCaja(...args: Parameters<PosCierreCaja['leerEntradasCaja']>) {
+    return this.cierreCaja.leerEntradasCaja(...args);
+  }
+  async leerSalidasCaja(...args: Parameters<PosCierreCaja['leerSalidasCaja']>) {
+    return this.cierreCaja.leerSalidasCaja(...args);
   }
   async presionarFacturar(...args: Parameters<PosPayment['presionarFacturar']>) {
     return this.payment.presionarFacturar(...args);
@@ -332,6 +389,9 @@ export class PosPage {
   async seleccionarPagoMixto(...args: Parameters<PosPayment['seleccionarPagoMixto']>) {
     return this.payment.seleccionarPagoMixto(...args);
   }
+  async activarMetodoPagoSinDesmarcarAnterior(...args: Parameters<PosPayment['activarMetodoPagoSinDesmarcarAnterior']>) {
+    return this.payment.activarMetodoPagoSinDesmarcarAnterior(...args);
+  }
   async abrirMenuTresPuntos(...args: Parameters<PosNavigation['abrirMenuTresPuntos']>) {
     return this.navigation.abrirMenuTresPuntos(...args);
   }
@@ -379,6 +439,9 @@ export class PosPage {
   get tabProductos() { return this.core.tabProductos; }
   get tabServicios() { return this.core.tabServicios; }
   get tabPintura() { return this.core.tabPintura; }
+  async asegurarPestanaServiciosActiva(...args: Parameters<PosCore['asegurarPestanaServiciosActiva']>) {
+    return this.core.asegurarPestanaServiciosActiva(...args);
+  }
   async tabEstaActivo(...args: Parameters<PosCore['tabEstaActivo']>) {
     return this.core.tabEstaActivo(...args);
   }
@@ -478,6 +541,9 @@ export class PosPage {
   async seleccionarIvaManualmente(...args: Parameters<PosCore['seleccionarIvaManualmente']>) {
     return this.core.seleccionarIvaManualmente(...args);
   }
+  async desmarcarCheckboxIvaProductoRapido(...args: Parameters<PosCore['desmarcarCheckboxIvaProductoRapido']>) {
+    return this.core.desmarcarCheckboxIvaProductoRapido(...args);
+  }
   async guardarProductoRapido(...args: Parameters<PosCore['guardarProductoRapido']>) {
     return this.core.guardarProductoRapido(...args);
   }
@@ -529,6 +595,26 @@ export class PosPage {
   }
   async abrirCrearServicio(...args: Parameters<PosCrearProducto['abrirCrearServicio']>) {
     return this.crearProducto.abrirCrearServicio(...args);
+  }
+  async llenarNombreGrupoServicio(...args: Parameters<PosCrearProducto['llenarNombreGrupoServicio']>) {
+    return this.crearProducto.llenarNombreGrupoServicio(...args);
+  }
+  async llenarDatosServicio(...args: Parameters<PosCrearProducto['llenarDatosServicio']>) {
+    return this.crearProducto.llenarDatosServicio(...args);
+  }
+  get checkboxIvaServicio() { return this.crearProducto.checkboxIvaServicio; }
+  get botonCabysServicio() { return this.crearProducto.botonCabysServicio; }
+  async activarIvaServicioConTasaManual(...args: Parameters<PosCrearProducto['activarIvaServicioConTasaManual']>) {
+    return this.crearProducto.activarIvaServicioConTasaManual(...args);
+  }
+  async llenarPrecioServicio(...args: Parameters<PosCrearProducto['llenarPrecioServicio']>) {
+    return this.crearProducto.llenarPrecioServicio(...args);
+  }
+  async agregarServicioALaLista(...args: Parameters<PosCrearProducto['agregarServicioALaLista']>) {
+    return this.crearProducto.agregarServicioALaLista(...args);
+  }
+  async guardarGrupoServicio(...args: Parameters<PosCrearProducto['guardarGrupoServicio']>) {
+    return this.crearProducto.guardarGrupoServicio(...args);
   }
   async llenarNombreProducto(...args: Parameters<PosCrearProducto['llenarNombreProducto']>) {
     return this.crearProducto.llenarNombreProducto(...args);

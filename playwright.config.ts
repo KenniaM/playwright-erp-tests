@@ -194,8 +194,8 @@ const TODOS_LOS_PROYECTOS = [
 
   // Variante de 'firefox' autenticada contra el ambiente qa_restaurant
   // (compañía "Restaurante Rancho Robertos") en vez del ambiente original —
-  // los specs del módulo Mesas (tests/facturar/pos/pos-restaurante.spec.ts) corren con
-  // --project=firefox-restaurant. Ver el comentario de restaurant.setup.ts:
+  // los specs de tests/facturar/pos-restaurante/ (Mesas, Órdenes para Llevar)
+  // corren con --project=firefox-restaurant. Ver el comentario de restaurant.setup.ts:
   // debe invocarse en un comando dedicado (solo archivos de este ambiente),
   // nunca mezclado con el resto de la suite en la misma corrida. Renombrado
   // de 'chromium-restaurant' por el mismo motivo que 'firefox-super-admin'

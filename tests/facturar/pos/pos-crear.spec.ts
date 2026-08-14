@@ -430,9 +430,17 @@ async function configurarIvaProductoEnPasoDos(pos: PosPage, activarIva: boolean,
  * nueva" nunca detectaría nada (el click posterior solo incrementaría la
  * cantidad de esa misma línea, no crearía una clave distinta).
  */
-async function buscarProductoYAgregarAlCarrito(pos: PosPage, nombre: string, esFraccionado = false): Promise<string> {
+async function buscarProductoYAgregarAlCarrito(pos: PosPage, nombre: string, esFraccionado = false, esServicio = false): Promise<string> {
   await pos.cargarPosDesdeDashboard();
   await pos.cerrarOverlaysConocidos();
+  // Un Servicio vive en el tab "Servicios" del grid, no en "Productos" (el
+  // tab activo por defecto tras recargar el POS) — confirmado en vivo que
+  // el buscador del grid está acotado al tab activo: buscar un servicio
+  // recién creado con el tab "Productos" activo nunca lo encuentra, sin
+  // importar cuánto se espere.
+  if (esServicio) {
+    await pos.asegurarPestanaServiciosActiva();
+  }
 
   const clavesAntes = await pos.obtenerClavesProductos();
   await pos.buscarProductoEnGrid(nombre);
@@ -725,10 +733,104 @@ test('crear un Producto Fraccionado sin IVA desde el POS y validar que se agrega
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Crear Servicio — investigado en vivo el 2026-08-14: tipo de producto real
+// del POS (tarjeta "Crear Producto" del tab "Servicios", `abrirCrearServicio()`
+// ya existía en el Page Object pero solo se ejercitaba en pos-permisos.spec.ts
+// para validar que el modal abre/no abre según permiso, nunca un flujo
+// completo de creación + carrito + persistencia. El modal real
+// ("Agregar grupo de servicio y servicios") NO es un wizard: crea un GRUPO
+// de servicios (obligatorio nombrarlo, salvo que se use uno existente) que
+// contiene uno o más servicios individuales, cada uno con su propio código/
+// nombre/descuento/IVA/precio — hay que "Agregar servicio" (lo suma a una
+// lista) ANTES de poder "Guardar" el grupo completo, mismo patrón de dos
+// pasos que "Crear Combo".
+// ═══════════════════════════════════════════════════════════════════════════
+
+test('crear un Servicio Sencillo con IVA desde el POS y validar que se agrega correctamente al carrito', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const pos = new PosPage(page);
+  const sufijo = Date.now();
+  const nombreServicio = `Servicio QA con IVA ${sufijo}`;
+
+  await test.step('Cargar el POS pasando por el Dashboard', async () => {
+    await pos.cargarPosDesdeDashboard();
+    await pos.cerrarOverlaysConocidos();
+  });
+
+  await test.step('Abrir "Crear Servicio" y llenar nombre del grupo + datos del servicio', async () => {
+    await pos.abrirCrearServicio();
+    await pos.llenarNombreGrupoServicio(`Grupo QA ${sufijo}`);
+    await pos.llenarDatosServicio(`COD-QA-${sufijo}`, nombreServicio);
+  });
+
+  await test.step('Activar IVA con tipo/tasa manual (CABYS no aplica en este ambiente) y llenar el precio', async () => {
+    const cabysExiste = await pos.existeCampoCabys(pos.botonCabysServicio);
+    console.log(`[crear un Servicio Sencillo con IVA] CABYS existe: ${cabysExiste}`);
+    await pos.activarIvaServicioConTasaManual();
+    await pos.llenarPrecioServicio(PRODUCTO_PRECIO_VENTA);
+  });
+
+  await test.step('Agregar el servicio a la lista del grupo y guardar', async () => {
+    await pos.agregarServicioALaLista();
+    const respuesta = await pos.guardarGrupoServicio();
+    expect(respuesta.ok(), `La petición a save_dialog_service_update no respondió OK (status ${respuesta.status()})`).toBe(true);
+  });
+
+  let claveServicio = '';
+  await test.step('Buscar el servicio en el catálogo del POS y agregarlo al carrito', async () => {
+    claveServicio = await buscarProductoYAgregarAlCarrito(pos, nombreServicio, false, true);
+  });
+
+  await test.step('Validar que el servicio se agregó con IVA aplicado, el nombre coincide y no hay errores', async () => {
+    await validarProductoEnCarrito(pos, page, claveServicio, nombreServicio, true);
+  });
+});
+
+test('crear un Servicio Sencillo sin IVA desde el POS y validar que se agrega correctamente al carrito', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const pos = new PosPage(page);
+  const sufijo = Date.now();
+  const nombreServicio = `Servicio QA sin IVA ${sufijo}`;
+
+  await test.step('Cargar el POS pasando por el Dashboard', async () => {
+    await pos.cargarPosDesdeDashboard();
+    await pos.cerrarOverlaysConocidos();
+  });
+
+  await test.step('Abrir "Crear Servicio" y llenar nombre del grupo + datos del servicio', async () => {
+    await pos.abrirCrearServicio();
+    await pos.llenarNombreGrupoServicio(`Grupo QA ${sufijo}`);
+    await pos.llenarDatosServicio(`COD-QA-${sufijo}`, nombreServicio);
+  });
+
+  await test.step('Dejar IVA desactivado (por defecto) y llenar el precio', async () => {
+    await expect(pos.checkboxIvaServicio, 'El checkbox "¿Aplicar IVA?" no debería estar marcado por defecto').not.toBeChecked();
+    await pos.llenarPrecioServicio(PRODUCTO_PRECIO_VENTA);
+  });
+
+  await test.step('Agregar el servicio a la lista del grupo y guardar', async () => {
+    await pos.agregarServicioALaLista();
+    const respuesta = await pos.guardarGrupoServicio();
+    expect(respuesta.ok(), `La petición a save_dialog_service_update no respondió OK (status ${respuesta.status()})`).toBe(true);
+  });
+
+  let claveServicio = '';
+  await test.step('Buscar el servicio en el catálogo del POS y agregarlo al carrito', async () => {
+    claveServicio = await buscarProductoYAgregarAlCarrito(pos, nombreServicio, false, true);
+  });
+
+  await test.step('Validar que el servicio quedó realmente sin IVA, el nombre coincide y no hay errores', async () => {
+    await validarProductoEnCarrito(pos, page, claveServicio, nombreServicio, false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Crear Cliente — investigado en vivo (ver el informe final de esta suite):
-// el modal real es #dialog_add_customer, abierto desde el dropdown "Nuevo
-// Cliente" del panel "Buscar Cliente" DENTRO del POS (nunca desde el módulo
-// completo /cust/customer del Dashboard — ese camino tiene un bug real de
+// el modal real es #dialog_customer_form (componente CustomerForm, migrado
+// desde el legacy #dialog_add_customer — ver el comentario completo en
+// pos-crear-cliente.page.ts), abierto desde el dropdown "Nuevo Cliente" del
+// panel "Buscar Cliente" DENTRO del POS (nunca desde el módulo completo
+// /cust/customer del Dashboard — ese camino tiene un bug real de
 // navegación, documentado más abajo, ajeno a esta automatización).
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -748,19 +850,45 @@ type CrearClienteFixtures = {
   cc: PosCrearCliente;
 };
 
+/**
+ * Mismo síntoma y misma causa raíz ya documentados en pos-ruteo.spec.ts
+ * (recargarPosConReintento()) y ya corregidos en pos.spec.ts
+ * (cargarPosConReintento()): bajo carga sostenida del ambiente compartido,
+ * un único intento de cargarPosDesdeDashboard() puede no resolver el POS
+ * dentro de PRODUCTS_LOAD — confirmado en vivo en este mismo archivo: 3 de
+ * los 5 workers que necesitaron esta fixture agotaron el timeout completo
+ * (300s) durante su setup, en corridas independientes entre sí (no un
+ * problema de ningún escenario concreto, el fixture nunca llega a ejecutar
+ * ningún test). Se duplica el patrón de reintento aquí (mismo motivo ya
+ * documentado en pos.spec.ts: el original es una función local no exportada
+ * de pos-ruteo.spec.ts).
+ */
+async function cargarPosConReintentoParaFixtureCliente(pos: PosPage) {
+  const MAX_INTENTOS = 3;
+  for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+    try {
+      await pos.cargarPosDesdeDashboard();
+      return;
+    } catch (e) {
+      if (intento === MAX_INTENTOS) throw e;
+      console.log(`[cargarPosConReintentoParaFixtureCliente] Intento ${intento} no dejó el POS en un estado navegable, reintentando: ${(e as Error).message.slice(0, 200)}`);
+    }
+  }
+}
+
 const testCliente = base.extend<{}, CrearClienteFixtures>({
   sharedPage: [async ({ browser }, use) => {
     const page = await browser.newPage();
     await use(page);
     await page.close();
-  }, { scope: 'worker', timeout: TIMEOUTS.TEST }],
+  }, { scope: 'worker', timeout: TIMEOUTS.TEST_CON_RECUPERACION }],
 
   pos: [async ({ sharedPage }, use) => {
     const pos = new PosPage(sharedPage);
-    await pos.cargarPosDesdeDashboard();
+    await cargarPosConReintentoParaFixtureCliente(pos);
     await pos.cerrarOverlaysConocidos();
     await use(pos);
-  }, { scope: 'worker', timeout: TIMEOUTS.TEST }],
+  }, { scope: 'worker', timeout: TIMEOUTS.TEST_CON_RECUPERACION }],
 
   cc: [async ({ pos, sharedPage }, use) => {
     await use(new PosCrearCliente(pos, sharedPage));
@@ -779,14 +907,17 @@ async function validarSinMensajesDeErrorCliente(page: Page) {
 }
 
 /**
- * Cierra el modal "Agregar Cliente" con su botón real de cierre (#closing_modal)
- * — necesario tras reabrir un cliente ya guardado (reabrirPrimerResultado())
- * para no dejarlo abierto al final del escenario (validarSinModalesInesperadosCliente
- * fallaría de otro modo).
+ * Cierra el modal "Agregar Cliente" con su botón real de cierre — necesario
+ * tras reabrir un cliente ya guardado (reabrirPrimerResultado()) para no
+ * dejarlo abierto al final del escenario (validarSinModalesInesperadosCliente
+ * fallaría de otro modo). `[data-cf-close]` sola cae en modo estricto de
+ * Playwright (2 matches reales: la "X" del header y "Cancelar" del footer,
+ * confirmado en vivo) — se usa el botón "Cancelar" (`.cf-btn-cancel`, mismo
+ * selector que L_CC.BTN_CERRAR dentro de la clase) para desambiguar.
  */
 async function cerrarModalClienteSiAbierto(cc: PosCrearCliente, page: Page) {
   if (await cc.modal.isVisible().catch(() => false)) {
-    await cc.modal.locator('#closing_modal').click();
+    await cc.modal.locator('.cf-btn-cancel[data-cf-close]').click();
     await expect(cc.modal, 'El modal "Agregar Cliente" no se cerró').toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
   }
 }
@@ -815,14 +946,26 @@ async function buscarYReabrirCliente(pos: PosPage, cc: PosCrearCliente, nombre: 
   }
   const cantidad = await cc.buscarClientesSinSeleccionar(nombre);
   expect(cantidad, `El cliente "${nombre}" no apareció en la búsqueda tras guardarlo`).toBeGreaterThanOrEqual(1);
-  await cc.reabrirPrimerResultado();
+  await cc.reabrirPrimerResultado(nombre);
 }
 
 testCliente.describe('Crear Cliente', () => {
   testCliente.beforeEach(async ({ pos }) => {
-    testCliente.setTimeout(TIMEOUTS.TEST);
-    await pos.irAlPos();
-    await pos.esperarEstadoInicial();
+    testCliente.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    // Mismo patrón ya establecido en pos-ruteo.spec.ts: la ruta rápida
+    // (irAlPos + esperarEstadoInicial) primero, con recargarPosConReintento()
+    // como fallback acotado — confirmado en vivo que, bajo carga concurrente
+    // de varios workers, este beforeEach puede agotar su propio timeout
+    // (300s) por sí solo, no solo el fixture "pos" (fixture y beforeEach son
+    // pasos separados: el fixture ya haber cargado el POS una vez no
+    // protege a este hook, que navega de nuevo en cada test).
+    const listo = await pos.irAlPos()
+      .then(() => pos.esperarEstadoInicial())
+      .then(() => true)
+      .catch(() => false);
+    if (!listo) {
+      await cargarPosConReintentoParaFixtureCliente(pos);
+    }
     if (await pos.modalAbrirCajaVisible()) {
       await pos.cerrarModalAbrirCaja();
     }
@@ -830,7 +973,7 @@ testCliente.describe('Crear Cliente', () => {
   });
 
   testCliente('1. Crear cliente sencillo (Tipo de identificación, Identificación, Nombre, Correo electrónico)', async ({ pos, cc, sharedPage }) => {
-    testCliente.setTimeout(TIMEOUTS.TEST);
+    testCliente.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     const sufijo = Date.now();
@@ -855,14 +998,14 @@ testCliente.describe('Crear Cliente', () => {
 
     await test.step('Buscar el cliente y validar que los datos persistieron al reabrirlo', async () => {
       await buscarYReabrirCliente(pos, cc, datos.nombre);
-      await expect(cc.modal.locator('#c_name'), 'El nombre no persistió').toHaveValue(datos.nombre.trim());
-      await expect(cc.modal.locator('#c_identifier'), 'La identificación no persistió').toHaveValue(datos.identificacion);
-      await expect(cc.modal.locator('#c_email'), 'El correo electrónico no persistió').toHaveValue(datos.email);
+      await expect(cc.modal.locator('#cf_name'), 'El nombre no persistió').toHaveValue(datos.nombre.trim());
+      await expect(cc.modal.locator('#cf_identifier'), 'La identificación no persistió').toHaveValue(datos.identificacion);
+      await expect(cc.modal.locator('#cf_email'), 'El correo electrónico no persistió').toHaveValue(datos.email);
       // Tipo de Identificación: se validó ya al guardar (Chosen con opción
       // real seleccionada); tras reabrir, su trigger no debe seguir en el
       // placeholder "Seleccione...".
       await expect(
-        cc.modal.locator('#c_identification_type_chosen .chosen-single span'),
+        cc.modal.locator('#cf_identification_type_chosen .chosen-single span'),
         'El Tipo de Identificación no persistió (sigue en el placeholder)'
       ).not.toHaveText('Seleccione...');
       await cerrarModalClienteSiAbierto(cc, sharedPage);
@@ -876,7 +1019,7 @@ testCliente.describe('Crear Cliente', () => {
 
 
   testCliente('2. Crear cliente completo (Principal + Opciones avanzadas + Ubicación)', async ({ pos, cc, sharedPage }) => {
-    testCliente.setTimeout(TIMEOUTS.TEST);
+    testCliente.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     const sufijo = Date.now();
@@ -928,16 +1071,26 @@ testCliente.describe('Crear Cliente', () => {
     await test.step('Buscar el cliente y validar que TODOS los datos persistieron al reabrirlo', async () => {
       await buscarYReabrirCliente(pos, cc, datosPrincipal.nombre);
 
-      await expect(cc.modal.locator('#c_name')).toHaveValue(datosPrincipal.nombre.trim());
-      await expect(cc.modal.locator('#c_identifier')).toHaveValue(datosPrincipal.identificacion);
-      await expect(cc.modal.locator('#c_email')).toHaveValue(datosPrincipal.email);
-      await expect(cc.modal.locator('#c_code')).toHaveValue(datosPrincipal.codigo);
-      await expect(cc.modal.locator('#c_batch')).toHaveValue(datosPrincipal.batch);
-      await expect(cc.modal.locator('#c_address')).toHaveValue(datosPrincipal.direccion);
+      await expect(cc.modal.locator('#cf_name')).toHaveValue(datosPrincipal.nombre.trim());
+      await expect(cc.modal.locator('#cf_identifier')).toHaveValue(datosPrincipal.identificacion);
+      await expect(cc.modal.locator('#cf_email')).toHaveValue(datosPrincipal.email);
+      await expect(cc.modal.locator('#cf_code')).toHaveValue(datosPrincipal.codigo);
+      await expect(cc.modal.locator('#cf_batch')).toHaveValue(datosPrincipal.batch);
+      await expect(cc.modal.locator('#cf_address')).toHaveValue(datosPrincipal.direccion);
 
       await cc.irATabOpcionesAvanzadas();
-      await expect(cc.modal.locator('#c_limit')).toHaveValue(datosAvanzados.limiteCredito);
-      await expect(cc.modal.locator('#ck_is_exempt')).toBeChecked();
+      // CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO: el backend persiste
+      // "Límite de crédito" con la precisión decimal real del campo
+      // (`step="0.0001"`) — al reabrir el cliente, #cf_limit trae
+      // "5000.000000" en vez del literal "5000" enviado, un formato de
+      // servidor, no un bug de guardado. toHaveValue() con el string
+      // original fallaba por esto pese a que el valor numérico persistió
+      // correctamente; se compara el valor parseado en su lugar.
+      await expect(
+        cc.modal.locator('#cf_limit'),
+        'El Límite de crédito no persistió con el valor numérico correcto'
+      ).toHaveValue(new RegExp(`^${datosAvanzados.limiteCredito}(\\.0+)?$`));
+      await expect(cc.modal.locator('#cf_is_exempt')).toBeChecked();
 
       await cc.irATabUbicacion();
       await expect(
@@ -956,7 +1109,7 @@ testCliente.describe('Crear Cliente', () => {
 
 
   testCliente('3. Crear cliente completo con actividades económicas (si el campo existe para esta compañía)', async ({ pos, cc, sharedPage }) => {
-    testCliente.setTimeout(TIMEOUTS.TEST);
+    testCliente.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     const sufijo = Date.now();
@@ -998,11 +1151,11 @@ testCliente.describe('Crear Cliente', () => {
 
     await test.step('Buscar el cliente y validar que los datos persistieron al reabrirlo', async () => {
       await buscarYReabrirCliente(pos, cc, datosPrincipal.nombre);
-      await expect(cc.modal.locator('#c_name')).toHaveValue(datosPrincipal.nombre.trim());
-      await expect(cc.modal.locator('#c_identifier')).toHaveValue(datosPrincipal.identificacion);
+      await expect(cc.modal.locator('#cf_name')).toHaveValue(datosPrincipal.nombre.trim());
+      await expect(cc.modal.locator('#cf_identifier')).toHaveValue(datosPrincipal.identificacion);
       if (actividadPrincipalExiste) {
         await expect(
-          cc.modal.locator('#c_principal_economic_activity_chosen .chosen-single span'),
+          cc.modal.locator('#cf_economic_activity_chosen .chosen-single span'),
           'La Actividad Económica principal no persistió (sigue en el placeholder) a pesar de haber tenido opciones reales al guardar'
         ).not.toHaveText('Seleccionar opción');
       }
@@ -1017,7 +1170,7 @@ testCliente.describe('Crear Cliente', () => {
 
 
   testCliente('4. Crear cliente completo con información de vehículo completa', async ({ pos, cc, sharedPage }) => {
-    testCliente.setTimeout(TIMEOUTS.TEST);
+    testCliente.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     const sufijo = Date.now();
@@ -1058,9 +1211,9 @@ testCliente.describe('Crear Cliente', () => {
 
     await test.step('Buscar el cliente y validar que el vehículo quedó asociado correctamente al reabrirlo', async () => {
       await buscarYReabrirCliente(pos, cc, datosPrincipal.nombre);
-      await expect(cc.modal.locator('#c_name')).toHaveValue(datosPrincipal.nombre.trim());
+      await expect(cc.modal.locator('#cf_name')).toHaveValue(datosPrincipal.nombre.trim());
 
-      const filasVehiculo = cc.modal.locator('#table_client_vehicle tr');
+      const filasVehiculo = cc.modal.locator('#cf_vehicle_table_body tr');
       await expect(filasVehiculo, 'El vehículo agregado no aparece en la tabla de vehículos tras reabrir el cliente').toHaveCount(1);
       await expect(filasVehiculo.first(), 'La placa del vehículo no coincide').toContainText(datosVehiculo.placa);
       await expect(filasVehiculo.first(), 'El número de chasis del vehículo no coincide').toContainText(datosVehiculo.chasis);
@@ -1076,7 +1229,7 @@ testCliente.describe('Crear Cliente', () => {
 
 
   testCliente('5. Crear cliente sencillo con vehículo básico (Placa, Marca, Modelo, Año)', async ({ pos, cc, sharedPage }) => {
-    testCliente.setTimeout(TIMEOUTS.TEST);
+    testCliente.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     const sufijo = Date.now();
@@ -1108,9 +1261,9 @@ testCliente.describe('Crear Cliente', () => {
 
     await test.step('Buscar el cliente y validar que el vehículo básico quedó registrado al reabrirlo', async () => {
       await buscarYReabrirCliente(pos, cc, datos.nombre);
-      await expect(cc.modal.locator('#c_name')).toHaveValue(datos.nombre.trim());
+      await expect(cc.modal.locator('#cf_name')).toHaveValue(datos.nombre.trim());
 
-      const filasVehiculo = cc.modal.locator('#table_client_vehicle tr');
+      const filasVehiculo = cc.modal.locator('#cf_vehicle_table_body tr');
       await expect(filasVehiculo, 'El vehículo básico agregado no aparece en la tabla de vehículos tras reabrir el cliente').toHaveCount(1);
       await expect(filasVehiculo.first(), 'La placa del vehículo no coincide').toContainText(placa);
 

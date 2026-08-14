@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { CRMPage, REPORTES_ROTO, SUBMODULOS_CRM, TIMEOUTS } from './crm.page';
+import { CRMPage, SUBMODULOS_CRM, TIMEOUTS } from './crm.page';
 
 for (const submodulo of SUBMODULOS_CRM) {
   test(`Cargar el submódulo "${submodulo.nombre}" del módulo CRM`, async ({ page }) => {
@@ -23,23 +23,3 @@ for (const submodulo of SUBMODULOS_CRM) {
     });
   });
 }
-
-// Hallazgo confirmado en vivo (dos veces, en aislamiento, con goto directo y
-// siguiendo el href real del link del menú): "Reportes" no carga — la
-// petición a CRM/report responde 302 y termina en la página 404 del sistema.
-// Se documenta la falla en vez de forzar un "passing test" sobre una función
-// que realmente está rota (mismo criterio que "Reporte de Inspección" en
-// gestion-navegacion.spec.ts).
-test('Cargar el submódulo "Reportes" — hallazgo esperado: redirige a la página 404', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
-  const crm = new CRMPage(page);
-
-  await test.step('Navegar a "Reportes"', async () => {
-    await crm.irA(REPORTES_ROTO.url);
-  });
-
-  await test.step('Confirmar que la navegación termina en la página 404 del sistema', async () => {
-    await expect(page).toHaveURL(/error\/404/);
-    await expect(page).toHaveTitle(/404/i);
-  });
-});

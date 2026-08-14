@@ -74,22 +74,19 @@ export const SUBMODULOS_CRM: SubmoduloCRM[] = [
     rutaEsperada: 'CRM/vehicleInventory',
     obtenerLocatorDeCarga: (page) => page.locator('input[placeholder="Placa, marca, modelo..."]'),
   },
-  // "Reportes" queda fuera de este listado — ver hallazgo documentado junto a
-  // REPORTES_ROTO más abajo.
+  // "Reportes" RESTAURADO a este listado (2026-08-07): el hallazgo antes
+  // documentado aquí ("CRM/report redirige a la página 404 del sistema",
+  // confirmado en vivo 2 veces) ya NO reproduce — confirmado en vivo que la
+  // URL se queda en CRM/report y renderiza un heading real "Reportes del
+  // CRM". Era un bug real de sistema (nunca de automatización); no queda
+  // evidencia de qué lo corrigió.
+  {
+    nombre: 'Reportes',
+    url: BASE_URL + '/CRM/report',
+    rutaEsperada: 'CRM/report',
+    obtenerLocatorDeCarga: (page) => page.getByRole('heading', { name: 'Reportes del CRM', level: 2 }),
+  },
 ];
-
-/**
- * Hallazgo confirmado en vivo (goto directo y también siguiendo el href real
- * del link del menú): "Reportes" no carga — la petición a `CRM/report`
- * responde 302 y termina redirigiendo a la página 404 del sistema
- * (`/error/404`, título "404 - Página no encontrada"). Se documenta como
- * hallazgo (mismo criterio que "Reporte de Inspección" en
- * gestion-navegacion.spec.ts) en vez de omitirlo silenciosamente.
- */
-export const REPORTES_ROTO = {
-  nombre: 'Reportes',
-  url: BASE_URL + '/CRM/report',
-} as const;
 
 // ─── Page Object ──────────────────────────────────────────────────────────────
 

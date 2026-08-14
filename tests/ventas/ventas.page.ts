@@ -44,7 +44,12 @@ export const SUBMODULOS_VENTAS: SubmoduloVentas[] = [
     url: BASE_URL + '/credit_sale/clientCreditSales',
     rutaEsperada: 'clientCreditSales',
     tituloEsperado: /cuentas por cobrar/i,
-    obtenerLocatorDeCarga: (page) => page.locator('#btn_search'),
+    // CORRECCIÓN DE AUTOMATIZACIÓN confirmada en vivo: esta pantalla fue
+    // rediseñada por la propia aplicación (mismo hallazgo que "Bodegas" en
+    // inventario.page.ts) — `#btn_search` ya no existe; el contenido real
+    // hoy es un encabezado `<h1>Cuentas por cobrar</h1>` dentro de una UI de
+    // filtros/tabla completamente nueva.
+    obtenerLocatorDeCarga: (page) => page.getByRole('heading', { name: 'Cuentas por cobrar', level: 1 }),
   },
   {
     nombre: 'Lista de Cobros',

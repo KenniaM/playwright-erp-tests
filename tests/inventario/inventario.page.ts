@@ -80,7 +80,13 @@ export const SUBMODULOS_INVENTARIO: SubmoduloInventario[] = [
     url: BASE_URL + '/company_warehouse/warehouses',
     rutaEsperada: 'company_warehouse/warehouses',
     tituloEsperado: /bodegas/i,
-    obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /bodegas/i),
+    // CORRECCIÓN DE AUTOMATIZACIÓN confirmada en vivo: esta pantalla fue
+    // rediseñada por la propia aplicación — ya no renderiza ningún
+    // `.content-header` (el locator documentado arriba, con el doble panel
+    // "Asignar productos a Bodegas", quedó obsoleto); el contenido real hoy
+    // es un encabezado `<h1>Bodegas</h1>` dentro de una UI de filtros/tabla
+    // completamente nueva.
+    obtenerLocatorDeCarga: (page) => page.getByRole('heading', { name: 'Bodegas', level: 1 }),
   },
   {
     nombre: 'Editar Precios',

@@ -36,7 +36,13 @@ export const SUBMODULOS_REPORTES_VENTAS: SubmoduloReportes[] = [
     url: BASE_URL + '/reports/credit_payment_report',
     rutaEsperada: 'credit_payment_report',
     tituloEsperado: /reporte de abonos/i,
-    obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /abonos/i),
+    // CORRECCIÓN DE AUTOMATIZACIÓN confirmada en vivo: esta pantalla fue
+    // rediseñada por la propia aplicación (mismo hallazgo que "Bodegas" en
+    // inventario.page.ts) — ya no renderiza ningún `.content-header`; el
+    // contenido real hoy es un encabezado `<h1>Reporte de Abonos</h1>`
+    // dentro de una UI de tarjetas/dashboard nueva. Regex (no exacto) porque
+    // el texto real incluye el prefijo "Reporte de".
+    obtenerLocatorDeCarga: (page) => page.getByRole('heading', { name: /reporte de abonos/i, level: 1 }),
   },
   {
     nombre: 'Utilidad',

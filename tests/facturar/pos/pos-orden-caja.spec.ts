@@ -28,18 +28,24 @@ const test = base.extend<{}, OrdenCajaFixtures>({
     const page = await browser.newPage();
     await use(page);
     await page.close();
-  }, { scope: 'worker', timeout: TIMEOUTS.TEST }],
+  }, { scope: 'worker', timeout: TIMEOUTS.TEST_CON_RECUPERACION }],
 
+  // cargarPosDesdeDashboardConReintento() (no cargarPosDesdeDashboard()
+  // directo): confirmado en vivo (root-cause real, ver el comentario
+  // completo en PosCore) que un único intento sin reintento puede agotar el
+  // timeout completo del fixture bajo carga sostenida del ambiente
+  // compartido — mismo síntoma ya confirmado en pos-crear.spec.ts/
+  // pos-facturar.spec.ts.
   pos: [async ({ sharedPage }, use) => {
     const pos = new PosPage(sharedPage);
     // Único paso por Dashboard que este worker hará para todo el archivo:
     // necesario para calentar la caché HTTP del navegador y evitar la
     // condición de carrera de "Agregar" ya documentada en el comentario de
     // cargarPosDesdeDashboard() (pos.page.ts).
-    await pos.cargarPosDesdeDashboard();
+    await pos.cargarPosDesdeDashboardConReintento();
     await pos.cerrarOverlaysConocidos();
     await use(pos);
-  }, { scope: 'worker', timeout: TIMEOUTS.TEST }],
+  }, { scope: 'worker', timeout: TIMEOUTS.TEST_CON_RECUPERACION }],
 });
 
 /**
@@ -54,9 +60,19 @@ const test = base.extend<{}, OrdenCajaFixtures>({
  * variante en la que un test previo falló a mitad de camino.
  */
 test.beforeEach(async ({ pos }) => {
-  test.setTimeout(TIMEOUTS.TEST);
-  await pos.irAlPos();
-  await pos.esperarEstadoInicial();
+  test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+  // Mismo patrón ya establecido en pos-ruteo.spec.ts/pos-crear.spec.ts/
+  // pos-facturar.spec.ts: la ruta rápida primero, con
+  // cargarPosDesdeDashboardConReintento() como fallback acotado —
+  // confirmado en vivo que este beforeEach puede agotar su propio timeout
+  // (300s) bajo carga concurrente del ambiente compartido.
+  const listo = await pos.irAlPos()
+    .then(() => pos.esperarEstadoInicial())
+    .then(() => true)
+    .catch(() => false);
+  if (!listo) {
+    await pos.cargarPosDesdeDashboardConReintento();
+  }
   if (await pos.modalAbrirCajaVisible()) {
     await pos.cerrarModalAbrirCaja();
   }
@@ -246,7 +262,7 @@ test.describe('Orden de Caja — Crear', () => {
 
   test.describe('Cliente', () => {
     test('1. Crear una Orden de Caja seleccionando el cliente desde la parte superior del carrito', async ({ pos, sharedPage }) => {
-      test.setTimeout(TIMEOUTS.TEST);
+      test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
       await agregarProductoDePrecioFijo(pos);
       const erroresJS = espiarErroresJS(sharedPage);
 
@@ -278,7 +294,7 @@ test.describe('Orden de Caja — Crear', () => {
     });
 
     test('2. Crear una Orden de Caja seleccionando el cliente desde el modal de Orden de Caja', async ({ pos, sharedPage }) => {
-      test.setTimeout(TIMEOUTS.TEST);
+      test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
       await agregarProductoDePrecioFijo(pos);
       const erroresJS = espiarErroresJS(sharedPage);
 
@@ -306,7 +322,7 @@ test.describe('Orden de Caja — Crear', () => {
 
   test.describe('Contado', () => {
     test('3. Crear una Orden de Caja con cliente existente al contado', async ({ pos, sharedPage }) => {
-      test.setTimeout(TIMEOUTS.TEST);
+      test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
       await agregarProductoDePrecioFijo(pos);
       const erroresJS = espiarErroresJS(sharedPage);
 
@@ -329,7 +345,7 @@ test.describe('Orden de Caja — Crear', () => {
     });
 
     test('4. Crear una Orden de Caja con cliente existente al contado seleccionando un vendedor', async ({ pos, sharedPage }) => {
-      test.setTimeout(TIMEOUTS.TEST);
+      test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
       await agregarProductoDePrecioFijo(pos);
       const erroresJS = espiarErroresJS(sharedPage);
 
@@ -357,7 +373,7 @@ test.describe('Orden de Caja — Crear', () => {
 
   test.describe('Crédito', () => {
     test('5. Crear una Orden de Caja con cliente existente a crédito', async ({ pos, sharedPage }) => {
-      test.setTimeout(TIMEOUTS.TEST);
+      test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
       await agregarProductoDePrecioFijo(pos);
       const erroresJS = espiarErroresJS(sharedPage);
 
@@ -383,7 +399,7 @@ test.describe('Orden de Caja — Crear', () => {
     });
 
     test('6. Crear una Orden de Caja con cliente existente a crédito seleccionando un vendedor', async ({ pos, sharedPage }) => {
-      test.setTimeout(TIMEOUTS.TEST);
+      test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
       await agregarProductoDePrecioFijo(pos);
       const erroresJS = espiarErroresJS(sharedPage);
 
@@ -411,7 +427,7 @@ test.describe('Orden de Caja — Crear', () => {
 
   test.describe('Nombre del cliente', () => {
     test('7. Crear una Orden de Caja utilizando únicamente el nombre del cliente', async ({ pos, sharedPage }) => {
-      test.setTimeout(TIMEOUTS.TEST);
+      test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
       await agregarProductoDePrecioFijo(pos);
       const erroresJS = espiarErroresJS(sharedPage);
       const nombreCliente = `Cliente Solo Nombre QA ${Date.now()}`;
@@ -437,7 +453,7 @@ test.describe('Orden de Caja — Crear', () => {
 
   test.describe('Nombre de terceros', () => {
     test('8. Crear una Orden de Caja utilizando únicamente un nombre de cliente y facturando a nombre de terceros', async ({ pos, sharedPage }) => {
-      test.setTimeout(TIMEOUTS.TEST);
+      test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
       await agregarProductoDePrecioFijo(pos);
       const erroresJS = espiarErroresJS(sharedPage);
       const nombreCliente = `Cliente Solo Nombre Tercero QA ${Date.now()}`;
@@ -463,7 +479,7 @@ test.describe('Orden de Caja — Crear', () => {
     });
 
     test('9. Crear una Orden de Caja al contado con cliente existente a nombre de terceros', async ({ pos, sharedPage }) => {
-      test.setTimeout(TIMEOUTS.TEST);
+      test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
       await agregarProductoDePrecioFijo(pos);
       const erroresJS = espiarErroresJS(sharedPage);
 
@@ -490,7 +506,7 @@ test.describe('Orden de Caja — Crear', () => {
 
   test.describe('Descuentos', () => {
     test('10. Crear una Orden de Caja con productos utilizando descuento individual', async ({ pos, sharedPage }) => {
-      test.setTimeout(TIMEOUTS.TEST);
+      test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
       await agregarProductoDePrecioFijo(pos);
       const erroresJS = espiarErroresJS(sharedPage);
 
@@ -526,7 +542,7 @@ test.describe('Orden de Caja — Crear', () => {
     });
 
     test('11. Crear una Orden de Caja utilizando descuento general', async ({ pos, sharedPage }) => {
-      test.setTimeout(TIMEOUTS.TEST);
+      test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
       await agregarProductoDePrecioFijo(pos);
       const erroresJS = espiarErroresJS(sharedPage);
 
@@ -564,7 +580,7 @@ test.describe('Orden de Caja — Crear', () => {
 
   test.describe('Productos múltiples', () => {
     test('12. Crear una Orden de Caja al contado con producto normal, rápido y fraccionado', async ({ pos, sharedPage }) => {
-      test.setTimeout(TIMEOUTS.TEST);
+      test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
       const erroresJS = espiarErroresJS(sharedPage);
 
       let clavesAntes: string[] = [];
@@ -594,7 +610,7 @@ test.describe('Orden de Caja — Crear', () => {
     });
 
     test('13. Crear una Orden de Caja al contado con producto normal, rápido y fraccionado aplicando descuentos', async ({ pos, sharedPage }) => {
-      test.setTimeout(TIMEOUTS.TEST);
+      test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
       const erroresJS = espiarErroresJS(sharedPage);
 
       await pos.agregarProductoNormalFraccionadoYRapido('Orden Caja', `contado desc ${Date.now()}`);
@@ -625,7 +641,7 @@ test.describe('Orden de Caja — Crear', () => {
     });
 
     test('14. Crear una Orden de Caja a crédito con producto normal, rápido y fraccionado', async ({ pos, sharedPage }) => {
-      test.setTimeout(TIMEOUTS.TEST);
+      test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
       const erroresJS = espiarErroresJS(sharedPage);
 
       await pos.agregarProductoNormalFraccionadoYRapido('Orden Caja', `credito ${Date.now()}`);
@@ -646,7 +662,7 @@ test.describe('Orden de Caja — Crear', () => {
     });
 
     test('15. Crear una Orden de Caja a crédito con producto normal, rápido y fraccionado aplicando descuentos', async ({ pos, sharedPage }) => {
-      test.setTimeout(TIMEOUTS.TEST);
+      test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
       const erroresJS = espiarErroresJS(sharedPage);
 
       await pos.agregarProductoNormalFraccionadoYRapido('Orden Caja', `credito desc ${Date.now()}`);
@@ -679,7 +695,7 @@ test.describe('Orden de Caja — Crear', () => {
 
   test.describe('Productos múltiples con servicios', () => {
     test('23. Crear una Orden de Caja con producto normal, rápido, combo, fraccionado, servicio normal y servicio de End. Pintura', async ({ pos, sharedPage }) => {
-      test.setTimeout(TIMEOUTS.TEST);
+      test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
       const erroresJS = espiarErroresJS(sharedPage);
 
       let clavesAntes: string[] = [];
@@ -705,7 +721,7 @@ test.describe('Orden de Caja — Crear', () => {
     });
 
     test('24. Crear una Orden de Caja con los 6 tipos de ítem, cliente existente con exoneración', async ({ pos, sharedPage }) => {
-      test.setTimeout(TIMEOUTS.TEST);
+      test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
       const erroresJS = espiarErroresJS(sharedPage);
 
       await agregarSeisTiposDeItem(pos, `OrdenCaja6TiposExo ${Date.now()}`);
@@ -759,7 +775,7 @@ test.describe('Orden de Caja — Crear', () => {
     });
 
     test('25. Crear una Orden de Caja con los 6 tipos de ítem, cliente existente y descuento general', async ({ pos, sharedPage }) => {
-      test.setTimeout(TIMEOUTS.TEST);
+      test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
       const erroresJS = espiarErroresJS(sharedPage);
 
       await agregarSeisTiposDeItem(pos, `OrdenCaja6TiposDesc ${Date.now()}`);
@@ -790,7 +806,7 @@ test.describe('Orden de Caja — Crear', () => {
     });
 
     test('26. Crear una Orden de Caja con los 6 tipos de ítem, cliente existente, descuento general y moneda en dólares', async ({ pos, sharedPage }) => {
-      test.setTimeout(TIMEOUTS.TEST);
+      test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
       const erroresJS = espiarErroresJS(sharedPage);
 
       await agregarSeisTiposDeItem(pos, `OrdenCaja6TiposUSD ${Date.now()}`);
@@ -849,7 +865,7 @@ test.describe('Orden de Caja — Crear', () => {
 test.describe('Orden de Caja — Seleccionar y Facturar', () => {
 
   test('16. Seleccionar la primera Orden de Caja disponible y facturar', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     await test.step('Ir al tab "Órdenes de caja" y seleccionar la primera disponible', async () => {
@@ -873,7 +889,7 @@ test.describe('Orden de Caja — Seleccionar y Facturar', () => {
   });
 
   test('17. Seleccionar una Orden de Caja, agregar un producto vía "AGREGAR ITEMS" y facturar', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     await cargarPrimeraOrdenCaja(pos);
 
@@ -901,7 +917,7 @@ test.describe('Orden de Caja — Seleccionar y Facturar', () => {
   });
 
   test('18. Seleccionar una Orden de Caja, agregar un producto, presionar "Volver" y facturar', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     await cargarPrimeraOrdenCaja(pos);
 
@@ -939,7 +955,7 @@ test.describe('Orden de Caja — Seleccionar y Facturar', () => {
   });
 
   test('19. Seleccionar una Orden de Caja, agregar un producto rápido y facturar', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     await cargarPrimeraOrdenCaja(pos);
 
@@ -963,7 +979,7 @@ test.describe('Orden de Caja — Seleccionar y Facturar', () => {
   });
 
   test('20. Seleccionar una Orden de Caja, agregar un producto vía "AGREGAR ITEMS", aplicar descuento individual y facturar', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     await cargarPrimeraOrdenCaja(pos);
 
@@ -1006,7 +1022,7 @@ test.describe('Orden de Caja — Seleccionar y Facturar', () => {
   });
 
   test('21. Seleccionar una Orden de Caja, aplicar descuento general, agregar producto fraccionado y rápido, volver y facturar', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     await cargarPrimeraOrdenCaja(pos);
     await pos.abrirAgregarItem();
@@ -1066,7 +1082,7 @@ test.describe('Orden de Caja — Seleccionar y Facturar', () => {
   });
 
   test('22. Seleccionar una Orden de Caja y agregar producto rápido, combo existente, fraccionado y normal, volver y facturar', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     await cargarPrimeraOrdenCaja(pos);
     await pos.abrirAgregarItem();
@@ -1117,7 +1133,7 @@ test.describe('Orden de Caja — Seleccionar y Facturar', () => {
   });
 
   test('27. Seleccionar una Orden de Caja, cambiar a modo Lista y agregar producto rápido, combo existente, fraccionado y normal, volver y facturar', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     await cargarPrimeraOrdenCaja(pos);
     await pos.abrirAgregarItem();
@@ -1167,7 +1183,7 @@ test.describe('Orden de Caja — Seleccionar y Facturar', () => {
   });
 
   test('28. Seleccionar una Orden de Caja, cambiar a Vista Expandida y agregar producto rápido y producto normal, facturar', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     await cargarPrimeraOrdenCaja(pos);
     await pos.abrirAgregarItem();
@@ -1214,7 +1230,7 @@ test.describe('Orden de Caja — Seleccionar y Facturar', () => {
   });
 
   test('29. Buscar una Orden de Caja creada a crédito y facturarla, validando el método de pago con el que abre el modal', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     await test.step('Ir a "Órdenes de caja" y cargar la primera que se haya creado a Crédito', async () => {
@@ -1254,7 +1270,7 @@ test.describe('Orden de Caja — Seleccionar y Facturar', () => {
   });
 
   test('30. Buscar una Orden de Caja creada a crédito, cambiar el método de pago del modal de Facturar a Crédito y de vuelta a Contado, completando la venta', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     await pos.abrirOrdenesCaja();
@@ -1304,7 +1320,7 @@ test.describe('Orden de Caja — Seleccionar y Facturar', () => {
   });
 
   test('31. Buscar una Orden de Caja creada con vendedor y facturarla, validando que el vendedor ya viene seleccionado automáticamente', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     await pos.abrirOrdenesCaja();
@@ -1332,7 +1348,7 @@ test.describe('Orden de Caja — Seleccionar y Facturar', () => {
   });
 
   test('32. Buscar una Orden de Caja mediante el campo de búsqueda y validar que filtre correctamente', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     // Buscador real de esta pestaña: `#product_search` (mismo input del
@@ -1391,7 +1407,7 @@ test.describe('Orden de Caja — Seleccionar y Facturar', () => {
 
 test.describe('Orden de Caja — Moneda contraria a la base', () => {
   test('33. Crear una Orden de Caja con los 6 tipos de ítem, cliente existente y descuento general en la moneda contraria a la base, y facturarla', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     // Nunca se asume cuál es la moneda base (confirmado en vivo: en este
@@ -1506,7 +1522,7 @@ test.describe('Orden de Caja — Moneda contraria a la base', () => {
 
 test.describe('Orden de Caja — Editar y validar cálculos del carrito', () => {
   test('34. Seleccionar una Orden de Caja, eliminar la mayoría de los productos, agregar un producto rápido y facturar, validando los cálculos del carrito', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     // "Seleccionar una Orden de Caja" que tenga varios productos no puede
@@ -1631,7 +1647,7 @@ test.describe('Orden de Caja — Editar y validar cálculos del carrito', () => 
 
 test.describe('Orden de Caja — Observaciones por producto', () => {
   test('35. Crear una Orden de Caja con productos normales agregando una observación a cada producto, y validar que persistan al reabrirla', async ({ pos, sharedPage }) => {
-    test.setTimeout(TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     const CANTIDAD_PRODUCTOS = 3;

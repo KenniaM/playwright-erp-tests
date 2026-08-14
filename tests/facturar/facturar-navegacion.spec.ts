@@ -107,18 +107,24 @@ test('Ingresar a "Despacho de bodega"', async ({ page }) => {
   const pos = new PosPage(page);
   const facturar = new FacturarPage(pos, page);
 
+  // Hallazgo de ambiente RE-CONFIRMADO en vivo (reemplaza el hallazgo
+  // anterior, ya desactualizado): el módulo "Control de Despacho" SÍ está
+  // habilitado ahora para la cuenta admin por defecto — a diferencia de lo
+  // documentado antes aquí (que esperaba el modal de venta "Módulos
+  // Adicionales"), el resultado real del click hoy es la pantalla funcional
+  // de despacho. El estado del complemento cambió en el ambiente entre
+  // ambas investigaciones — documentar el estado actual, no el histórico
+  // (CLAUDE_CONTEXT.md). Ver tests/facturar/facturar-despacho-bodega.spec.ts
+  // para la cobertura funcional completa de esta pantalla con esta misma
+  // cuenta.
+  let resultado: Awaited<ReturnType<typeof facturar.abrirDespachoDeBodega>>;
   await test.step('Ingresar vía el link directo "Despacho de bodega"', async () => {
-    await facturar.abrirDespachoDeBodega();
+    resultado = await facturar.abrirDespachoDeBodega();
   });
 
-  // Hallazgo de ambiente confirmado en vivo (ver el comentario completo en
-  // facturar.page.ts → abrirDespachoDeBodega()): el módulo "Control de
-  // Despacho" no está comprado/habilitado para esta compañía, así que el
-  // resultado REAL y esperado del click es el modal de venta "Módulos
-  // Adicionales", no una pantalla funcional de despacho. Se valida ese
-  // resultado real en vez de una funcionalidad que no existe en este
-  // ambiente — documentar, no ocultar (CLAUDE_CONTEXT.md).
-  await test.step('Validar que se muestra el modal real "Módulos Adicionales" (módulo no comprado en este ambiente QA)', async () => {
-    await expect(facturar.modalModulosAdicionales).toContainText(/Módulos Adicionales/i);
+  await test.step('Validar que se muestra la pantalla real de despacho (módulo habilitado en este ambiente QA)', async () => {
+    expect(resultado!, 'Con la cuenta admin por defecto se esperaba la pantalla real de despacho, no el modal "Módulos Adicionales"').toBe('pantalla_real');
+    expect(page.url()).toContain('PosDispatchOrder/dispatchOrder');
+    await expect(page.getByRole('heading', { name: 'Control de Calidad - Órdenes de despacho' })).toBeVisible({ timeout: TIMEOUTS.MODAL });
   });
 });

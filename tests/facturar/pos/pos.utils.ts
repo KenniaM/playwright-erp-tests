@@ -26,3 +26,96 @@ export function espiarErroresJS(page: Page): string[] {
 export async function esperarQuedaActivo(chequeoActivo: () => Promise<boolean>) {
   await expect.poll(chequeoActivo).toBe(true);
 }
+
+// ─── Medición de tiempo de acciones reales ─────────────────────────────────
+
+export type MedicionAccion = {
+  accion: string;
+  ms: number;
+  segundos: number;
+  resultado: 'OK' | 'ERROR';
+  error?: string;
+};
+
+/**
+ * Mide el tiempo REAL de una acción del sistema: desde justo antes de
+ * ejecutarla hasta que la condición real de "la acción terminó" se cumple —
+ * nunca el tiempo hasta que el click se registra. La responsabilidad de
+ * definir "terminó" es de `ejecutar` (el llamador debe pasar la operación
+ * COMPLETA, incluida su propia espera real ya existente en el Page Object —
+ * `expect(...).toBeVisible()`, `waitForResponse(...)`, `expect.poll(...)` —
+ * nunca solo el `.click()` suelto): este helper no adivina cuándo termina
+ * nada, solo cronometra lo que ya se le da. Nunca usar con una función que
+ * solo dispara la acción y no espera su resultado real (eso mediría "tiempo
+ * hasta que el click se registró", no el tiempo de respuesta real de la
+ * acción, que es justo lo que se prohíbe medir).
+ *
+ * Acumula cada medición en el arreglo `registro` dado por el llamador
+ * (normalmente uno por test o uno compartido por todo el archivo) para
+ * poder armar una tabla de rendimiento al finalizar — ver
+ * `formatearTablaMediciones()`. Si `ejecutar` lanza, la medición se registra
+ * igual (con resultado "ERROR") antes de relanzar el error original, para
+ * no perder la evidencia de cuánto tardó en fallar.
+ */
+export async function medirAccion<T>(
+  registro: MedicionAccion[],
+  accion: string,
+  ejecutar: () => Promise<T>
+): Promise<T> {
+  const inicio = Date.now();
+  try {
+    const resultado = await ejecutar();
+    const ms = Date.now() - inicio;
+    registro.push({ accion, ms, segundos: Number((ms / 1000).toFixed(2)), resultado: 'OK' });
+    return resultado;
+  } catch (e: any) {
+    const ms = Date.now() - inicio;
+    registro.push({ accion, ms, segundos: Number((ms / 1000).toFixed(2)), resultado: 'ERROR', error: e.message });
+    throw e;
+  }
+}
+
+/** Formatea el registro de mediciones como tabla Markdown — para volcar en consola/reporte final. */
+export function formatearTablaMediciones(registro: MedicionAccion[]): string {
+  const filas = registro
+    .map((m) => `| ${m.accion} | ${m.ms} ms (${m.segundos}s) | ${m.resultado}${m.error ? ` — ${m.error.slice(0, 80)}` : ''} |`)
+    .join('\n');
+  return `| Acción | Tiempo | Resultado |\n|---|---:|---|\n${filas}`;
+}
+
+/**
+ * Espera la ventana emergente de impresión (`window.open(...)`) que dispara
+ * `disparar()` y confirma que efectivamente se abrió — la señal real de
+ * éxito ya documentada en el módulo Restaurante (Mesas) para Pre-Factura/
+ * Comanda: esa ventana nunca navega a una URL real (permanece en
+ * about:blank) y se cierra sola casi instantáneamente, así que leer su
+ * contenido no es viable con Playwright en este ambiente (las 3 vías
+ * probadas — `textContent` tras `domcontentloaded`, interceptar `response`,
+ * `content()` en un bucle de reintentos — fueron descartadas, ver el
+ * comentario original en `pos-restaurante-mesas.page.ts`). Centralizada aquí
+ * (función independiente, no método de ninguna clase) para que cualquier
+ * flujo de impresión de este estilo (Mesas, Órdenes para Llevar, y
+ * cualquier módulo futuro que dispare un popup de impresión sin navegación
+ * real) reutilice la misma señal, en vez de duplicar el mismo `waitForEvent`.
+ *
+ * CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO: cuando dos impresiones de
+ * este estilo se disparan en sucesión rápida (ej. "Imp. Comanda NUEVOS
+ * Items" seguido de "Imp. Comanda TODOS Items" sobre la misma mesa), la
+ * segunda puede nunca disparar el evento `popup` — confirmado en vivo (3/3)
+ * con evidencia de red: el `POST` real a `printInvoiceRestOrder` SÍ viaja y
+ * responde 200, pero el navegador bloquea el `window.open()` resultante.
+ * Aislado por descarte: la MISMA acción, sola y sin una ventana previa
+ * todavía abierta, sí dispara el popup de forma consistente — el bloqueo
+ * ocurre solo con una ventana previa aún sin cerrar en el momento del
+ * segundo click, ambos disparados por clicks sintéticos (`.evaluate()`, no
+ * un gesto de usuario real), que los navegadores tratan con más
+ * sospecha para `window.open()` sucesivos. Se cierra explícitamente la
+ * ventana propia tras confirmarla, en vez de asumir que el auto-cierre del
+ * lado de la app siempre gana la carrera contra el siguiente disparo.
+ */
+export async function esperarVentanaImpresion(page: Page, disparar: () => Promise<void>, timeout: number): Promise<void> {
+  const popupPromise = page.waitForEvent('popup', { timeout });
+  await disparar();
+  const popup = await popupPromise;
+  await popup.close().catch(() => {});
+}

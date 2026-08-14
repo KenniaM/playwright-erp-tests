@@ -69,7 +69,15 @@ export class PosCore {
       return;
     }
 
-    await this.page.goto(DASHBOARD_URL, { waitUntil: 'load' });
+    // timeout: TIMEOUTS.NAVIGATE explícito (antes ausente, a diferencia de la
+    // rama de arriba que sí lo tenía): confirmado en vivo (root-cause real,
+    // Crear Cliente bajo corridas largas) que este `goto()` puede quedarse
+    // esperando el evento 'load' del Dashboard sin límite — este proyecto no
+    // configura un navigationTimeout/actionTimeout por defecto (ver el mismo
+    // criterio ya documentado en pos-crear-producto.page.ts/pos-proforma.page.ts),
+    // así que sin este límite propio el único freno era el timeout completo
+    // del test/fixture (300-600s), consumido entero en esta única línea.
+    await this.page.goto(DASHBOARD_URL, { waitUntil: 'load', timeout: TIMEOUTS.NAVIGATE });
     await this.page.locator(L.DASHBOARD_BELL_LOADING)
       .waitFor({ state: 'hidden', timeout: TIMEOUTS.PAYMENT_MODAL })
       .catch(() => {});
@@ -182,7 +190,8 @@ export class PosCore {
    * aserción de negocio.
    */
   async cargarPosDesdeDashboard() {
-    await this.page.goto(DASHBOARD_URL, { waitUntil: 'load' });
+    // timeout explícito — mismo root-cause y misma corrección que irAlPos() (ver su comentario).
+    await this.page.goto(DASHBOARD_URL, { waitUntil: 'load', timeout: TIMEOUTS.NAVIGATE });
     await this.page.locator(L.DASHBOARD_BELL_LOADING)
       .waitFor({ state: 'hidden', timeout: TIMEOUTS.PAYMENT_MODAL })
       .catch(() => {});
@@ -191,6 +200,41 @@ export class PosCore {
     if (await this.modalAbrirCajaVisible()) {
       await expect(this.modalAbrirCaja.getByText(CAJA_TEXTO)).toBeVisible();
       await this.cerrarModalAbrirCaja();
+    }
+  }
+
+
+  /**
+   * Variante con reintento acotado de cargarPosDesdeDashboard() — pensada
+   * para fixtures de scope 'worker' (pos-ruteo.spec.ts, pos-crear.spec.ts,
+   * pos-facturar.spec.ts, y cualquier otro archivo con el mismo patrón ya
+   * documentado en CLAUDE.md), que hasta ahora hacían un único intento sin
+   * reintento pese a que SÍ tenían presupuesto de tiempo disponible.
+   *
+   * Root-cause real confirmado en vivo, dos veces, en corridas
+   * independientes (Crear Cliente, Escenarios 1 y 4): bajo carga sostenida
+   * del ambiente compartido, un único intento de cargarPosDesdeDashboard()
+   * podía agotar el timeout COMPLETO del fixture/test (300-600s) en una
+   * sola línea — el propio `page.goto(DASHBOARD_URL, {waitUntil:'load'})`
+   * sin timeout explícito (ya corregido, ver el comentario de
+   * cargarPosDesdeDashboard() arriba). Con ese timeout ya acotado
+   * (TIMEOUTS.NAVIGATE), un intento fallido ahora sí puede fallar rápido y
+   * dejarle presupuesto real a un reintento, en vez de consumirlo entero.
+   *
+   * Centralizado aquí (no duplicado como función local por archivo, patrón
+   * usado antes de confirmar que este síntoma se repite en más de un
+   * archivo) — mismo criterio de reutilización que pide CLAUDE.md.
+   */
+  async cargarPosDesdeDashboardConReintento() {
+    const MAX_INTENTOS = 3;
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      try {
+        await this.cargarPosDesdeDashboard();
+        return;
+      } catch (e) {
+        if (intento === MAX_INTENTOS) throw e;
+        console.log(`[cargarPosDesdeDashboardConReintento] Intento ${intento} no dejó el POS en un estado navegable, reintentando: ${(e as Error).message.slice(0, 200)}`);
+      }
     }
   }
 
@@ -389,16 +433,40 @@ export class PosCore {
       .locator(posTypeOption === 1 ? L.DASHBOARD_LINK_IR_A_POS : `a[onclick*="get_company_pos_select(${posTypeOption})"]`)
       .first();
     if (!(await linkIrAPos.isVisible().catch(() => false))) {
-      // El link vive colapsado dentro de su submenú padre (treeview) — se
-      // expande haciendo click en el <a> inmediatamente superior, sin asumir
-      // su texto ("FACTURAR" en el ambiente investigado, pero configurable
-      // por empresa/ambiente).
-      await linkIrAPos.evaluate((el) => {
-        const li = el.closest('li');
-        const ul = li?.closest('ul');
-        const parentA = ul?.closest('li')?.querySelector<HTMLElement>(':scope > a');
-        parentA?.click();
-      });
+      // Root-cause real confirmado en vivo (corridas de pos-permisos.spec.ts,
+      // varios escenarios independientes consumiendo el timeout COMPLETO del
+      // test, hasta 17 minutos): `.isVisible().catch(() => false)` no
+      // distingue "existe en el DOM pero está oculto/colapsado" de "no
+      // existe en absoluto" — ambos casos devuelven `false` por igual. El
+      // código de abajo asumía siempre el primer caso (colapsado dentro de
+      // un submenú) y llamaba `linkIrAPos.evaluate(...)` sin guarda ni
+      // timeout propio: si el elemento realmente no existe en este momento
+      // (sesión/estado de la cuenta ya sin selección de compañía pendiente,
+      // u otro cambio real del DOM), Playwright espera INDEFINIDAMENTE a que
+      // aparezca un elemento que nunca va a aparecer — este proyecto no
+      // configura actionTimeout por defecto (mismo criterio ya documentado
+      // en el resto de la suite), así que sin este límite propio el único
+      // freno era el timeout completo del test.
+      //
+      // Se confirma primero que el elemento SÍ existe en el DOM (`.count()`,
+      // consulta directa sin espera) antes de intentar expandir su submenú;
+      // si no existe, se omite el intento de expansión y se deja que el
+      // `expect(...).toBeVisible()` de abajo reporte un error real y
+      // acotado (con su propio timeout ya explícito), en vez de colgarse.
+      const linkExisteEnElDom = (await linkIrAPos.count()) > 0;
+      if (linkExisteEnElDom) {
+        // El link vive colapsado dentro de su submenú padre (treeview) — se
+        // expande haciendo click en el <a> inmediatamente superior, sin asumir
+        // su texto ("FACTURAR" en el ambiente investigado, pero configurable
+        // por empresa/ambiente). timeout explícito (locator.evaluate() sí
+        // acepta esta tercera opción, a diferencia de page.evaluate()).
+        await linkIrAPos.evaluate((el) => {
+          const li = el.closest('li');
+          const ul = li?.closest('ul');
+          const parentA = ul?.closest('li')?.querySelector<HTMLElement>(':scope > a');
+          parentA?.click();
+        }, undefined, { timeout: TIMEOUTS.PAYMENT_MODAL });
+      }
       await expect(linkIrAPos, 'El link real hacia POS no quedó visible tras expandir su submenú').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
     }
 
@@ -1102,6 +1170,7 @@ export class PosCore {
         locator: productos.nth(indice),
         id: String(id),
         nombre: textoVisible,
+        nombreReal: String(args[1] ?? '').trim(),
         precio: parseFloat(String(precio)),
         cantidadDisponible: parseFloat(String(cantidad)),
         aplicaIva: String(aplicaIva) === '1',
@@ -1624,27 +1693,72 @@ export class PosCore {
    * Presiona el botón "+" de una línea del carrito una vez y espera que la
    * cantidad realmente suba (nunca asume el resultado) antes de devolver el
    * control.
+   *
+   * CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO (root-cause real, mismo
+   * antipatrón ya documentado y corregido en otros puntos de esta clase —
+   * `abrirCrearProducto()`, `abrirMenuOrdenCaja()`, etc. — nunca visto antes
+   * en este método específico): un único `.click()` sin timeout propio sobre
+   * `.btn_set_input_quantity_up_<clave>` puede quedar esperando
+   * indefinidamente su propia accionabilidad y agotar el timeout COMPLETO
+   * del test (este proyecto no configura `actionTimeout`), en vez de fallar
+   * rápido con un mensaje claro. Reproducido en vivo (4/4) específicamente
+   * tras `establecerMostrarPrecioConIva()`, que re-renderiza la fila del
+   * carrito (cambia la columna de total mostrada) — la hipótesis real es que
+   * ese re-render regenera también los botones +/-, dejando el selector por
+   * clase apuntando momentáneamente a un elemento que Playwright espera
+   * quede estable pero nunca lo hace a tiempo. Se corrige con el mismo
+   * patrón de reintento acotado ya usado en el resto del repo para este
+   * antipatrón: re-localizar el botón EN CADA intento (nunca reutilizar el
+   * mismo Locator resuelto una sola vez) con un timeout corto por intento,
+   * en vez de un único intento con timeout largo.
    */
   async incrementarCantidadProducto(clave: string) {
     const cantidadAntes = await this.obtenerCantidadProducto(clave);
-    await this.page.locator(`.${L.CARRITO_CANTIDAD_BTN_MAS_CLASE}${clave}`).click();
-    await expect.poll(
-      () => this.obtenerCantidadProducto(clave),
-      { timeout: TIMEOUTS.PAYMENT_MODAL, message: `La cantidad de "${clave}" no subió tras presionar "+"` }
+    const MAX_INTENTOS = 4;
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      const clickeado = await this.page
+        .locator(`.${L.CARRITO_CANTIDAD_BTN_MAS_CLASE}${clave}`)
+        .click({ timeout: 5_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!clickeado) continue;
+      const subio = await expect.poll(
+        () => this.obtenerCantidadProducto(clave),
+        { timeout: 5_000 }
+      ).toBeGreaterThan(cantidadAntes).then(() => true).catch(() => false);
+      if (subio) return;
+    }
+    expect(
+      await this.obtenerCantidadProducto(clave),
+      `La cantidad de "${clave}" no subió tras ${MAX_INTENTOS} intentos del botón "+"`
     ).toBeGreaterThan(cantidadAntes);
   }
 
 
   /**
    * Presiona el botón "−" de una línea del carrito una vez y espera que la
-   * cantidad realmente baje.
+   * cantidad realmente baje. Mismo reintento acotado que
+   * `incrementarCantidadProducto()` y mismo motivo real (ver su comentario).
    */
   async decrementarCantidadProducto(clave: string) {
     const cantidadAntes = await this.obtenerCantidadProducto(clave);
-    await this.page.locator(`.${L.CARRITO_CANTIDAD_BTN_MENOS_CLASE}${clave}`).click();
-    await expect.poll(
-      () => this.obtenerCantidadProducto(clave),
-      { timeout: TIMEOUTS.PAYMENT_MODAL, message: `La cantidad de "${clave}" no bajó tras presionar "−"` }
+    const MAX_INTENTOS = 4;
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      const clickeado = await this.page
+        .locator(`.${L.CARRITO_CANTIDAD_BTN_MENOS_CLASE}${clave}`)
+        .click({ timeout: 5_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!clickeado) continue;
+      const bajo = await expect.poll(
+        () => this.obtenerCantidadProducto(clave),
+        { timeout: 5_000 }
+      ).toBeLessThan(cantidadAntes).then(() => true).catch(() => false);
+      if (bajo) return;
+    }
+    expect(
+      await this.obtenerCantidadProducto(clave),
+      `La cantidad de "${clave}" no bajó tras ${MAX_INTENTOS} intentos del botón "−"`
     ).toBeLessThan(cantidadAntes);
   }
 
@@ -2858,6 +2972,29 @@ export class PosCore {
 
 
   /**
+   * Simétrico a seleccionarIvaManualmente(), para el caso "sin IVA" sin
+   * CABYS: asegura que el checkbox "Aplicar impuesto" del formulario
+   * "Producto Rápido" quede DESMARCADO, esperando primero el mismo timer de
+   * una sola vez de pos.js:680-699 (ver el comentario completo de
+   * seleccionarIvaManualmente()) antes de tocarlo.
+   *
+   * Causa raíz real confirmada en vivo (HONDURAS, no asumida): a diferencia
+   * de lo que documenta el propio timer ("si la compañía NO tiene un
+   * impuesto por defecto configurado, fuerza checked=false"), esta compañía
+   * SÍ tiene uno configurado — el checkbox queda MARCADO por defecto sin que
+   * nada lo toque. "No tocar el checkbox" (el criterio que usaban
+   * agregarProductoRapidoParaValidacionIva() y otros escenarios "sin IVA sin
+   * CABYS" para representar "sin IVA") asumía la rama contraria del timer y
+   * fallaba de forma reproducible con
+   * product_hide_apply_iva_<clave>="1" pese a pedir IVA desactivado.
+   */
+  async desmarcarCheckboxIvaProductoRapido() {
+    await this.page.waitForTimeout(5_000); // mismo timer de una sola vez de pos.js:680-699
+    await this._asegurarCheckboxEstado(this.page.locator(L.QUICK_PRODUCT_APLICAR_IVA), 'check_quick_product_apply_tax', false);
+  }
+
+
+  /**
    * Presiona "Agregar" para guardar el producto rápido en el carrito.
    *
    * Requiere haber entrado al POS vía cargarPosDesdeDashboard(), no
@@ -2950,6 +3087,14 @@ export class PosCore {
       const cabysAplicado = await this.manejarCabysSiAplica(CABYS_BUSQUEDA_SIN_IVA);
       if (cabysAplicado) {
         await this.esperarIvaAutocompletado();
+      } else {
+        // Ver desmarcarCheckboxIvaProductoRapido(): "no tocar el checkbox"
+        // asumía que queda desmarcado por defecto, pero esta compañía
+        // (HONDURAS) sí tiene un impuesto por defecto configurado — sin este
+        // desmarque explícito el producto queda creado CON IVA pese a
+        // pedirse sin él (confirmado en vivo:
+        // product_hide_apply_iva_<clave>="1").
+        await this.desmarcarCheckboxIvaProductoRapido();
       }
     }
 
@@ -3053,7 +3198,15 @@ export class PosCore {
    * (p. ej. facturar una Orden de Ruteo sin abandonar el tab "Ruteo").
    */
   async pestanaPosActiva(pestana: PestanaPos): Promise<boolean> {
-    const clase = await this.page.locator(pestana.selector).getAttribute('class');
+    // Timeout explícito (antes ausente): misma causa raíz ya confirmada en
+    // vivo y documentada en tabEstaActivo() — sin timeout propio, esta
+    // llamada puede quedar esperando indefinidamente si el elemento aún no
+    // está asentado, y quien la invoque dentro de expect.poll()/
+    // esperarQuedaActivo() nunca llega a un segundo intento porque la
+    // primera invocación del predicado nunca se resuelve.
+    const clase = await this.page.locator(pestana.selector)
+      .getAttribute('class', { timeout: TIMEOUTS.PAYMENT_MODAL })
+      .catch(() => null);
     return clase?.includes(L.PESTANA_POS_CLASE_ACTIVA) ?? false;
   }
 
@@ -3425,7 +3578,25 @@ export class PosCore {
   }
 
 
+  /**
+   * Antes de llamar set_product_total(id) (función real de pos.js), espera a
+   * que `#input_product_quantity_<clave>` esté attached: confirmado en vivo
+   * (root-cause real, curl al pos.js servido) que esa función lee
+   * `$('#input_product_quantity_' + id).val()` sin ninguna guarda de
+   * existencia — si la fila todavía no está en el DOM (page.evaluate() no
+   * auto-espera como sí lo hacen los locators de Playwright, así que puede
+   * ejecutarse en la misma fracción de segundo en que la tabla del carrito
+   * está re-renderizando tras una acción previa, p. ej.
+   * desactivarDescuentoGeneral()), jQuery `.val()` sobre una selección vacía
+   * devuelve `undefined` y la propia función revienta con
+   * "can't access property 'length', quantity is undefined" — un error real
+   * de pos.js, pero solo alcanzable por esta llamada directa vía evaluate();
+   * un click real de usuario en el campo de descuento no puede ocurrir antes
+   * de que la fila exista. Se corrige esperando la precondición real, no
+   * aumentando ningún timeout global ni con un waitForTimeout() a ciegas.
+   */
   async _llamarSetProductTotal(clave: string, porcentaje: string) {
+    await this.page.locator(`#input_product_quantity_${clave}`).waitFor({ state: 'attached', timeout: TIMEOUTS.PAYMENT_MODAL });
     await this.page.evaluate(
       ({ key, value }) => {
         const el = document.getElementById(`input_product_discount_${key}`) as HTMLInputElement;
@@ -3514,7 +3685,13 @@ export class PosCore {
    * general, impuestos) haciendo click en el bloque "Total:" — confirmado
    * en vivo que está oculto por defecto (showBillDetail()) y que, sin
    * expandirlo, el campo de porcentaje de descuento general
-   * (DESCUENTO_GENERAL_PORCENTAJE) no es interactuable.
+   * (DESCUENTO_GENERAL_PORCENTAJE) no es interactuable. Este bloque
+   * (`.content-total-bill`) vive en el footer del carrito, FUERA de
+   * `#dialog_payment` — debe llamarse antes de abrir el modal de pago
+   * (`presionarFacturar()`/`abrirModalDePago()`), nunca después: con el
+   * modal ya abierto, su backdrop queda por encima y un click normal
+   * termina interceptado por contenido del modal (confirmado en vivo,
+   * causa raíz real de un intento con el orden de llamada invertido).
    */
   async mostrarDetalleAvanzadoFactura() {
     const campoPorcentaje = this.page.locator(L.DESCUENTO_GENERAL_PORCENTAJE);

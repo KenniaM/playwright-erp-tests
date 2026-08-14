@@ -9,11 +9,6 @@ export const TIMEOUTS = {
   // Cada submódulo popula su contenido (filtros/tabla) vía AJAX tras cargar
   // la página — se hace polling hasta este límite antes de leer su estado.
   CARGA:    15_000,
-  // Timeout corto y explícito para la navegación a "Clientes" — ver
-  // CLIENTES_ROTO más abajo. No se usa TIMEOUTS.NAVIGATE (60s) porque el
-  // hallazgo es que la página nunca responde; esperar el timeout completo
-  // en cada corrida de la suite sería un costo innecesario.
-  NAVEGACION_ROTA: 30_000,
 } as const;
 
 // ─── Submódulos ───────────────────────────────────────────────────────────────
@@ -36,8 +31,20 @@ export type SubmoduloContactos = {
 };
 
 export const SUBMODULOS_CONTACTOS: SubmoduloContactos[] = [
-  // "Clientes" queda fuera de este listado — ver hallazgo documentado junto
-  // a CLIENTES_ROTO más abajo.
+  // "Clientes" RESTAURADO a este listado (2026-08-07): el hallazgo antes
+  // documentado aquí ("la navegación se queda colgada indefinidamente sin
+  // respuesta del servidor", confirmado en vivo 3 veces) ya NO reproduce —
+  // confirmado en vivo que la página carga con normalidad. Era un bug real
+  // de sistema/ambiente (nunca de automatización), ya sea corregido por el
+  // equipo de desarrollo o resuelto junto con alguna otra causa del
+  // ambiente; no queda evidencia de que sea automatización lo que cambió.
+  {
+    nombre: 'Clientes',
+    url: BASE_URL + '/cust/customer',
+    rutaEsperada: 'cust/customer',
+    tituloEsperado: /clientes/i,
+    obtenerLocatorDeCarga: (page) => page.locator('.content-header', { hasText: /clientes/i }).first(),
+  },
   {
     nombre: 'Proveedores',
     url: BASE_URL + '/prov/provider',
@@ -46,21 +53,6 @@ export const SUBMODULOS_CONTACTOS: SubmoduloContactos[] = [
     obtenerLocatorDeCarga: (page) => page.locator('.content-header', { hasText: /proveedores/i }).first(),
   },
 ];
-
-/**
- * Hallazgo confirmado en vivo (tres veces, en aislamiento, en intentos
- * separados en el tiempo): "Clientes" no carga — la navegación se queda
- * colgada indefinidamente (sin respuesta del servidor, ni siquiera un error
- * HTTP) hasta agotar el timeout. Se descartó que fuera lentitud general del
- * ambiente comparando contra Dashboard y Proveedores, que sí cargaron con
- * normalidad en la misma sesión. Se documenta como hallazgo (mismo criterio
- * que "Reporte de Inspección" en gestion-navegacion.spec.ts) en vez de
- * omitirlo silenciosamente.
- */
-export const CLIENTES_ROTO = {
-  nombre: 'Clientes',
-  url: BASE_URL + '/cust/customer',
-} as const;
 
 // ─── Page Object ──────────────────────────────────────────────────────────────
 

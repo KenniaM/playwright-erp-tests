@@ -107,14 +107,19 @@ const testFacturar = base.extend<{}, FacturarFixtures>({
     const page = await browser.newPage();
     await use(page);
     await page.close();
-  }, { scope: 'worker', timeout: TIMEOUTS.TEST }],
+  }, { scope: 'worker', timeout: TIMEOUTS.TEST_CON_RECUPERACION }],
 
+  // cargarPosDesdeDashboardConReintento() (no cargarPosDesdeDashboard()
+  // directo): confirmado en vivo (root-cause real, ver el comentario
+  // completo en PosCore) que un único intento sin reintento puede agotar el
+  // timeout completo del fixture bajo carga sostenida del ambiente
+  // compartido — mismo síntoma ya confirmado en pos-crear.spec.ts.
   pos: [async ({ sharedPage }, use) => {
     const pos = new PosPage(sharedPage);
-    await pos.cargarPosDesdeDashboard();
+    await pos.cargarPosDesdeDashboardConReintento();
     await pos.cerrarOverlaysConocidos();
     await use(pos);
-  }, { scope: 'worker', timeout: TIMEOUTS.TEST }],
+  }, { scope: 'worker', timeout: TIMEOUTS.TEST_CON_RECUPERACION }],
 });
 
 // ─── Helpers locales de composición (reutilizan únicamente métodos ya
@@ -328,9 +333,19 @@ async function prepararCarritoACredito(
 
 testFacturar.describe('Facturación POS', () => {
   testFacturar.beforeEach(async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
-    await pos.irAlPos();
-    await pos.esperarEstadoInicial();
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
+    // Mismo patrón ya establecido en pos-ruteo.spec.ts/pos-crear.spec.ts: la
+    // ruta rápida primero, con cargarPosDesdeDashboardConReintento() como
+    // fallback acotado si el POS no queda en un estado navegable — mismo
+    // síntoma real ya confirmado bajo carga concurrente (ver el comentario
+    // completo en PosCore.cargarPosDesdeDashboardConReintento()).
+    const listo = await pos.irAlPos()
+      .then(() => pos.esperarEstadoInicial())
+      .then(() => true)
+      .catch(() => false);
+    if (!listo) {
+      await pos.cargarPosDesdeDashboardConReintento();
+    }
     if (await pos.modalAbrirCajaVisible()) {
       await pos.cerrarModalAbrirCaja();
     }
@@ -385,7 +400,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('1. Producto normal, fraccionado, rápido, servicio y servicio de End. Pintura, con cliente existente', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -451,7 +466,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('2. Producto normal, fraccionado, rápido, servicio y servicio de End. Pintura, con cliente existente y descuento general', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -498,7 +513,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('3. Producto normal, fraccionado, rápido y servicio, con cliente existente y vendedor seleccionado', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -535,7 +550,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('4. Producto normal, fraccionado, rápido y servicio, con cliente existente, vendedor y fecha de facturación', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -585,7 +600,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('5. Producto normal, fraccionado, rápido, servicio y servicio de End. Pintura, sin cliente', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -610,7 +625,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('6. Vista modo lista: producto normal, fraccionado, rápido, servicio y servicio de End. Pintura, con cliente existente', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -641,7 +656,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('7. Filtrar por Marca y Modelo de vehículo, seleccionar un producto y facturar con cliente existente', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     // "Filtros de Vehículos" (arriba de la barra de categorías, indicado por
@@ -686,7 +701,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('8. Moneda no base: producto normal, fraccionado, rápido, servicio y servicio de End. Pintura, con cliente existente', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -732,7 +747,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('9. Lista de precios: seleccionar la categoría, elegir productos y facturar con cliente existente', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     // La categoría "Lista de precios" nace con display:none real para
@@ -781,7 +796,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('10. Producto rápido sin IVA y con CABYS: validar que el precio no incluya impuestos', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const nombreProducto = `Producto Rápido Sin IVA Facturar ${Date.now()}`;
 
@@ -846,7 +861,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('11. Crear un Producto Normal completo, buscarlo y facturarlo', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const nombreProducto = `Producto Normal Completo Facturar ${Date.now()}`;
 
@@ -894,7 +909,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('12. Moneda no base: producto normal, fraccionado, rápido, servicio y servicio de End. Pintura, con cliente existente y exoneración', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -944,7 +959,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('13. Moneda no base: producto normal, fraccionado, rápido, servicio y servicio de End. Pintura, sin cliente y con exoneración', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -989,7 +1004,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('14. Producto normal, fraccionado, rápido, servicio y servicio de End. Pintura, sin cliente y con exoneración', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -1024,7 +1039,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('15. Producto normal, fraccionado, rápido, servicio y servicio de End. Pintura, con cliente existente aplicando IVA General', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -1068,7 +1083,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('16. Vista modo lista: producto normal, fraccionado, rápido, servicio y servicio de End. Pintura, con cliente existente aplicando IVA General', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -1109,7 +1124,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('17. Agregar muchos productos y servicios, usar "Limpiar carrito", luego facturar un producto normal y un servicio', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -1165,7 +1180,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('18. Vista modo lista: combo existente, producto normal, fraccionado, rápido y servicio con cliente existente, validando cambio de cantidades (+/-/campo numérico)', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -1231,7 +1246,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('19. Producto normal y producto rápido con número de pedido y orden de compra', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
     const numeroPedido = `PED-QA-${sufijo}`;
@@ -1269,7 +1284,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('20. Producto normal y producto rápido facturando a terceros desde Opciones Avanzadas', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
     const nombreTercero = `Tercero QA ${sufijo}`;
@@ -1302,7 +1317,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('21. Vista modo lista: crédito sin abono inicial — producto normal, fraccionado, rápido, servicio y servicio de End. Pintura, con cliente existente', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -1338,7 +1353,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('22. Vista modo lista: crédito con abono inicial — producto normal, fraccionado, rápido y servicio, con cliente existente', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -1371,7 +1386,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('23. Moneda no base: crédito con exoneración — producto normal, fraccionado, rápido, servicio y servicio de End. Pintura, con cliente existente', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -1413,7 +1428,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('24. Moneda no base: crédito con descuento individual — producto normal, fraccionado, rápido, servicio y servicio de End. Pintura, con cliente existente', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -1467,7 +1482,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('25. Crédito con descuento general — producto normal, fraccionado, rápido y servicio, con cliente existente', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -1499,7 +1514,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('26. Vista Expandida: crédito con descuento general — producto normal, fraccionado, rápido y servicio, con cliente existente', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
     let expandidaAlInicio = false;
@@ -1545,7 +1560,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('27. Crédito con muchos productos, cliente existente, vendedor y cambio de fecha de vencimiento', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -1588,7 +1603,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('28. Crédito con días de cobro semanal y abono inicial — producto normal, fraccionado, rápido y servicio, con cliente existente', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -1620,7 +1635,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('29. Moneda no base: producto normal, fraccionado, rápido, servicio y servicio de End. Pintura; eliminar el servicio de End. Pintura, agregar observación al fraccionado y facturar', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -1688,7 +1703,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('30. Desactivar la impresión automática y facturar: validar que la ventana de impresión NO aparece', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -1736,7 +1751,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('31. Impresión automática activada y facturar: validar que la ventana de impresión SÍ aparece', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -1778,7 +1793,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('32. Abrir el perfil del producto y validar que carga correctamente su información', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     let productoNormal: Awaited<ReturnType<typeof pos.obtenerPrimerProductoNormal>>;
@@ -1799,7 +1814,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('33. Utilizar "Cambiar de posición los productos del carrito" y validar el orden real', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const sufijo = Date.now();
 
@@ -1844,7 +1859,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('34. Validar el buscador de productos: por nombre, por código y por código de barras', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     const productoNormal = await pos.obtenerPrimerProductoNormal();
@@ -1891,7 +1906,7 @@ testFacturar.describe('Facturación POS', () => {
 
 
   testFacturar('35. Aplicar una lista de precios en moneda no base y validar todos los cálculos (precio, subtotal, IVA, descuentos y total)', async ({ pos, sharedPage }) => {
-    testFacturar.setTimeout(TIMEOUTS.TEST);
+    testFacturar.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
 
     let simboloNoBase = '';
