@@ -3198,7 +3198,15 @@ export class PosCore {
    * (p. ej. facturar una Orden de Ruteo sin abandonar el tab "Ruteo").
    */
   async pestanaPosActiva(pestana: PestanaPos): Promise<boolean> {
-    const clase = await this.page.locator(pestana.selector).getAttribute('class');
+    // Timeout explícito (antes ausente): misma causa raíz ya confirmada en
+    // vivo y documentada en tabEstaActivo() — sin timeout propio, esta
+    // llamada puede quedar esperando indefinidamente si el elemento aún no
+    // está asentado, y quien la invoque dentro de expect.poll()/
+    // esperarQuedaActivo() nunca llega a un segundo intento porque la
+    // primera invocación del predicado nunca se resuelve.
+    const clase = await this.page.locator(pestana.selector)
+      .getAttribute('class', { timeout: TIMEOUTS.PAYMENT_MODAL })
+      .catch(() => null);
     return clase?.includes(L.PESTANA_POS_CLASE_ACTIVA) ?? false;
   }
 

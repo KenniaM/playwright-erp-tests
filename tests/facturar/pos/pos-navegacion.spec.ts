@@ -228,7 +228,12 @@ test('Recorrer todas las pestañas del POS y validar que cada una carga correcta
   });
 
   await test.step('Confirmar que el POS inicia en la pestaña "POS Facturación"', async () => {
-    await expect(page.locator(PESTANA_POS_FACTURACION.selector)).toHaveClass(/btn_tab_active/);
+    // esperarQuedaActivo() (reintento acotado vía expect.poll) en vez de un
+    // único expect(...).toHaveClass() con el timeout por defecto (5s):
+    // mismo patrón ya usado más abajo para el tab "End. Pintura" — tras
+    // cargarPosDesdeDashboard(), la clase activa puede tardar más de 5s en
+    // asentarse bajo carga del ambiente compartido (confirmado en vivo).
+    await esperarQuedaActivo(() => pos.pestanaPosActiva(PESTANA_POS_FACTURACION));
   });
 
   for (const pestana of PESTANAS_POS_A_RECORRER) {

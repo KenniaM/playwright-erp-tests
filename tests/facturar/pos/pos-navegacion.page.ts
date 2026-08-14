@@ -138,10 +138,26 @@ export class PosNavigation {
    * confirmado visible y asentado sí pasa las validaciones de accionabilidad,
    * y un click real (no forzado) es la señal más confiable de que el evento
    * llega al enlace para disparar la apertura de la pestaña nueva.
+   *
+   * Reintentos cortos cerrando el banner de notificaciones antes de CADA
+   * intento (mismo patrón ya usado en agregarProductoDelGridAlCarrito()):
+   * confirmado en vivo (auditoría de navegación) que el banner
+   * (#workshop-web-notification-permission) puede reaparecer de forma
+   * asíncrona justo entre el cierre inicial y el click, interceptando el
+   * punto exacto del enlace — un único cierre previo no bastaba.
    */
   async abrirHistorialFacturas(): Promise<Page> {
     const popupPromise = this.page.waitForEvent('popup', { timeout: TIMEOUTS.PRINT_POPUP });
-    await this.page.locator(L.HISTORIAL_FACTURAS).click({ timeout: 5_000 });
+    const MAX_INTENTOS = 5;
+    let clickeado = false;
+    for (let intento = 1; intento <= MAX_INTENTOS && !clickeado; intento++) {
+      await this.core.cerrarModalNotificacionesSiAparece();
+      clickeado = await this.page.locator(L.HISTORIAL_FACTURAS)
+        .click({ timeout: 3_000 })
+        .then(() => true)
+        .catch(() => false);
+    }
+    expect(clickeado, `"Historial de Facturas" no se pudo clickear tras ${MAX_INTENTOS} intentos`).toBe(true);
     return popupPromise;
   }
 
@@ -149,10 +165,21 @@ export class PosNavigation {
   /**
    * Presiona "Historial de Proformas" en el menú de tres puntos (ya abierto) y
    * devuelve la ventana emergente que el sistema abre en una pestaña nueva.
+   * Mismo patrón de reintentos que abrirHistorialFacturas() — mismo overlay,
+   * mismo botón del mismo menú de tres puntos.
    */
   async abrirHistorialProformas(): Promise<Page> {
     const popupPromise = this.page.waitForEvent('popup', { timeout: TIMEOUTS.PRINT_POPUP });
-    await this.page.locator(L.HISTORIAL_PROFORMAS).click({ timeout: 5_000 });
+    const MAX_INTENTOS = 5;
+    let clickeado = false;
+    for (let intento = 1; intento <= MAX_INTENTOS && !clickeado; intento++) {
+      await this.core.cerrarModalNotificacionesSiAparece();
+      clickeado = await this.page.locator(L.HISTORIAL_PROFORMAS)
+        .click({ timeout: 3_000 })
+        .then(() => true)
+        .catch(() => false);
+    }
+    expect(clickeado, `"Historial de Proformas" no se pudo clickear tras ${MAX_INTENTOS} intentos`).toBe(true);
     return popupPromise;
   }
 
