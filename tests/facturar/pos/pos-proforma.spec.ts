@@ -62,6 +62,15 @@ test.beforeEach(async ({ pos }) => {
     await pos.cerrarModalAbrirCaja();
   }
   await pos.cerrarOverlaysConocidos();
+  // Corrección de automatización confirmada en vivo (misma causa raíz real
+  // documentada en pos-cierre-caja.spec.ts): la moneda activa del POS
+  // persiste POR USUARIO EN EL SERVIDOR, no por sesión de navegador — se
+  // fuerza la base una vez por test. No reemplaza los propios
+  // asegurarMonedaBaseActiva() de los escenarios "taller" (necesitan la
+  // moneda base durante TODO el escenario, no solo al inicio, y restauran
+  // la original al terminar) — este cubre el resto de escenarios de este
+  // archivo, que nunca la forzaban.
+  await pos.asegurarMonedaBaseActiva();
 });
 
 // ─── Helpers compartidos ────────────────────────────────────────────────────

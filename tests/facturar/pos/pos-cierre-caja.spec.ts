@@ -169,6 +169,18 @@ test('Tab General: Ventas Totales, Contado/Crédito, Impuestos y Método de Pago
       await pos.completarAperturaCaja();
       await expect(pos.modalAbrirCaja).toBeHidden();
     }
+    // Corrección de automatización confirmada en vivo (4 escenarios de este
+    // archivo fallando con deltas ~635x el monto real esperado): la moneda
+    // activa del POS persiste POR USUARIO EN EL SERVIDOR (no por sesión de
+    // navegador, ya documentado en asegurarMonedaBaseActiva()) — la cuenta
+    // compartida de este ambiente quedó con "₡" (Colón, tasa 635) activo por
+    // una corrida/investigación anterior, y ningún escenario de este archivo
+    // forzaba la moneda base antes de facturar. Todos los montos que este
+    // archivo compara (Tab General, Reporte Avanzado, movimientos de caja)
+    // asumen la moneda base ($) — sin esto, cualquier corrida que herede una
+    // moneda no-base del ambiente compartido produce deltas completamente
+    // incorrectos pese a que la app se comporta correctamente.
+    await pos.asegurarMonedaBaseActiva();
   });
 
   // Crear el cliente para la venta a crédito ANTES de abrir "Detalle de
@@ -285,6 +297,18 @@ test('Reporte Avanzado: Total de Entradas coincide con Ventas Totales del Tab Ge
       await pos.completarAperturaCaja();
       await expect(pos.modalAbrirCaja).toBeHidden();
     }
+    // Corrección de automatización confirmada en vivo (4 escenarios de este
+    // archivo fallando con deltas ~635x el monto real esperado): la moneda
+    // activa del POS persiste POR USUARIO EN EL SERVIDOR (no por sesión de
+    // navegador, ya documentado en asegurarMonedaBaseActiva()) — la cuenta
+    // compartida de este ambiente quedó con "₡" (Colón, tasa 635) activo por
+    // una corrida/investigación anterior, y ningún escenario de este archivo
+    // forzaba la moneda base antes de facturar. Todos los montos que este
+    // archivo compara (Tab General, Reporte Avanzado, movimientos de caja)
+    // asumen la moneda base ($) — sin esto, cualquier corrida que herede una
+    // moneda no-base del ambiente compartido produce deltas completamente
+    // incorrectos pese a que la app se comporta correctamente.
+    await pos.asegurarMonedaBaseActiva();
   });
 
   let nombreClienteCredito = '';
@@ -390,6 +414,18 @@ test('Tab Facturas: Fact. Contado y Fact. Crédito reflejan correctamente una ve
       await pos.completarAperturaCaja();
       await expect(pos.modalAbrirCaja).toBeHidden();
     }
+    // Corrección de automatización confirmada en vivo (4 escenarios de este
+    // archivo fallando con deltas ~635x el monto real esperado): la moneda
+    // activa del POS persiste POR USUARIO EN EL SERVIDOR (no por sesión de
+    // navegador, ya documentado en asegurarMonedaBaseActiva()) — la cuenta
+    // compartida de este ambiente quedó con "₡" (Colón, tasa 635) activo por
+    // una corrida/investigación anterior, y ningún escenario de este archivo
+    // forzaba la moneda base antes de facturar. Todos los montos que este
+    // archivo compara (Tab General, Reporte Avanzado, movimientos de caja)
+    // asumen la moneda base ($) — sin esto, cualquier corrida que herede una
+    // moneda no-base del ambiente compartido produce deltas completamente
+    // incorrectos pese a que la app se comporta correctamente.
+    await pos.asegurarMonedaBaseActiva();
   });
 
   let nombreClienteCredito = '';
@@ -511,6 +547,18 @@ test('Tab Facturas: Fact. Eliminadas refleja correctamente una factura anulada d
       await pos.completarAperturaCaja();
       await expect(pos.modalAbrirCaja).toBeHidden();
     }
+    // Corrección de automatización confirmada en vivo (4 escenarios de este
+    // archivo fallando con deltas ~635x el monto real esperado): la moneda
+    // activa del POS persiste POR USUARIO EN EL SERVIDOR (no por sesión de
+    // navegador, ya documentado en asegurarMonedaBaseActiva()) — la cuenta
+    // compartida de este ambiente quedó con "₡" (Colón, tasa 635) activo por
+    // una corrida/investigación anterior, y ningún escenario de este archivo
+    // forzaba la moneda base antes de facturar. Todos los montos que este
+    // archivo compara (Tab General, Reporte Avanzado, movimientos de caja)
+    // asumen la moneda base ($) — sin esto, cualquier corrida que herede una
+    // moneda no-base del ambiente compartido produce deltas completamente
+    // incorrectos pese a que la app se comporta correctamente.
+    await pos.asegurarMonedaBaseActiva();
   });
 
   let facturasEliminadasAntes: FilaFacturaSimple[] = [];
@@ -597,6 +645,18 @@ test('Tab Facturas: Fact. Devoluciones refleja correctamente una devolución apl
       await pos.completarAperturaCaja();
       await expect(pos.modalAbrirCaja).toBeHidden();
     }
+    // Corrección de automatización confirmada en vivo (4 escenarios de este
+    // archivo fallando con deltas ~635x el monto real esperado): la moneda
+    // activa del POS persiste POR USUARIO EN EL SERVIDOR (no por sesión de
+    // navegador, ya documentado en asegurarMonedaBaseActiva()) — la cuenta
+    // compartida de este ambiente quedó con "₡" (Colón, tasa 635) activo por
+    // una corrida/investigación anterior, y ningún escenario de este archivo
+    // forzaba la moneda base antes de facturar. Todos los montos que este
+    // archivo compara (Tab General, Reporte Avanzado, movimientos de caja)
+    // asumen la moneda base ($) — sin esto, cualquier corrida que herede una
+    // moneda no-base del ambiente compartido produce deltas completamente
+    // incorrectos pese a que la app se comporta correctamente.
+    await pos.asegurarMonedaBaseActiva();
   });
 
   let facturasDevolucionesAntes: FilaFacturaSimple[] = [];
@@ -721,6 +781,18 @@ test('Tab Facturas: Fact. Abonos refleja correctamente un abono aplicado desde C
       await pos.completarAperturaCaja();
       await expect(pos.modalAbrirCaja).toBeHidden();
     }
+    // Corrección de automatización confirmada en vivo (4 escenarios de este
+    // archivo fallando con deltas ~635x el monto real esperado): la moneda
+    // activa del POS persiste POR USUARIO EN EL SERVIDOR (no por sesión de
+    // navegador, ya documentado en asegurarMonedaBaseActiva()) — la cuenta
+    // compartida de este ambiente quedó con "₡" (Colón, tasa 635) activo por
+    // una corrida/investigación anterior, y ningún escenario de este archivo
+    // forzaba la moneda base antes de facturar. Todos los montos que este
+    // archivo compara (Tab General, Reporte Avanzado, movimientos de caja)
+    // asumen la moneda base ($) — sin esto, cualquier corrida que herede una
+    // moneda no-base del ambiente compartido produce deltas completamente
+    // incorrectos pese a que la app se comporta correctamente.
+    await pos.asegurarMonedaBaseActiva();
   });
 
   let facturasAbonosAntes: FilaFacturaSimple[] = [];
@@ -783,6 +855,18 @@ test('Tab Facturas: Fact. Entradas y Fact. Salidas reflejan correctamente un mov
       await pos.completarAperturaCaja();
       await expect(pos.modalAbrirCaja).toBeHidden();
     }
+    // Corrección de automatización confirmada en vivo (4 escenarios de este
+    // archivo fallando con deltas ~635x el monto real esperado): la moneda
+    // activa del POS persiste POR USUARIO EN EL SERVIDOR (no por sesión de
+    // navegador, ya documentado en asegurarMonedaBaseActiva()) — la cuenta
+    // compartida de este ambiente quedó con "₡" (Colón, tasa 635) activo por
+    // una corrida/investigación anterior, y ningún escenario de este archivo
+    // forzaba la moneda base antes de facturar. Todos los montos que este
+    // archivo compara (Tab General, Reporte Avanzado, movimientos de caja)
+    // asumen la moneda base ($) — sin esto, cualquier corrida que herede una
+    // moneda no-base del ambiente compartido produce deltas completamente
+    // incorrectos pese a que la app se comporta correctamente.
+    await pos.asegurarMonedaBaseActiva();
   });
 
   // Mismo criterio de delta que el resto de escenarios de Tab Facturas: el
@@ -864,6 +948,18 @@ test('Ingresos por Método de Pago: Tarjeta, SINPE, Transacción y un pago Mixto
       await pos.completarAperturaCaja();
       await expect(pos.modalAbrirCaja).toBeHidden();
     }
+    // Corrección de automatización confirmada en vivo (4 escenarios de este
+    // archivo fallando con deltas ~635x el monto real esperado): la moneda
+    // activa del POS persiste POR USUARIO EN EL SERVIDOR (no por sesión de
+    // navegador, ya documentado en asegurarMonedaBaseActiva()) — la cuenta
+    // compartida de este ambiente quedó con "₡" (Colón, tasa 635) activo por
+    // una corrida/investigación anterior, y ningún escenario de este archivo
+    // forzaba la moneda base antes de facturar. Todos los montos que este
+    // archivo compara (Tab General, Reporte Avanzado, movimientos de caja)
+    // asumen la moneda base ($) — sin esto, cualquier corrida que herede una
+    // moneda no-base del ambiente compartido produce deltas completamente
+    // incorrectos pese a que la app se comporta correctamente.
+    await pos.asegurarMonedaBaseActiva();
   });
 
   let antes: ResumenTabGeneral;
@@ -996,6 +1092,18 @@ test('Tab Facturas: Fact. Contado (Órdenes de Taller) refleja correctamente una
       await pos.completarAperturaCaja();
       await expect(pos.modalAbrirCaja).toBeHidden();
     }
+    // Corrección de automatización confirmada en vivo (4 escenarios de este
+    // archivo fallando con deltas ~635x el monto real esperado): la moneda
+    // activa del POS persiste POR USUARIO EN EL SERVIDOR (no por sesión de
+    // navegador, ya documentado en asegurarMonedaBaseActiva()) — la cuenta
+    // compartida de este ambiente quedó con "₡" (Colón, tasa 635) activo por
+    // una corrida/investigación anterior, y ningún escenario de este archivo
+    // forzaba la moneda base antes de facturar. Todos los montos que este
+    // archivo compara (Tab General, Reporte Avanzado, movimientos de caja)
+    // asumen la moneda base ($) — sin esto, cualquier corrida que herede una
+    // moneda no-base del ambiente compartido produce deltas completamente
+    // incorrectos pese a que la app se comporta correctamente.
+    await pos.asegurarMonedaBaseActiva();
   });
 
   let facturasOrdenesAntes: FilaFacturaVenta[] = [];
@@ -1074,6 +1182,18 @@ test('Tab Facturas: Fact. Abonos refleja correctamente un abono aplicado desde A
       await pos.completarAperturaCaja();
       await expect(pos.modalAbrirCaja).toBeHidden();
     }
+    // Corrección de automatización confirmada en vivo (4 escenarios de este
+    // archivo fallando con deltas ~635x el monto real esperado): la moneda
+    // activa del POS persiste POR USUARIO EN EL SERVIDOR (no por sesión de
+    // navegador, ya documentado en asegurarMonedaBaseActiva()) — la cuenta
+    // compartida de este ambiente quedó con "₡" (Colón, tasa 635) activo por
+    // una corrida/investigación anterior, y ningún escenario de este archivo
+    // forzaba la moneda base antes de facturar. Todos los montos que este
+    // archivo compara (Tab General, Reporte Avanzado, movimientos de caja)
+    // asumen la moneda base ($) — sin esto, cualquier corrida que herede una
+    // moneda no-base del ambiente compartido produce deltas completamente
+    // incorrectos pese a que la app se comporta correctamente.
+    await pos.asegurarMonedaBaseActiva();
   });
 
   let facturasAbonosAntes: FilaFacturaSimple[] = [];
@@ -1182,6 +1302,18 @@ test('Validación del Total General: el permiso "Ocultar total general en cierre
       await pos.completarAperturaCaja();
       await expect(pos.modalAbrirCaja).toBeHidden();
     }
+    // Corrección de automatización confirmada en vivo (4 escenarios de este
+    // archivo fallando con deltas ~635x el monto real esperado): la moneda
+    // activa del POS persiste POR USUARIO EN EL SERVIDOR (no por sesión de
+    // navegador, ya documentado en asegurarMonedaBaseActiva()) — la cuenta
+    // compartida de este ambiente quedó con "₡" (Colón, tasa 635) activo por
+    // una corrida/investigación anterior, y ningún escenario de este archivo
+    // forzaba la moneda base antes de facturar. Todos los montos que este
+    // archivo compara (Tab General, Reporte Avanzado, movimientos de caja)
+    // asumen la moneda base ($) — sin esto, cualquier corrida que herede una
+    // moneda no-base del ambiente compartido produce deltas completamente
+    // incorrectos pese a que la app se comporta correctamente.
+    await pos.asegurarMonedaBaseActiva();
   });
 
   // Nunca se asume cuál es el estado por defecto de este permiso en el

@@ -63,6 +63,14 @@ test.beforeEach(async ({ pos }) => {
     await pos.cerrarModalAbrirCaja();
   }
   await pos.cerrarOverlaysConocidos();
+  // Corrección de automatización confirmada en vivo (misma causa raíz real
+  // documentada en pos-cierre-caja.spec.ts): la moneda activa del POS
+  // persiste POR USUARIO EN EL SERVIDOR, no por sesión de navegador — una
+  // corrida/investigación anterior (propia o de otro test) puede dejar la
+  // cuenta compartida en una moneda no-base, rompiendo en silencio
+  // cualquier assert que compare montos asumiendo la base. Se fuerza aquí,
+  // una vez por test, igual que el resto de archivos con este mismo fix.
+  await pos.asegurarMonedaBaseActiva();
 });
 
 // ─── Helpers compartidos ────────────────────────────────────────────────────

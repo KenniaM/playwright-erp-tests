@@ -143,12 +143,37 @@ export class PosCierreCaja {
   /**
    * Completa el formulario de cierre: efectivo en caja, efectivo para la
    * siguiente caja y observaciones. No confirma el cierre.
+   *
+   * Corrección de automatización confirmada en vivo (investigación dedicada
+   * de la fórmula real de "Diferencia de cierre"): "Diferencia de cierre"
+   * (#closure_missing_balance) SÍ se recalcula en vivo — confirmado
+   * disparando manualmente `input`+`change`+`keyup`+`blur` sobre
+   * #closure_posted_balance con "999.99" contra un "Datos de Cierre: Total"
+   * de "1,000.00", el campo pasó a mostrar exactamente "-0.01"
+   * (999.99 - 1000.00) — pero NO reacciona a `Locator.fill()` de Playwright
+   * (confirmado esperando 1.5s sin cambio) ni siquiera agregando un
+   * `press('Tab')` real después (blur real, misma ausencia de cambio): el
+   * listener real de la app está atado a `keyup` (patrón jQuery común), un
+   * evento que `.fill()` no dispara. Sin este fix, CUALQUIER cierre real
+   * generado por esta suite persiste una "Diferencia de cierre" incorrecta
+   * (típicamente stale en 0.00) en el reporte — no solo un problema de
+   * lectura de test, sino datos reales incorrectos escritos al ambiente
+   * compartido. Se dispara `keyup` manualmente (vía `Locator.evaluate()`,
+   * que sí acepta `{timeout}`) inmediatamente después de cada `fill()` de
+   * los 2 campos de efectivo — el mismo patrón real que un usuario
+   * disparía al escribir.
    */
   async completarFormularioCerrarCaja(efectivoEnCaja: string, efectivoSiguienteCaja: string, observacion: string) {
     await expect(this.modalCerrarCaja).toBeVisible();
 
-    await this.modalCerrarCaja.locator(L.CIERRE_EFECTIVO_CAJA).fill(efectivoEnCaja);
-    await this.modalCerrarCaja.locator(L.CIERRE_EFECTIVO_SIGUIENTE).fill(efectivoSiguienteCaja);
+    const campoEfectivoCaja = this.modalCerrarCaja.locator(L.CIERRE_EFECTIVO_CAJA);
+    await campoEfectivoCaja.fill(efectivoEnCaja);
+    await campoEfectivoCaja.evaluate((el) => el.dispatchEvent(new Event('keyup', { bubbles: true })), undefined, { timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    const campoEfectivoSiguiente = this.modalCerrarCaja.locator(L.CIERRE_EFECTIVO_SIGUIENTE);
+    await campoEfectivoSiguiente.fill(efectivoSiguienteCaja);
+    await campoEfectivoSiguiente.evaluate((el) => el.dispatchEvent(new Event('keyup', { bubbles: true })), undefined, { timeout: TIMEOUTS.PAYMENT_MODAL });
+
     await this.modalCerrarCaja.locator(L.CIERRE_OBSERVACION).fill(observacion);
   }
 

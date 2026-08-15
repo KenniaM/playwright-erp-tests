@@ -3729,13 +3729,26 @@ export class PosCore {
 
   /**
    * Convierte a número el texto de un monto monetario del DOM (p. ej.
-   * "$1,234.56"), descartando cualquier carácter que no sea dígito o punto.
-   * Único punto de esta conversión — reutilizado por todos los métodos que
-   * leen un total/monto del POS (producto, venta, IVA general, descuento
-   * general) para no repetir la misma expresión de parseo en cada uno.
+   * "$1,234.56"), descartando cualquier carácter que no sea dígito, punto o
+   * signo menos. Único punto de esta conversión — reutilizado por todos los
+   * métodos que leen un total/monto del POS (producto, venta, IVA general,
+   * descuento general, Diferencia de cierre) para no repetir la misma
+   * expresión de parseo en cada uno.
+   *
+   * Corrección de automatización confirmada en vivo (investigación del
+   * módulo Cierre de Caja): la expresión anterior (`/[^0-9.]/g`) descartaba
+   * también el signo "-", devolviendo un monto NEGATIVO real (p. ej.
+   * "Diferencia de cierre: $ -1,000.00", confirmado en vivo en Reportes >
+   * Cierres de Caja > Ver Detalle) como si fuera positivo — silenciosamente
+   * invertía el signo de cualquier faltante de caja real. El resto de
+   * llamadores de este método (precio de producto, total de venta, IVA,
+   * descuento) nunca produce un texto con "-" en la práctica, así que
+   * agregarlo a la clase de caracteres permitidos no cambia ningún resultado
+   * ya confirmado — solo corrige los casos negativos reales que antes se
+   * leían mal.
    */
   _leerMontoDeTexto(texto: string): number {
-    return parseFloat(texto.replace(/[^0-9.]/g, '')) || 0;
+    return parseFloat(texto.replace(/[^0-9.-]/g, '')) || 0;
   }
 
 
@@ -3781,6 +3794,24 @@ export class PosCore {
    * que nunca llega. En ambientes donde CABYS no existe (p. ej. HONDURAS,
    * confirmado en vivo que no lo exige) este paso es un no-op y el
    * comportamiento queda idéntico al de antes.
+   *
+   * Hallazgo confirmado en vivo, NO corregido aquí a propósito (investigación
+   * de validación cruzada de moneda en Cierre de Caja, reproducido 2/2 con
+   * el mismo precio): cuando CABYS no aplica, el checkbox "Aplicar Impuesto"
+   * del formulario puede quedar MARCADO por un timer de una sola vez de
+   * `pos.js:680-699` (HONDURAS SÍ tiene un impuesto por defecto configurado
+   * — mismo hallazgo ya documentado en
+   * `desmarcarCheckboxIvaProductoRapido()`/`agregarProductoRapidoParaValidacionIva()`),
+   * dependiendo de cuánto tiempo real transcurra entre abrir el modal y el
+   * submit — bajo más carga/latencia, más probabilidad de que ya haya
+   * disparado. Este método NO se defiende de esa carrera a propósito: la
+   * defensa real (`desmarcarCheckboxIvaProductoRapido()`) exige esperar 5s
+   * fijos por cada llamada, y este método se usa decenas de veces en TODA la
+   * suite en escenarios donde el monto exacto es irrelevante — pagar ese
+   * costo globalmente sería desproporcionado. Escenarios donde el monto SÍ
+   * debe ser exacto (p. ej. validar conversión de moneda) deben usar
+   * `agregarProductoRapidoParaValidacionIva(nombre, precio, false)` en su
+   * lugar, que ya paga ese costo explícitamente para garantizar "sin IVA".
    */
   async agregarProductoRapidoSimple(nombre: string, precio: string) {
     await this.abrirProductoRapido();

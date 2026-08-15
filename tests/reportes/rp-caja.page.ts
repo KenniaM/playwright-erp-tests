@@ -172,7 +172,57 @@ export class ReporteMovimientosCajaPage {
  *   "Enviar por WhatSapp". Las dos últimas envían comunicaciones reales, así
  *   que las pruebas solo verifican que el menú se despliegue con las
  *   opciones esperadas, sin ejecutar el envío.
+ * - "Ver Detalle" (`getCashClosureDetail(id, monedas)`, investigado en vivo)
+ *   NO navega a otra página ni abre un `<div class="modal">` de Bootstrap:
+ *   inyecta un `.cash-closure-modal-content` propio (sin backdrop conocido,
+ *   sin clase "modal") directamente en el DOM de la misma página. Su
+ *   contenido — confirmado en vivo, ver `DetalleCierreReporte` — es
+ *   exactamente el mismo "Detalle de Cierre" que ya expone el propio POS
+ *   (`PosCierreCaja.leerResumenTabGeneral()`), pero ya PERSISTIDO como cierre
+ *   real: la fuente correcta para la validación cruzada POS vs. Reporte que
+ *   pide CLAUDE.md (comparar lo que el cajero vio al cerrar contra lo que el
+ *   reporte muestra después). Soporta alternar entre la moneda "GENERAL"
+ *   (agregada, la que se lee por defecto) y cada moneda individual de la
+ *   compañía vía un radio `.currency-toggle` por moneda.
  */
+export type DetalleCierreReporte = {
+  compania: string;
+  caja: string;
+  responsable: string;
+  noCierre: string;
+  informacionGeneral: {
+    fecha: string;
+    hora: string;
+    transacciones: number;
+    ventaPromedioPorTransaccion: number;
+  };
+  flujoEfectivo: {
+    saldoAperturaCaja: number;
+    efectivoCierreCaja: number;
+    diferenciaCierre: number;
+    efectivoSiguienteCaja: number;
+  };
+  metodosPago: {
+    efectivo: number;
+    tarjeta: number;
+    transaccion: number;
+    sinpeMovil: number;
+    total: number;
+  };
+  analisisIngresos: {
+    ventasDirectas: number;
+    ingresosTaller: number;
+    salidasCaja: number;
+    devoluciones: number;
+    totalSalida: number;
+  };
+};
+
+/** Convierte a número un monto monetario de este reporte (p. ej. "$ 1,234.56", "-$ 0.00"), preservando el signo. */
+function leerMonto(texto: string): number {
+  return parseFloat(texto.replace(/[^0-9.-]/g, '')) || 0;
+}
+
 export class ReporteCierreCajaPage {
   constructor(private readonly page: Page) {}
 
@@ -186,8 +236,16 @@ export class ReporteCierreCajaPage {
   private readonly contenedorTabla = () => this.page.locator('#div_content_table_cash');
   private readonly menuAccionesAbierto = () => this.page.locator('.dropdown-actions-menu.show');
 
-  /** Índice de columna (0-based) del cajero en cada fila — confirmado en vivo. */
-  static readonly COLUMNA_CAJERO = 4;
+  /**
+   * Índice de columna (0-based) de "Caja / Cajero" en cada fila — confirmado en
+   * vivo volcando los `<th>` reales de la tabla: ["/ FECHA", "CAJA / CAJERO",
+   * "APERTURA", "VENTAS / EFECTIVO", "CIERRE", "SIGUIENTE CAJA", "ACCIONES"].
+   * Corrección de automatización confirmada en vivo: el valor anterior (4)
+   * apuntaba en realidad a la columna "CIERRE" (monto de cierre + diferencia),
+   * no a "Caja / Cajero" — causaba que `obtenerCajeroDeFila()` devolviera un
+   * texto de montos en vez de un nombre, rompiendo la búsqueda por cajero.
+   */
+  static readonly COLUMNA_CAJERO = 1;
 
   async abrir() {
     await this.page.goto(URL_CIERRES_DE_CAJA, { waitUntil: 'domcontentloaded', timeout: TIMEOUTS.NAVIGATE });
@@ -208,9 +266,36 @@ export class ReporteCierreCajaPage {
     await this.seleccionarFechaFinal(fechaFinal);
   }
 
+  /**
+   * Corrección de automatización confirmada en vivo (corrida real con
+   * `--workers=2`): el click en "Aplicar Filtros" (`#applyFiltersNew`) puede
+   * quedar bloqueado de forma intermitente por el mismo banner de
+   * notificaciones ya documentado en el resto de la suite
+   * (`#workshop-web-notification-permission`, que puede reaparecer de forma
+   * asíncrona) y también, bajo carga, por el propio encabezado fijo de la
+   * app (`<header class="main-header">`) interceptando el punto de click —
+   * mismo patrón de overlay transitorio ya resuelto en
+   * `PosCierreCaja.abrirMenuCaja()`. Se aplican reintentos cortos y
+   * acotados cerrando el banner conocido antes de cada uno, en vez de un
+   * único click con timeout largo.
+   */
   async buscar(termino = '') {
     await this.buscador().fill(termino);
-    await this.btnAplicarFiltros().click();
+
+    const MAX_INTENTOS = 5;
+    let ultimoError: unknown;
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      await cerrarBannerNotificaciones(this.page);
+      try {
+        await this.btnAplicarFiltros().click({ timeout: 5_000 });
+        return;
+      } catch (e) {
+        ultimoError = e;
+      }
+    }
+    throw ultimoError instanceof Error
+      ? ultimoError
+      : new Error(`ReporteCierreCajaPage.buscar() falló tras ${MAX_INTENTOS} intentos: ${String(ultimoError)}`);
   }
 
   async limpiarBusqueda() {
@@ -221,17 +306,89 @@ export class ReporteCierreCajaPage {
     return this.contenedorTabla().locator('table.cash-table');
   }
 
+  /**
+   * Filas de datos reales — excluye la fila placeholder "sin resultados"
+   * (`tr.cash-empty-row`, confirmada en vivo con una única `<td>` y el texto
+   * "No se encontraron cierres de caja para los filtros seleccionados...").
+   * Corrección de automatización confirmada en vivo: sin este filtro,
+   * `contarFilas()` devolvía 1 (esa fila placeholder) en vez de 0 cuando una
+   * búsqueda no encuentra resultados, contradiciendo el criterio real de
+   * "sin resultados" del resto de la suite.
+   */
   filas(): Locator {
-    return this.tabla().locator('tbody tr');
+    return this.tabla().locator('tbody tr:not(.cash-empty-row)');
   }
 
   async contarFilas(): Promise<number> {
     return this.filas().count();
   }
 
-  /** Texto de la columna "Cajero" de la fila indicada (0-based). */
-  async obtenerCajeroDeFila(indice: number): Promise<string> {
+  /**
+   * Texto compuesto completo de la columna "Caja / Cajero" de la fila
+   * indicada (0-based) — incluye tanto "Caja: X" como "Cajero: Y". Ver
+   * `obtenerNombreCajeroDeFila()` para el nombre del cajero aislado.
+   */
+  async obtenerCajaCajeroDeFila(indice: number): Promise<string> {
     return this.filas().nth(indice).locator('td').nth(ReporteCierreCajaPage.COLUMNA_CAJERO).innerText();
+  }
+
+  /**
+   * Nombre real del cajero de la fila indicada (0-based), aislado del resto
+   * de la celda compuesta "Caja / Cajero" — confirmado en vivo que esa celda
+   * es `<div class="cash-row-title">Caja: X</div><div class="cash-row-meta">
+   * <i.../><span>Cajero:</span> <span class="cash-row-value">Y</span></div>`,
+   * así que el nombre real vive en el SEGUNDO `.cash-row-value` de la celda
+   * (el primero, dentro de `.cash-row-title`, es el nombre de la CAJA, no del
+   * cajero). Corrección de automatización confirmada en vivo: leer
+   * `innerText()` de la celda completa (como hacía `obtenerCajeroDeFila()`
+   * antes de esta corrección) devuelve "Caja: X\nCajero: \nY" — tomar la
+   * primera palabra de ese texto (como hace el spec) aísla "Caja:", no el
+   * nombre real.
+   */
+  async obtenerNombreCajeroDeFila(indice: number): Promise<string> {
+    const celda = this.filas().nth(indice).locator('td').nth(ReporteCierreCajaPage.COLUMNA_CAJERO);
+    return celda.locator('.cash-row-meta .cash-row-value').innerText();
+  }
+
+  /** Nombre real de la caja (no del cajero) de la fila indicada (0-based). */
+  async obtenerNombreCajaDeFila(indice: number): Promise<string> {
+    const celda = this.filas().nth(indice).locator('td').nth(ReporteCierreCajaPage.COLUMNA_CAJERO);
+    return celda.locator('.cash-row-title .cash-row-value').innerText();
+  }
+
+  /**
+   * Texto crudo de la columna "CIERRE" (monto de cierre + diferencia) de la
+   * fila indicada (0-based) — columna 4, confirmada en vivo. Útil para
+   * localizar de forma determinística, SIN abrir "Ver Detalle" de cada fila,
+   * la fila que corresponde a un cierre real recién generado con un monto de
+   * efectivo de cierre conocido (ver el escenario de validación cruzada en
+   * rp-caja.spec.ts).
+   */
+  async obtenerTextoCierreDeFila(indice: number): Promise<string> {
+    return this.filas().nth(indice).locator('td').nth(4).innerText();
+  }
+
+  /** Texto crudo de la columna "SIGUIENTE CAJA" de la fila indicada (0-based) — columna 5, confirmada en vivo. */
+  async obtenerTextoSiguienteCajaDeFila(indice: number): Promise<string> {
+    return this.filas().nth(indice).locator('td').nth(5).innerText();
+  }
+
+  /**
+   * Localiza el índice (0-based) de la primera fila cuya columna "CIERRE"
+   * contiene el monto indicado (formateado con 2 decimales, sin importar el
+   * signo `$`/separadores de miles) — pensado para encontrar, entre los
+   * cierres del rango buscado, el que corresponde a un efectivo de cierre
+   * único generado por la propia prueba. Devuelve `null` si no aparece en
+   * ninguna fila visible.
+   */
+  async localizarFilaPorMontoCierre(monto: number): Promise<number | null> {
+    const totalFilas = await this.contarFilas();
+    const montoTexto = monto.toFixed(2);
+    for (let i = 0; i < totalFilas; i++) {
+      const texto = await this.obtenerTextoCierreDeFila(i);
+      if (texto.includes(montoTexto)) return i;
+    }
+    return null;
   }
 
   async descargarExcelResumen(): Promise<Download> {
@@ -253,6 +410,96 @@ export class ReporteCierreCajaPage {
     await this.filas().nth(indice).locator('.btn-dropdown-trigger').click();
     await expect(this.menuAccionesAbierto()).toBeVisible({ timeout: TIMEOUTS.CARGA });
     return this.menuAccionesAbierto().locator('.dropdown-item').allInnerTexts();
+  }
+
+  // ─── Modal "Ver Detalle" ──────────────────────────────────────────────────
+
+  /** El propio contenedor inyectado por `getCashClosureDetail()` — ver el comentario de la clase. */
+  modalDetalle(): Locator {
+    return this.page.locator('.cash-closure-modal-content');
+  }
+
+  /**
+   * Abre "Ver Detalle" de la fila indicada (0-based) desde su menú de
+   * acciones y espera a que el contenido quede visible. `getCashClosureDetail`
+   * es una petición AJAX real (confirmada en vivo con `page.on('response')`);
+   * `expect().toBeVisible()` sobre el propio contenido (no un timeout fijo)
+   * es lo que absorbe esa latencia.
+   */
+  async abrirDetalleFila(indice = 0): Promise<void> {
+    await this.filas().nth(indice).locator('.btn-dropdown-trigger').click();
+    await expect(this.menuAccionesAbierto()).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await this.menuAccionesAbierto().locator('.dropdown-item', { hasText: /ver detalle/i }).click();
+    await expect(this.modalDetalle(), '"Detalle de cierre" no apareció').toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /** Cierra "Ver Detalle" con su botón "×" real (`closeCashClosureModal()`, confirmado en vivo). */
+  async cerrarDetalleFila(): Promise<void> {
+    await this.modalDetalle().locator('.cash-closure-close').click();
+    await expect(this.modalDetalle()).toBeHidden({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /**
+   * Cambia la moneda mostrada dentro de "Ver Detalle" ya abierto —
+   * `codigo` es el `data-code` real del radio (p. ej. "ALL" para GENERAL,
+   * "USD", "CRC", confirmados en vivo). Los montos de las 4 tarjetas se
+   * recalculan en el propio cliente (sin nueva petición AJAX, confirmado en
+   * vivo) al togglear.
+   */
+  async seleccionarMonedaEnDetalle(codigo: string): Promise<void> {
+    await this.modalDetalle().locator(`.currency-toggle input[data-code="${codigo}"]`).evaluate(
+      (el) => (el as HTMLElement).click()
+    );
+  }
+
+  /** Lee TODOS los valores de "Ver Detalle" (ya abierto) en un solo snapshot — ver `DetalleCierreReporte`. */
+  async leerDetalleCierre(): Promise<DetalleCierreReporte> {
+    const modal = this.modalDetalle();
+
+    const meta = await modal.locator('.cash-closure-header-meta p').allInnerTexts();
+    const leerMeta = (etiqueta: string) => {
+      const linea = meta.find((l) => l.toLowerCase().startsWith(etiqueta.toLowerCase()));
+      return linea?.replace(new RegExp(`^${etiqueta}:?`, 'i'), '').trim() ?? '';
+    };
+
+    const leerItem = async (tituloCard: RegExp, etiqueta: RegExp): Promise<string> => {
+      const card = modal.locator('.cash-closure-card', { has: this.page.locator('h3', { hasText: tituloCard }) });
+      const item = card.locator('.cash-closure-item', { has: this.page.locator('.label', { hasText: etiqueta }) });
+      return item.locator('.value').innerText();
+    };
+
+    return {
+      compania: leerMeta('Compañía'),
+      caja: leerMeta('Caja'),
+      responsable: leerMeta('Responsable'),
+      noCierre: leerMeta('No. cierre'),
+      informacionGeneral: {
+        fecha: await leerItem(/información general/i, /^fecha/i),
+        hora: await leerItem(/información general/i, /^hora/i),
+        transacciones: leerMonto(await leerItem(/información general/i, /^transacciones/i)),
+        ventaPromedioPorTransaccion: leerMonto(await leerItem(/información general/i, /venta promedio/i)),
+      },
+      flujoEfectivo: {
+        saldoAperturaCaja: leerMonto(await leerItem(/flujo de efectivo/i, /saldo apertura/i)),
+        efectivoCierreCaja: leerMonto(await leerItem(/flujo de efectivo/i, /efectivo del cierre/i)),
+        diferenciaCierre: leerMonto(await leerItem(/flujo de efectivo/i, /diferencia de cierre/i)),
+        efectivoSiguienteCaja: leerMonto(await leerItem(/flujo de efectivo/i, /efectivo para siguiente caja/i)),
+      },
+      metodosPago: {
+        efectivo: leerMonto(await leerItem(/métodos de pago/i, /^\s*efectivo\s*$/i)),
+        tarjeta: leerMonto(await leerItem(/métodos de pago/i, /^\s*tarjeta\s*$/i)),
+        transaccion: leerMonto(await leerItem(/métodos de pago/i, /^\s*transacción\s*$/i)),
+        sinpeMovil: leerMonto(await leerItem(/métodos de pago/i, /sinpe/i)),
+        total: leerMonto(await leerItem(/métodos de pago/i, /total/i)),
+      },
+      analisisIngresos: {
+        ventasDirectas: leerMonto(await leerItem(/análisis de ingresos/i, /ventas directas/i)),
+        ingresosTaller: leerMonto(await leerItem(/análisis de ingresos/i, /ingresos de taller/i)),
+        salidasCaja: leerMonto(await leerItem(/análisis de ingresos/i, /salidas de caja/i)),
+        devoluciones: leerMonto(await leerItem(/análisis de ingresos/i, /devoluciones/i)),
+        totalSalida: leerMonto(await leerItem(/análisis de ingresos/i, /total de salida/i)),
+      },
+    };
   }
 
   async validarTabla() {
