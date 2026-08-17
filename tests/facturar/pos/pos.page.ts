@@ -95,6 +95,12 @@ export class PosPage {
   async completarAperturaCaja(...args: Parameters<PosCore['completarAperturaCaja']>) {
     return this.core.completarAperturaCaja(...args);
   }
+  async leerSaldoCajaEnModalAbrir(...args: Parameters<PosCore['leerSaldoCajaEnModalAbrir']>) {
+    return this.core.leerSaldoCajaEnModalAbrir(...args);
+  }
+  async completarAperturaCajaConMonto(...args: Parameters<PosCore['completarAperturaCajaConMonto']>) {
+    return this.core.completarAperturaCajaConMonto(...args);
+  }
   get modalCerrarCaja() { return this.cierreCaja.modalCerrarCaja; }
   get modalNotificaciones() { return this.core.modalNotificaciones; }
   async cerrarModalNotificacionesSiAparece(...args: Parameters<PosCore['cerrarModalNotificacionesSiAparece']>) {

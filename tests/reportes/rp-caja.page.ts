@@ -357,6 +357,70 @@ export class ReporteCierreCajaPage {
   }
 
   /**
+   * Lee los 3 montos de la columna "APERTURA" del listado (columna 2,
+   * confirmada en vivo) — "Caja Ant." (el efectivo tomado como referencia
+   * del cierre anterior de la misma caja), "Saldo" (el monto digitado al
+   * abrir esta caja) y "Dif. Apert." (Saldo - Caja Ant.), en ese mismo
+   * orden real del DOM (confirmado volcando el `outerHTML` completo de la
+   * celda: 3 `<div class="cash-amount-line">`, cada uno con su etiqueta
+   * seguida de su propio `.cash-amount-value`).
+   *
+   * BUG DE SISTEMA CONFIRMADO — causa raíz exacta localizada leyendo el
+   * código fuente real (`js/report_cash.js`, función que arma esta fila) y
+   * comparándolo contra el JSON crudo real de `getCashSearch` (endpoint que
+   * alimenta este listado) en 3 casos controlados con montos de apertura
+   * conocidos y verificados de forma independiente (vía el propio "Resumen
+   * de cierre: + Apertura" del Tab General del POS):
+   *
+   *   var openingComparisonBalance = parseFloat(c.previous_cash_balance || c.previous_cash || c.previous_balance || '');
+   *   if (isNaN(openingComparisonBalance)) {
+   *       openingComparisonBalance = (parseFloat(c.open_balance || 0) - openingDifference); // openingDifference = c.missing_cash_balance
+   *   }
+   *   // "Caja ant." muestra openingComparisonBalance; "Saldo" muestra fmt(c.open_balance); "Dif. apert." muestra openingDifference.
+   *
+   * El backend (`getCashSearch`) JAMÁS envía ninguno de los 3 campos que el
+   * frontend intenta leer primero para "Caja ant." (`previous_cash_balance`
+   * / `previous_cash` / `previous_balance` — ausentes de la respuesta real
+   * en TODAS las filas observadas), así que siempre cae al fallback de
+   * arriba. Esa parte del frontend NO está rota: es matemáticamente
+   * correcta — confirmado inyectando `open_balance` real vía fetch directo
+   * a `openPosCash` (mismo payload exacto del handler real): con
+   * `open_balance`/`missing_cash_balance` correctos, el fallback SÍ
+   * reproduce la Caja Ant. real exacta, confirmado tanto en HONDURAS como
+   * en TALLER ALPHA PREMIUM (cuenta Super Administrador).
+   *
+   * La causa raíz real está en el BACKEND, y es más sutil que "el campo se
+   * pierde": interceptando con `page.on('request')` el payload que el
+   * navegador envía al hacer clic NATIVO en "Abrir Caja" se confirmó que
+   * `open_balance` SIEMPRE llega correcto al servidor — descarta cualquier
+   * causa de automatización o de la app cliente. El problema aparece en
+   * secuencias de VARIAS aperturas/cierres seguidos de la misma caja: la
+   * fila del cierre de una sesión terminó mostrando el `open_balance` de
+   * la apertura de la SESIÓN ANTERIOR, no la suya propia (`total` de esa
+   * misma fila sí mostró el valor correcto) — un bug de ASOCIACIÓN/JOIN
+   * entre la tabla de cierres y la de aperturas (parece emparejar por
+   * orden/fecha, no por un ID de sesión explícito), no una pérdida del
+   * dato. Es INTERMITENTE: no se reprodujo en secuencias limpias de una
+   * sola apertura+cierre (ahí `open_balance` llegó correcto, en ambas
+   * compañías), solo tras varias operaciones seguidas — no se confirmó si
+   * depende de la velocidad/cantidad de aperturas recientes. "Dif. Apert."
+   * es la única de las 3 que consistentemente calculó bien, porque usa
+   * `missing_cash_balance`, un campo que no depende de este join. Ver el
+   * test `test.fail()` dedicado en rp-caja.spec.ts ("BUG CONOCIDO: la
+   * columna APERTURA...") y la memoria de esta sesión para el detalle
+   * completo de ambas rondas de investigación.
+   */
+  async obtenerAperturaDeFila(indice: number): Promise<{ cajaAnterior: number; saldo: number; diferenciaApertura: number }> {
+    const celda = this.filas().nth(indice).locator('td').nth(2);
+    const valores = await celda.locator('.cash-amount-value').allInnerTexts();
+    return {
+      cajaAnterior: leerMonto(valores[0] ?? '0'),
+      saldo: leerMonto(valores[1] ?? '0'),
+      diferenciaApertura: leerMonto(valores[2] ?? '0'),
+    };
+  }
+
+  /**
    * Texto crudo de la columna "CIERRE" (monto de cierre + diferencia) de la
    * fila indicada (0-based) — columna 4, confirmada en vivo. Útil para
    * localizar de forma determinística, SIN abrir "Ver Detalle" de cada fila,

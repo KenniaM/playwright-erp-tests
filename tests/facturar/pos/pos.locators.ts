@@ -115,8 +115,38 @@ export const L = {
   // discrepancia) como el aviso de diferencia de efectivo al intentar abrirla.
   DIALOG_ABRIR_CAJA: '#dialog_cash_opening',
   CAJA_BTN_ABRIR:    '#btn_open_cash',
-  CAJA_MONTO:        'input[placeholder="0.00"]',
+  // Corrección de automatización confirmada leyendo el pos.js real: el
+  // click de "#btn_open_cash" lee el monto de apertura con
+  // `$('#posted_balance_opening').val()` — un id real y estable. El
+  // selector genérico anterior (`input[placeholder="0.00"]` + `.first()`)
+  // podía coincidir con OTRO campo del mismo modal que comparte ese
+  // placeholder (p. ej. una variante de moneda no activa), sin que
+  // `completarAperturaCaja()` lo notara nunca porque siempre escribe '0' —
+  // el mismo valor que ya mostraba el campo real por defecto. El bug solo
+  // se manifiesta al intentar un monto real y distinto de cero (ver
+  // `completarAperturaCajaConMonto()`), donde el backend terminaba
+  // recibiendo "0" en vez del monto realmente tecleado.
+  CAJA_MONTO:        '#posted_balance_opening',
   CAJA_OBSERVACION:  'Ingrese sus observaciones aquí',
+  // "Saldo caja" ("Caja Ant.") del modal Abrir Caja — el efectivo esperado
+  // para esta apertura, heredado de "Efectivo para siguiente caja" del
+  // cierre anterior de la misma caja. Corrección de automatización
+  // confirmada leyendo el pos.js real (fetch directo del bundle servido):
+  // el input OCULTO real `#closure_balance_closed_hide_opening` (sin
+  // sufijo) es el que puebla `getClosureData()` (AJAX SÍNCRONO,
+  // `async:false`, se resuelve ANTES de que el modal se muestre — sin
+  // condición de carrera) en CUALQUIER carga fresca del POS, vía
+  // `.val(parseFloat(models.cash.closure_balance))`. El selector anterior,
+  // `#lbl_closure_balance_closed_hide_opening` (CON prefijo "lbl_"), es un
+  // elemento DISTINTO que solo se actualiza dentro del handler de éxito de
+  // `closePosCash()` — código que corre nada más en la MISMA página/sesión
+  // justo tras cerrar caja ahí mismo, nunca en una carga fresca del POS —
+  // por eso siempre se leía "0" (su valor estático por defecto del propio
+  // HTML), sin importar el cierre real anterior. `#closure_balance_closed_hide_opening`
+  // es un `<input type="hidden">`, así que se lee con `.inputValue()`, no
+  // `.innerText()`.
+  CAJA_SALDO_ANTERIOR: '#closure_balance_closed_hide_opening',
+  CAJA_DIFERENCIA_APERTURA: '#missing_balance_opening',
 
   // Menú "Caja" → "(F12) Abrir/Cerrar Caja". El mismo ítem de menú despliega el
   // modal "Abrir Caja" si la caja está cerrada, o "Detalle de Cierre" si está

@@ -464,14 +464,23 @@ test.describe('Reporte de Cierres de Caja — Validación cruzada contra el cier
 
     const cierres = new ReporteCierreCajaPage(page);
     let detalle!: Awaited<ReturnType<ReporteCierreCajaPage['leerDetalleCierre']>>;
+    let indiceFila!: number;
     await test.step('Localizar el cierre recién generado en Reportes > Cierres de Caja por su efectivo de cierre único', async () => {
       await cierres.abrir();
       await cierres.buscar();
       const indice = await cierres.localizarFilaPorMontoCierre(efectivoCierreUnico);
       expect(indice, 'No se encontró en el reporte ninguna fila con el efectivo de cierre único generado por esta prueba').not.toBeNull();
-      await cierres.abrirDetalleFila(indice!);
+      indiceFila = indice!;
+      await cierres.abrirDetalleFila(indiceFila);
       detalle = await cierres.leerDetalleCierre();
     });
+
+    // La columna "APERTURA" (Caja Ant./Saldo/Dif. Apert.) del listado tiene
+    // un bug de sistema confirmado (Caja Ant. y Saldo aparecen invertidos,
+    // con signo cambiado en Caja Ant.) — ver el test dedicado
+    // `test.fail()` más abajo en este archivo, que lo documenta con
+    // evidencia completa en vez de mezclarlo aquí con las validaciones que
+    // sí pasan.
 
     await test.step('Comparar el encabezado del reporte (identidad del cierre) contra el POS', async () => {
       // No se compara contra COMPANIA_POS: hallazgo real confirmado en vivo
@@ -582,4 +591,133 @@ test.describe('Reporte de Cierres de Caja — Validación cruzada contra el cier
       expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
     });
   });
+
+  // BUG DE SISTEMA CONFIRMADO — causa raíz exacta localizada (no una
+  // suposición): se leyó el código fuente real del frontend
+  // (`js/report_cash.js`, la función que arma esta fila) y se comparó
+  // contra el JSON crudo real del endpoint que la alimenta
+  // (`getCashSearch`), en 3 casos controlados con montos de apertura
+  // conocidos y verificados de forma independiente (vía "Resumen de
+  // cierre: + Apertura" del propio Tab General del POS). El frontend hace:
+  //
+  //   var openingComparisonBalance = parseFloat(c.previous_cash_balance || c.previous_cash || c.previous_balance || '');
+  //   if (isNaN(openingComparisonBalance)) {
+  //       openingComparisonBalance = (parseFloat(c.open_balance || 0) - openingDifference); // openingDifference = c.missing_cash_balance
+  //   }
+  //   // "Caja ant." = openingComparisonBalance; "Saldo" = fmt(c.open_balance); "Dif. apert." = openingDifference.
+  //
+  // El backend (`getCashSearch`) JAMÁS envía `previous_cash_balance` /
+  // `previous_cash` / `previous_balance` (ausentes de la respuesta real en
+  // TODAS las filas inspeccionadas), así que el frontend SIEMPRE cae al
+  // fallback de arriba. ESA PARTE del frontend no está rota: es
+  // matemáticamente correcta — confirmado inyectando `open_balance` real
+  // vía fetch directo a `openPosCash` (mismo payload exacto del handler
+  // real): con `open_balance`/`missing_cash_balance` correctos, el
+  // fallback SÍ reproduce la Caja Ant. real exacta (confirmado en HONDURAS
+  // y en TALLER ALPHA PREMIUM, cuenta Super Administrador — mismo
+  // resultado correcto en ambas compañías).
+  //
+  // La causa raíz real está en el BACKEND, y es más sutil que "el campo se
+  // pierde": interceptando con `page.on('request')` el payload REAL que el
+  // navegador envía al hacer clic NATIVO en "Abrir Caja" se confirmó que
+  // `open_balance` SIEMPRE llega correcto al servidor (ej.
+  // `open_balance=66666`, respuesta de éxito "1") — descarta cualquier
+  // causa de automatización o de la app cliente. Pero en una secuencia de
+  // VARIAS aperturas/cierres seguidos de la misma caja (como las decenas
+  // que generó esta investigación), la fila del cierre de una sesión
+  // terminó mostrando el `open_balance` de la APERTURA DE LA SESIÓN
+  // ANTERIOR, no la suya propia (confirmado: cerrar con Saldo=66666 mostró
+  // `open_balance: 99999` — el valor de la sesión previa — mientras que
+  // `total` de esa misma fila SÍ mostró 66666 correcto) — un bug de
+  // ASOCIACIÓN/JOIN entre la tabla de cierres y la de aperturas en el
+  // backend (parece emparejar por orden/fecha en vez de por un ID de
+  // sesión explícito), no una pérdida del dato. Es INTERMITENTE: no se
+  // reprodujo en secuencias limpias de una sola apertura+cierre (ahí
+  // `open_balance` sí llegó correcto, en ambas compañías), pero sí tras
+  // varias operaciones seguidas — no se confirmó si depende de la
+  // velocidad/cantidad de aperturas recientes o de otra condición. "Dif.
+  // apert." es la única de las 3 que consistentemente calculó bien, porque
+  // usa `missing_cash_balance`, un campo que no depende de este join.
+  //
+  // Alcance: NO es exclusivo de HONDURAS — el mismo mecanismo (fetch
+  // directo, payload real) funcionó correctamente en TALLER ALPHA PREMIUM
+  // también; no se confirmó si el bug de asociación intermitente
+  // reaparecería ahí con suficientes aperturas/cierres seguidos (no se
+  // probó esa secuencia en esa compañía). Ver la memoria de esta sesión
+  // para el detalle completo de ambas rondas de investigación.
+  //
+  // Se descartó una causa de automatización: `obtenerAperturaDeFila()` lee
+  // los 3 `.cash-amount-value` de la celda en el mismo orden en que
+  // aparecen en el DOM real (confirmado con `outerHTML` completo de la
+  // celda), y el propio `aria-label` del tooltip de "Caja ant." ya trae el
+  // valor incorrecto en su texto de ayuda — el bug está en qué valor
+  // calculó/envió el backend, no en cómo esta suite los lee.
+  //
+  // Se documenta con `test.fail()` (mismo criterio ya usado en
+  // recepcion-ordenes.spec.ts/recepcion-tablero.spec.ts para bugs de
+  // sistema confirmados) en vez de debilitar la aserción real o mezclarla
+  // con las validaciones que sí pasan en el test de arriba.
+  test.fail(
+    'BUG CONOCIDO: la columna "APERTURA" del reporte muestra "Caja Ant." y "Saldo" invertidos (con signo cambiado en "Caja Ant.")',
+    async ({ page }) => {
+      test.setTimeout(POS_TIMEOUTS.TEST);
+      const pos = new PosPage(page);
+
+      await test.step('Cargar el POS con los primitivos de bajo nivel (sin que cargarPosDesdeDashboard() descarte "Abrir Caja" por su cuenta)', async () => {
+        await pos.irAlPos();
+        await pos.esperarEstadoInicial();
+        await pos.cerrarOverlaysConocidos();
+      });
+
+      // Se fuerza Caja Ant. != 0 (y != Saldo) cerrando primero con un
+      // "Efectivo para siguiente caja" conocido — caso más riguroso que
+      // simplemente Caja Ant.=0 (confirmado en la investigación: con
+      // Caja Ant.=$300.30 y Saldo=$555.55, el reporte mostró "Caja ant."=
+      // "$ -255.25" — ni -Saldo ni Caja Ant. real, sino el negativo de
+      // "Dif. Apert." real — descartando cualquier coincidencia numérica
+      // del caso trivial Caja Ant.=0).
+      const cajaAnteriorObjetivo = 300.3;
+      await test.step('Cerrar la caja con un "Efectivo para siguiente caja" conocido, para controlar la Caja Ant. de la próxima apertura', async () => {
+        if (!(await pos.modalAbrirCajaVisible())) {
+          await pos.abrirDetalleDeCierre();
+          await pos.completarFormularioCerrarCaja('0', String(cajaAnteriorObjetivo), 'Cierre previo (test.fail bug Apertura)');
+          await pos.confirmarCerrarCaja();
+          await expect(pos.modalCerrarCaja).toBeHidden();
+          await pos.irAlPos();
+          await pos.esperarEstadoInicial();
+        }
+      });
+
+      let cajaAnteriorEsperada = 0;
+      const saldoControlado = 555.55;
+      await test.step('Abrir la caja con un monto de apertura controlado, distinto de 0 y distinto de la Caja Ant.', async () => {
+        expect(await pos.modalAbrirCajaVisible(), 'La caja debería estar cerrada en este punto').toBe(true);
+        cajaAnteriorEsperada = await pos.leerSaldoCajaEnModalAbrir();
+        await pos.completarAperturaCajaConMonto(String(saldoControlado));
+        await expect(pos.modalAbrirCaja).toBeHidden();
+      });
+
+      const efectivoCierreUnico = Number((100 + (Date.now() % 89000) / 100).toFixed(2));
+      await test.step('Cerrar la caja con un efectivo de cierre único para poder localizar la fila en el reporte', async () => {
+        await pos.abrirDetalleDeCierre();
+        await pos.completarFormularioCerrarCaja(String(efectivoCierreUnico), '0', `Cierre bug Apertura ${Date.now()}`);
+        await pos.confirmarCerrarCaja();
+        await expect(pos.modalCerrarCaja).toBeHidden();
+      });
+
+      await test.step('Comparar la columna "APERTURA" del reporte contra el Saldo/Caja Ant. reales', async () => {
+        const cierres = new ReporteCierreCajaPage(page);
+        await cierres.abrir();
+        await cierres.buscar();
+        const indice = await cierres.localizarFilaPorMontoCierre(efectivoCierreUnico);
+        expect(indice, 'No se encontró en el reporte la fila del cierre recién generado').not.toBeNull();
+
+        const apertura = await cierres.obtenerAperturaDeFila(indice!);
+        console.log(`[Apertura] esperado: Caja Ant.=${cajaAnteriorEsperada}, Saldo=${saldoControlado} | reporte: Caja Ant.=${apertura.cajaAnterior}, Saldo=${apertura.saldo}, Dif. Apert.=${apertura.diferenciaApertura}`);
+
+        expect(apertura.cajaAnterior, '"Caja Ant." del reporte no coincide con el "Saldo caja" real leído en el modal "Abrir Caja"').toBeCloseTo(cajaAnteriorEsperada, 2);
+        expect(apertura.saldo, '"Saldo" del reporte no coincide con el monto de apertura realmente tecleado').toBeCloseTo(saldoControlado, 2);
+      });
+    }
+  );
 });

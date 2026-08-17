@@ -667,6 +667,56 @@ export class PosCore {
   }
 
 
+  /**
+   * Lee "Saldo caja" ("Caja Ant.") con el modal "Abrir Caja" ya visible —
+   * el efectivo ESPERADO para esta apertura, heredado de "Efectivo para
+   * siguiente caja" del cierre anterior de la misma caja (mismo dato real
+   * que "Caja Ant." en Reportes > Cierres de Caja, dos vistas). Necesario
+   * para validar "Diferencia de Apertura" contra un monto contado conocido,
+   * ya que `completarAperturaCaja()` siempre usa '0' sin leer este valor.
+   *
+   * Se lee a nivel de PÁGINA, no acotado a `modalAbrirCaja`: confirmado en
+   * vivo (leyendo el pos.js real) que `#closure_balance_closed_hide_opening`
+   * es un input oculto compañero, poblado por `getClosureData()` (AJAX
+   * SÍNCRONO, se resuelve antes de que el modal se muestre), sin garantía
+   * de que viva dentro del contenedor del modal en el DOM real — ver el
+   * comentario de `CAJA_SALDO_ANTERIOR` en pos.locators.ts para el hallazgo
+   * completo (incluye el bug de automatización real que tenía el selector
+   * anterior, que siempre leía "0").
+   */
+  async leerSaldoCajaEnModalAbrir(): Promise<number> {
+    await expect(this.modalAbrirCaja).toBeVisible();
+    const texto = await this.page.locator(L.CAJA_SALDO_ANTERIOR).inputValue();
+    return this._leerMontoDeTexto(texto);
+  }
+
+
+  /**
+   * Completa la apertura de caja con un monto EXACTO conocido (a
+   * diferencia de `completarAperturaCaja()`, que siempre usa '0' sin
+   * importar el "Saldo caja" real) — necesario para controlar
+   * deliberadamente "Saldo" y, por lo tanto, poder validar "Diferencia de
+   * Apertura" contra un monto contado conocido.
+   *
+   * Corrección de automatización confirmada en vivo (mismo hallazgo real ya
+   * documentado en `completarFormularioCerrarCaja()` para el cierre):
+   * `#missing_balance_opening` (la "Diferencia" mostrada en el propio
+   * modal) NO se recalcula con `.fill()` — se dispara `keyup` manualmente
+   * tras el fill(), el mismo evento real que la app necesita (confirmado en
+   * vivo: "500" contra un "Saldo caja" de "555.55" recalculó la Diferencia
+   * a exactamente "-55.55").
+   */
+  async completarAperturaCajaConMonto(monto: string, observacion = 'Apertura automatizada') {
+    await expect(this.modalAbrirCaja).toBeVisible();
+
+    const campo = this.modalAbrirCaja.locator(L.CAJA_MONTO).first();
+    await campo.fill(monto);
+    await campo.evaluate((el) => el.dispatchEvent(new Event('keyup', { bubbles: true })), undefined, { timeout: TIMEOUTS.PAYMENT_MODAL });
+    await this.modalAbrirCaja.getByPlaceholder(L.CAJA_OBSERVACION).fill(observacion);
+    await this.modalAbrirCaja.locator(L.CAJA_BTN_ABRIR).click();
+  }
+
+
   /** Modal para activar las notificaciones del navegador: elemento opcional, ajeno al flujo de caja. */
   get modalNotificaciones() {
     return this.page.locator('#workshop-web-notification-permission');
