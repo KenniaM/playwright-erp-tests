@@ -3,7 +3,7 @@ import {
   PosPage, TIMEOUTS, espiarErroresJS, METODO,
   FilaFacturaVenta,
 } from './pos.page';
-import { VentasPage, FormaDePagoFacturaHistorico } from '../../ventas/ventas.page';
+import { HistoricoVentasPage, FormaDePagoFacturaHistorico } from '../../ventas/historico-ventas.page';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INVESTIGACIÓN: trazabilidad del método de pago en facturas de CONTADO
@@ -16,7 +16,7 @@ import { VentasPage, FormaDePagoFacturaHistorico } from '../../ventas/ventas.pag
 // Pago") == el método que muestra Histórico de Ventas → detalle de factura
 // ("Forma de pago"). Los 3 puntos de esa cadena ya existen como
 // infraestructura reutilizable en el repo (PosCierreCaja.leerFacturas*(),
-// VentasPage.leerFormaDePagoFacturaAbierta()) pero, confirmado revisando
+// HistoricoVentasPage.leerFormaDePagoFacturaAbierta()) pero, confirmado revisando
 // pos-cierre-caja.spec.ts/pos-orden-caja.spec.ts antes de escribir esto, NUNCA
 // se habían cruzado los 3 juntos para la MISMA factura, y Órdenes de Caja
 // nunca se había facturado con otro método que Efectivo — ver el informe de
@@ -104,7 +104,7 @@ function facturaNueva(antes: FilaFacturaVenta[], despues: FilaFacturaVenta[]): F
 async function ejecutarYValidarTrazabilidad(
   pos: PosPage,
   page: Page,
-  ventas: VentasPage,
+  ventas: HistoricoVentasPage,
   flujo: string,
   escenario: EscenarioPago,
   leerTablaFn: () => Promise<FilaFacturaVenta[]>,
@@ -224,7 +224,7 @@ for (const escenario of ESCENARIOS_UN_SOLO_METODO) {
   test(`Facturar directo — trazabilidad completa con ${escenario.nombre}`, async ({ page }) => {
     test.setTimeout(TIMEOUTS.TEST);
     const pos = new PosPage(page);
-    const ventas = new VentasPage(page);
+    const ventas = new HistoricoVentasPage(page);
     const erroresJS = espiarErroresJS(page);
 
     await test.step('Cargar el POS y asegurar caja abierta', async () => {
@@ -259,7 +259,7 @@ for (const escenario of ESCENARIOS_UN_SOLO_METODO) {
   test(`Órdenes de Caja — trazabilidad completa con ${escenario.nombre}`, async ({ page }) => {
     test.setTimeout(TIMEOUTS.TEST);
     const pos = new PosPage(page);
-    const ventas = new VentasPage(page);
+    const ventas = new HistoricoVentasPage(page);
     const erroresJS = espiarErroresJS(page);
 
     await test.step('Cargar el POS y asegurar caja abierta', async () => {
@@ -310,7 +310,7 @@ for (const escenario of ESCENARIOS_UN_SOLO_METODO) {
 // de campos con monto>0 en Histórico (ambos deben reflejar los 2 métodos).
 
 async function validarPagoMixto(
-  pos: PosPage, page: Page, ventas: VentasPage, flujo: string,
+  pos: PosPage, page: Page, ventas: HistoricoVentasPage, flujo: string,
   leerTablaFn: () => Promise<FilaFacturaVenta[]>,
 ): Promise<FilaMatriz> {
   const antes = await runDentroDeCierre(pos, leerTablaFn);
@@ -366,7 +366,7 @@ async function validarPagoMixto(
 test('Facturar directo — trazabilidad completa con pago Mixto (Tarjeta + Efectivo)', async ({ page }) => {
   test.setTimeout(TIMEOUTS.TEST);
   const pos = new PosPage(page);
-  const ventas = new VentasPage(page);
+  const ventas = new HistoricoVentasPage(page);
   const erroresJS = espiarErroresJS(page);
 
   await test.step('Cargar el POS y asegurar caja abierta', async () => {
@@ -389,7 +389,7 @@ test('Facturar directo — trazabilidad completa con pago Mixto (Tarjeta + Efect
 test('Órdenes de Caja — trazabilidad completa con pago Mixto (Tarjeta + Efectivo)', async ({ page }) => {
   test.setTimeout(TIMEOUTS.TEST);
   const pos = new PosPage(page);
-  const ventas = new VentasPage(page);
+  const ventas = new HistoricoVentasPage(page);
   const erroresJS = espiarErroresJS(page);
 
   await test.step('Cargar el POS y asegurar caja abierta', async () => {
@@ -429,7 +429,7 @@ test('Órdenes de Caja — trazabilidad completa con pago Mixto (Tarjeta + Efect
 test('Facturar directo — Efectivo con sobrepago (vuelto real) no altera el método ni el monto registrado', async ({ page }) => {
   test.setTimeout(TIMEOUTS.TEST);
   const pos = new PosPage(page);
-  const ventas = new VentasPage(page);
+  const ventas = new HistoricoVentasPage(page);
   const erroresJS = espiarErroresJS(page);
 
   await test.step('Cargar el POS y asegurar caja abierta', async () => {
@@ -500,7 +500,7 @@ test('Facturar directo — Efectivo con sobrepago (vuelto real) no altera el mé
 test('Facturar directo — Efectivo en moneda secundaria se registra con el método y monto correctos', async ({ page }) => {
   test.setTimeout(TIMEOUTS.TEST);
   const pos = new PosPage(page);
-  const ventas = new VentasPage(page);
+  const ventas = new HistoricoVentasPage(page);
   const erroresJS = espiarErroresJS(page);
 
   await test.step('Cargar el POS y asegurar caja abierta', async () => {

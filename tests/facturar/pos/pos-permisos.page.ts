@@ -260,20 +260,29 @@ export class PosPermisos {
   }
 
   /**
-   * Lee el id numérico real del rol desde el atributo `onclick="view_role(N)"`
-   * de su fila — necesario únicamente para `establecerPermisoViaApiDirecta()`
-   * (ver su comentario). Debe llamarse mientras la página "Roles y permisos"
+   * Lee el id numérico real del rol desde el atributo `data-role-id` de su
+   * fila — necesario únicamente para `establecerPermisoViaApiDirecta()` (ver
+   * su comentario). Debe llamarse mientras la página "Roles y permisos"
    * todavía es accesible (p. ej. en el paso "activar" de cada escenario,
    * antes de desactivar nada) — nunca se hardcodea el id de "Administrador
    * nivel 1": puede variar por ambiente.
+   *
+   * Corrección de automatización confirmada en vivo (fetch directo del
+   * bundle real `js/role_admin.js`): la página "Roles y permisos" fue
+   * reescrita — ya no usa `onclick="view_role(N)"` en un `<li>` contenedor
+   * (patrón anterior que este método buscaba), sino un botón real
+   * `button.role-admin-role-main.js-role-view[data-role-id]` que es el
+   * padre inmediato de `.section_item_name` (confirmado volcando el
+   * `outerHTML` real: `<button class="role-admin-role-main js-role-view"
+   * data-role-id="1"><span class="section_item_name">Administrador nivel
+   * 1</span>...</button>`).
    */
   async obtenerRoleId(nombreRol: string = ROL_ADMINISTRADOR): Promise<number> {
-    const onclick = await this.filaRol(nombreRol).locator('xpath=..').getAttribute('onclick');
-    const match = onclick?.match(/view_role\((\d+)\)/);
-    if (!match) {
-      throw new Error(`No se pudo leer el id real del rol "${nombreRol}" desde su atributo onclick.`);
+    const dataRoleId = await this.filaRol(nombreRol).locator('xpath=..').getAttribute('data-role-id');
+    if (!dataRoleId) {
+      throw new Error(`No se pudo leer el id real del rol "${nombreRol}" desde su atributo data-role-id.`);
     }
-    return Number(match[1]);
+    return Number(dataRoleId);
   }
 
   /** Locator de un checkbox de permiso puntual por su id numérico real. */

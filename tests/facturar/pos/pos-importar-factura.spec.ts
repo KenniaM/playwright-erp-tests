@@ -64,10 +64,19 @@ test.beforeEach(async ({ pos }) => {
   // documentada en pos-cierre-caja.spec.ts): la moneda activa del POS
   // persiste POR USUARIO EN EL SERVIDOR, no por sesión de navegador — se
   // fuerza la base una vez por test antes de cualquier assert de montos.
-  await pos.asegurarMonedaBaseActiva();
+  //
+  // Corrección de automatización confirmada en vivo (mismo hallazgo real
+  // documentado en pos-apartado.spec.ts): "Abrir Caja" (#dialog_cash_opening,
+  // data-backdrop="static") DEBE resolverse ANTES de
+  // asegurarMonedaBaseActiva() — ese modal bloquea TODO click sobre el
+  // encabezado (incluido #menu_type_currency) mientras esté abierto, y
+  // `cerrarOverlaysConocidos()` no lo maneja. Con la caja cerrada al
+  // iniciar este beforeEach, el orden anterior agotaba los 8 reintentos de
+  // `_seleccionarOpcionMoneda()`, siempre bloqueados por el mismo backdrop.
   if (await pos.modalAbrirCajaVisible()) {
     await pos.completarAperturaCaja();
   }
+  await pos.asegurarMonedaBaseActiva();
 });
 
 // ─── Helpers compartidos ────────────────────────────────────────────────────
