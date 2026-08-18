@@ -241,6 +241,7 @@ const L = {
   TABLA_PERMISOS: '#table_list_role',
   CHECKBOXES_PERMISOS: '#table_list_role .sub_section_checkbox',
   CHECKBOX: (id: number) => `#sub_section_id_${id}`,
+  BUSCADOR_PERMISOS: '#search_role_list',
 
   // "Admin. Cajas" (`/adminCash/adminCash`) — confirmado en vivo volcando el
   // DOM real: el botón real usa onclick="addCash()" (coincide con el slug
@@ -322,16 +323,41 @@ export class PosPermisos {
         .then(() => true)
         .catch(() => false);
       if (cargado) {
-        // Margen real, no cosmético: confirmado en vivo que el atributo
-        // `checked` de cada fila puede seguir asentándose un instante
-        // después de que las filas ya existen en el DOM (mismo mecanismo de
-        // carrera ya documentado en pos-navegacion.page.ts para el menú de
-        // tres puntos) — leer el estado demasiado pronto puede reportar
-        // `false` para un permiso que en realidad está activo.
-        await expect.poll(
-          async () => this.checkboxPermiso(PERMISO.VER_VENDER_POS).isChecked().catch(() => null),
-          { timeout: 5_000 }
-        ).not.toBeNull();
+        // Corrección de automatización confirmada en vivo (fetch directo del
+        // bundle real `js/role_admin.js`, función `viewRole()`): el guard
+        // anterior (`isChecked().not.toBeNull()`) era en la práctica un
+        // no-op — `Locator.isChecked()` de Playwright nunca devuelve `null`
+        // (devuelve un booleano o lanza), así que ese poll siempre resolvía
+        // en su primer intento, sin esperar a que el propio handler
+        // `.done()` de la app terminara de marcar los checkboxes.
+        //
+        // El código fuente real revela la carrera exacta: `viewRole()`
+        // dispara el POST a `getRolePermissionById` y, en su callback
+        // `.done()`, primero desmarca TODOS los checkboxes
+        // (`.prop('checked', false)`), luego itera el array de permisos
+        // asignados marcando cada uno (`$.each(models, ...)`), y SOLO AL
+        // FINAL reactiva el buscador (`$('#search_role_list')...prop('disabled', false)`,
+        // última línea del handler). Playwright's `page.waitForResponse()`
+        // resuelve por el evento de red (CDP), que puede llegar antes de que
+        // el navegador termine de procesar esa cadena de handlers
+        // síncronos/microtasks de jQuery — confirmado en vivo con una
+        // medición dedicada: leer el estado de un permiso SABIDO activo
+        // (id 1, "Realizar cobro") inmediatamente después de que este método
+        // resolvía devolvía `false` la mayoría de las veces, con una ventana
+        // real de ~300ms (mayor bajo carga) antes de asentarse en `true` y
+        // quedarse ahí. Esto invalidó una investigación previa que concluyó
+        // erróneamente que activar el permiso 673 "no persistía" — en
+        // realidad SÍ persistía, solo se leía demasiado pronto.
+        //
+        // El fix real no depende del valor de ningún permiso puntual (sería
+        // inseguro bajo `fullyParallel`, donde otro test podría estar
+        // togleando ESE MISMO permiso en paralelo): usa como señal
+        // `#search_role_list`, que el HTML real sirve con `disabled` por
+        // defecto (confirmado con `curl` al HTML crudo de la página) y que
+        // la app reactiva como ÚLTIMO paso del mismo handler que marca los
+        // checkboxes — esperar a que quede habilitado es esperar,
+        // indirectamente pero con certeza, a que ese `$.each` ya terminó.
+        await expect(this.page.locator(L.BUSCADOR_PERMISOS)).toBeEnabled({ timeout: 5_000 });
         return;
       }
     }
@@ -624,6 +650,110 @@ export class PosPermisos {
       { base: BASE_URL, cashId }
     );
     console.log(`[aprobarCierrePendienteViaApiDirecta] cash_id=${cashId} -> ${resultado.status} ${resultado.text.slice(0, 200)}`);
+  }
+
+  /**
+   * Estado real de una fila de cierre, leído de sus clases CSS
+   * (`change_state()`, confirmado en vivo leyendo `js/report_cash.js`):
+   * `pending-tr` mientras espera aprobación, `rejected-tr` tras rechazarla
+   * (ninguna de las dos tras aprobarla — esa rama solo oculta el botón).
+   *
+   * Corrección de automatización confirmada en vivo: `botonValidarCierre(id)
+   * .isVisible()` NO sirve para distinguir "pendiente" de "ya rechazado" — el
+   * mismo botón (`.btn-cash-state`) sigue existiendo y visible tras
+   * rechazar, solo cambia su contenido interno de "Validar" a "Ver" (HTML
+   * real: `'Ver <i class="ion-eye"></i>'`, inyectado por `change_state()`).
+   * Un chequeo basado solo en visibilidad reporta un falso "sigue pendiente"
+   * para un cierre ya rechazado.
+   */
+  async estadoFilaCierre(cashId: number): Promise<'pendiente' | 'rechazado' | 'resuelto'> {
+    const clases = await this.filaCierre(cashId).evaluate((el) => Array.from(el.classList));
+    if (clases.includes('pending-tr')) return 'pendiente';
+    if (clases.includes('rejected-tr')) return 'rechazado';
+    return 'resuelto';
+  }
+
+  /** Botón "Rechazar" del diálogo `#dialog_validate_cash` ya abierto. */
+  private botonRechazarEnDialogo(): Locator {
+    return this.page.locator('#dialog_validate_cash .validate-btn-reject');
+  }
+
+  /**
+   * Rechaza un cierre pendiente propio (mismo criterio de exclusividad que
+   * `aprobarCierrePendiente()`: nunca usar contra un cierre ajeno de la cola
+   * global compartida). A diferencia de aprobar, "Rechazar" abre un SEGUNDO
+   * SweetAlert con una decisión real adicional (confirmado leyendo el código
+   * fuente real, `js/report_cash.js`, función `confirm()`): 2 checkboxes
+   * mutuamente excluyentes, "Permitir abrir caja" (`.one-state`, marcado por
+   * defecto) y "No Permitir abrir caja" (`.two-state`) — el elegido viaja
+   * como `rejected_option` en el POST real a `changeStateCashClosure`.
+   *
+   * `permitirAbrirCaja` (default `true`, el propio default de la app) decide
+   * cuál checkbox queda marcado antes de confirmar. El propio código fuente
+   * agrega un `setTimeout(..., 1000)` real entre el click de "Continuar" y
+   * el disparo del AJAX — cubierto por el timeout ya generoso de
+   * `TIMEOUTS.GUARDADO` usado para esperar la respuesta, sin necesidad de
+   * una espera propia.
+   */
+  async rechazarCierrePendiente(cashId: number, permitirAbrirCaja = true) {
+    try {
+      await this.botonValidarCierre(cashId).click({ timeout: 10_000 });
+
+      const dialogo = this.page.locator('#dialog_validate_cash');
+      await expect(dialogo).toBeVisible({ timeout: 20_000 });
+      await this.botonRechazarEnDialogo().click({ timeout: 10_000 });
+
+      const confirmacion = this.page.locator('.sweet-alert.visible.cash-reject-confirm-alert');
+      await confirmacion.waitFor({ state: 'visible', timeout: TIMEOUTS.PRINT_POPUP });
+
+      // El checkbox ".one-state" (Permitir abrir caja) ya viene marcado por
+      // defecto — solo hace falta togglear si se quiere la otra opción.
+      if (!permitirAbrirCaja) {
+        await confirmacion.locator('.two-state').click({ timeout: 5_000 });
+      }
+
+      const respuestaPromise = this.page.waitForResponse(
+        (res) => res.url().includes('changeStateCashClosure'),
+        { timeout: TIMEOUTS.GUARDADO }
+      ).catch(() => null);
+      await confirmacion.locator('button.confirm').click();
+      await respuestaPromise;
+
+      // Segundo SweetAlert real ("¡Listo! El cambio se guardó correctamente"), descartado si aparece.
+      const exito = this.page.locator('.sweet-alert.visible');
+      await exito.waitFor({ state: 'visible', timeout: TIMEOUTS.PRINT_POPUP }).catch(() => {});
+      await exito.locator('button.confirm').click({ timeout: 5_000 }).catch(() => {});
+    } catch (e) {
+      // Misma red de seguridad y misma causa raíz ya documentada en
+      // aprobarCierrePendiente() (validate_cash() con XHR síncrono que puede
+      // no responder bajo carga del ambiente compartido).
+      console.log(`[rechazarCierrePendiente] flujo de UI falló (${e}), usando la API directa como red de seguridad`);
+      await this.rechazarCierrePendienteViaApiDirecta(cashId, permitirAbrirCaja);
+    }
+  }
+
+  /**
+   * Llama directamente `changeStateCashClosure` con `option=0` (rechazar) —
+   * mismo criterio que `aprobarCierrePendienteViaApiDirecta()`, red de
+   * seguridad únicamente.
+   */
+  async rechazarCierrePendienteViaApiDirecta(cashId: number, permitirAbrirCaja = true) {
+    const resultado = await this.page.evaluate(
+      async ({ base, cashId, rejectedOption }) => {
+        // @ts-expect-error _token vive en un input real de la página, no expuesto por tipos
+        const token = document.querySelector('#_token')?.value ?? document.querySelector('meta[name="csrf-token"]')?.content;
+        const body = new URLSearchParams({ _token: token, cash_id: String(cashId), option: '0', rejected_option: rejectedOption });
+        const res = await fetch(`${base}/reports/changeStateCashClosure`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+          body: body.toString(),
+          credentials: 'include',
+        });
+        return { status: res.status, text: await res.text() };
+      },
+      { base: BASE_URL, cashId, rejectedOption: permitirAbrirCaja ? '1' : '0' }
+    );
+    console.log(`[rechazarCierrePendienteViaApiDirecta] cash_id=${cashId} -> ${resultado.status} ${resultado.text.slice(0, 200)}`);
   }
 
   // ─── Alternativa rápida: modal "Permisos del POS" (menú de tres puntos) ───

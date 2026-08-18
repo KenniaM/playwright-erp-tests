@@ -112,9 +112,33 @@ export class ReporteMovimientosCajaPage {
     await this.seleccionarFechaFinal(fechaFinal);
   }
 
+  /**
+   * Corrección de automatización confirmada en vivo: el click en "Buscar"
+   * (`#btn_search_cash_movement`) puede quedar bloqueado indefinidamente por
+   * el mismo banner de notificaciones ya documentado en el resto de la
+   * suite (`#workshop-web-notification-permission`, puede reaparecer de
+   * forma asíncrona) — reproducido con el timeout completo del test
+   * (90s) agotado en un único intento largo. Mismo patrón de reintentos
+   * cortos cerrando el banner antes de cada uno ya usado en
+   * `ReporteCierreCajaPage.buscar()`, que sí lo tenía.
+   */
   async buscar(termino = '') {
     await this.buscador().fill(termino);
-    await this.btnBuscar().click();
+
+    const MAX_INTENTOS = 5;
+    let ultimoError: unknown;
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      await cerrarBannerNotificaciones(this.page);
+      try {
+        await this.btnBuscar().click({ timeout: 5_000 });
+        return;
+      } catch (e) {
+        ultimoError = e;
+      }
+    }
+    throw ultimoError instanceof Error
+      ? ultimoError
+      : new Error(`ReporteMovimientosCajaPage.buscar() falló tras ${MAX_INTENTOS} intentos: ${String(ultimoError)}`);
   }
 
   async limpiarBusqueda() {

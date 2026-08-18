@@ -43,6 +43,55 @@ async function abrirDetalleCierre(pos: PosPage) {
   await expect(pos.modalCerrarCaja).toBeVisible();
 }
 
+/**
+ * Variante defensiva de `asegurarCajaAbierta()` + `abrirDetalleCierre()` para
+ * el escenario de "Rechazar cierre pendiente" — confirmado en vivo (con
+ * capturas) que `modalAbrirCajaVisible()` puede leer `false` (caja
+ * aparentemente abierta, grid de productos visible) justo antes de abrir el
+ * menú "Caja", y sin embargo, al clickear "(F12) Abrir/Cerrar Caja" unos
+ * segundos después, la app decide mostrar "Abrir Caja" (encabezado real:
+ * "Caja: Cerrada") en vez de "Cerrar Caja" — un cambio de estado real entre
+ * ambos puntos, consistente con el ambiente compartido acumulando cierres
+ * aprobados/rechazados programáticamente en la misma cuenta (ver memoria de
+ * esta sesión). En vez de asumir que un único chequeo puntual sigue siendo
+ * válido momentos después, esta variante reacciona al resultado REAL de
+ * `esperarResultadoMenuCaja()`: si resultó ser "Abrir Caja", la completa y
+ * reintenta abrir el menú una vez más para llegar a "Cerrar Caja".
+ */
+async function asegurarCajaAbiertaYAbrirDetalle(pos: PosPage) {
+  await asegurarCajaAbierta(pos);
+
+  for (let intento = 1; intento <= 2; intento++) {
+    await pos.abrirMenuCaja();
+    await pos.seleccionarAbrirCerrarCaja();
+    await pos.esperarResultadoMenuCaja();
+
+    if (await pos.modalAbrirCaja.isVisible().catch(() => false)) {
+      await pos.completarAperturaCaja();
+      await expect(pos.modalAbrirCaja).toBeHidden();
+      // Corrección de automatización confirmada en vivo: reabrir el menú
+      // "Caja" en caliente, inmediatamente después de este mismo
+      // completarAperturaCaja(), puede no encontrar NINGUNO de los dos
+      // modales (ni Abrir Caja ni Cerrar Caja) — el encabezado necesita un
+      // momento real para reflejar el nuevo estado de caja. Recargar el POS
+      // (mismo mecanismo ya usado por `PosPermisos.recargarPos()` tras un
+      // cambio de permiso) + `esperarEstadoInicial()` (la espera real
+      // documentada en pos-core.page.ts para esta misma carrera) antes de
+      // reintentar el menú es la espera real correcta, no un
+      // `waitForTimeout()`.
+      await pos.irAlPos();
+      await pos.esperarEstadoInicial();
+      await pos.cerrarOverlaysConocidos();
+      continue; // La caja recién se abrió: reintentar para llegar a "Cerrar Caja".
+    }
+
+    await expect(pos.modalCerrarCaja).toBeVisible();
+    return;
+  }
+
+  throw new Error('No se pudo llegar a "Detalle de Cierre" tras reabrir la caja una vez.');
+}
+
 test.describe('Permisos del POS — rol Administrador nivel 1', () => {
   test('Admin roles — controla la opción "Permisos del POS" del menú de tres puntos', async ({ page }) => {
     test.setTimeout(TIMEOUTS.TEST);
@@ -1934,6 +1983,129 @@ test.describe('Permisos del POS — Caja — rol Administrador nivel 1', () => {
         await permisos.esperarPermiso(ROL_ADMINISTRADOR, PERMISO.CAMBIAR_ESTADO_CIERRES_CAJA, false);
         await permisos.esperarPermiso(ROL_ADMINISTRADOR, PERMISO.VALIDAR_CIERRE_CAJA, false);
         await permisos.esperarPermiso(ROL_ADMINISTRADOR, PERMISO.ABRIR_CAJA_PENDIENTE_APROBACION, true);
+      });
+    }
+  });
+
+  // Funcionalidad descubierta en vivo, nunca antes probada: el diálogo de
+  // aprobación (#dialog_validate_cash) también tiene un botón "Rechazar"
+  // (confirmado leyendo el código fuente real, `js/report_cash.js`, función
+  // confirm()/change_state()) — NO es un simple confirm/cancelar, agrega un
+  // SEGUNDO SweetAlert con una decisión real ("Permitir abrir caja" /
+  // "No Permitir abrir caja") que viaja como `rejected_option` en el POST
+  // real. Mismo criterio de aislamiento que el test de arriba: un único
+  // cierre propio generado y localizado siempre por su `cash_id` real
+  // (nunca "la primera fila pendiente" de la cola global compartida).
+  //
+  // Solo se prueba la opción por defecto de la app ("Permitir abrir caja",
+  // ya confirmada segura en vivo): la alternativa "No Permitir abrir caja"
+  // bloquearía la apertura de caja de la propia cuenta compartida de forma
+  // no confirmada como reversible por esta suite (confirmado en vivo que un
+  // cierre pendiente huérfano sin aprobar ya dejó la cuenta con el modal
+  // "¡Su caja está temporalmente cerrada!" en una sesión de investigación
+  // previa) — no vale la pena el riesgo para una suite que corre sin
+  // supervisión.
+  //
+  // Corrección de automatización confirmada en vivo: a diferencia del test
+  // anterior (que togglea permisos vía el modal "Permisos del POS", ya
+  // probado extensamente para VALIDAR_CIERRE_CAJA/ABRIR_CAJA_PENDIENTE),
+  // togglear CAMBIAR_ESTADO_CIERRES_CAJA (674) específicamente vía ESE modal
+  // se colgó el presupuesto COMPLETO del test (10 min, `checkbox.isChecked()`
+  // esperando un locator que nunca resolvió) — reproducido igual en una
+  // investigación previa de esta misma sesión, donde la sección "Caja" del
+  // modal ya expandida mostraba "Validar cierre de caja" pero NO
+  // "Cambiar estado de cierres de caja" en el DOM real. Este test usa en su
+  // lugar `irARolesYPermisos()`/`establecerPermiso()` (vía `/roleAdmin`, ya
+  // confirmado rápido y confiable tras el fix de la propia
+  // `irARolesYPermisos()` — ver su comentario), sin necesidad de tener el
+  // POS ya cargado de antemano.
+  test('Rechazar cierre pendiente — cambia la fila a "rechazado" y respeta "Permitir abrir caja"', async ({ page }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const pos = new PosPage(page);
+    const permisos = new PosPermisos(pos, page);
+
+    let cashIdPendiente: number | null = null;
+
+    try {
+      await test.step('Preparar: activar Validar cierre de caja + Cambiar estado de cierres de caja, y generar un cierre real propio pendiente', async () => {
+        await permisos.irARolesYPermisos();
+        await permisos.establecerPermiso(PERMISO.VALIDAR_CIERRE_CAJA, true);
+        await permisos.esperarPermiso(ROL_ADMINISTRADOR, PERMISO.VALIDAR_CIERRE_CAJA, true);
+        await permisos.establecerPermiso(PERMISO.CAMBIAR_ESTADO_CIERRES_CAJA, true);
+        await permisos.esperarPermiso(ROL_ADMINISTRADOR, PERMISO.CAMBIAR_ESTADO_CIERRES_CAJA, true);
+
+        await pos.cargarPosDesdeDashboard();
+        await pos.cerrarOverlaysConocidos();
+        await asegurarCajaAbiertaYAbrirDetalle(pos);
+        await pos.completarFormularioCerrarCaja('0', '0', 'Permisos — rechazar cierre pendiente');
+
+        const respuestaCierrePromise = page.waitForResponse((res) => res.url().includes('closePosCash'), { timeout: TIMEOUTS.GUARDADO });
+        await pos.confirmarCerrarCaja();
+        const respuesta = await respuestaCierrePromise;
+        const body = (await respuesta.text().catch(() => '')).trim();
+        const match = body.match(/"id"\s*:\s*"?(\d+)/) || body.match(/cash_id"?\s*[:=]\s*"?(\d+)/i);
+        cashIdPendiente = /^\d+$/.test(body) ? Number(body) : (match ? Number(match[1]) : null);
+        console.log(`Cierre propio generado, cash_id=${cashIdPendiente} (body: ${body.slice(0, 200)})`);
+        expect(cashIdPendiente, 'No se pudo leer el cash_id real del cierre recién generado (respuesta de closePosCash)').not.toBeNull();
+        await expect(pos.modalCerrarCaja).toBeHidden();
+      });
+
+      await test.step('La fila del cierre propio arranca en estado "pendiente"', async () => {
+        await permisos.irAReporteCierresDeCaja();
+        const estado = await permisos.estadoFilaCierre(cashIdPendiente!);
+        expect(estado, 'La fila recién generada debería arrancar en estado "pendiente"').toBe('pendiente');
+      });
+
+      await test.step('Rechazar el cierre (con "Permitir abrir caja") y validar que la fila cambia a "rechazado"', async () => {
+        await permisos.rechazarCierrePendiente(cashIdPendiente!, true);
+
+        await permisos.irAReporteCierresDeCaja();
+        const estado = await permisos.estadoFilaCierre(cashIdPendiente!);
+        expect(estado, 'La fila debería quedar en estado "rechazado" tras rechazar el cierre').toBe('rechazado');
+
+        // El botón de acción sigue existiendo (misma clase .btn-cash-state) y
+        // gana la clase "is-view" (icono solamente, sin texto visible —
+        // confirmado en vivo: su contenido de texto renderizado queda vacío
+        // pese a que change_state() sí actualiza el innerHTML real a "Ver
+        // <i>..."). El atributo `title` es la señal real y estable: cambia
+        // de "Validar" a "Ver" — confirmado en vivo con el DOM real
+        // (`title="Ver" ... class="btn btn-action btn-cash-state _btn_15
+        // is-view"`).
+        const boton = permisos.botonValidarCierre(cashIdPendiente!);
+        await expect(boton, 'El botón de acción debería seguir visible (ahora como "Ver")').toBeVisible();
+        await expect(boton, 'El botón debería tener title="Ver" tras rechazar, no "Validar"').toHaveAttribute('title', /ver/i);
+      });
+
+      await test.step('Con "Permitir abrir caja" elegido, la cuenta puede abrir una caja nueva sin quedar bloqueada', async () => {
+        await pos.irAlPos();
+        await pos.esperarEstadoInicial();
+        await pos.cerrarOverlaysConocidos();
+
+        const modalBloqueado = await page.getByText('temporalmente cerrada').isVisible().catch(() => false);
+        expect(modalBloqueado, 'La cuenta no debería quedar bloqueada tras rechazar con "Permitir abrir caja"').toBe(false);
+
+        await asegurarCajaAbierta(pos);
+        const siguecerrada = await pos.modalAbrirCajaVisible();
+        expect(siguecerrada, 'Debería haber sido posible abrir una caja nueva tras rechazar con "Permitir abrir caja"').toBe(false);
+      });
+    } finally {
+      await test.step('Red de seguridad: resolver el cierre propio si algún paso anterior falló antes de rechazarlo', async () => {
+        if (cashIdPendiente === null) return;
+        await permisos.irAReporteCierresDeCaja();
+        const sigueVisible = await permisos.botonValidarCierre(cashIdPendiente).isVisible().catch(() => false);
+        const sigueEstrictamentePendiente = sigueVisible && (await permisos.estadoFilaCierre(cashIdPendiente).catch(() => 'resuelto')) === 'pendiente';
+        if (sigueEstrictamentePendiente) {
+          console.log(`[Red de seguridad] cash_id=${cashIdPendiente} seguía pendiente, resolviendo (aprobar) vía API directa.`);
+          await permisos.aprobarCierrePendienteViaApiDirecta(cashIdPendiente);
+        }
+      });
+
+      await test.step('Restaurar los 2 permisos a su estado original (ambos inactivos)', async () => {
+        await permisos.irARolesYPermisos();
+        await permisos.establecerPermiso(PERMISO.CAMBIAR_ESTADO_CIERRES_CAJA, false);
+        await permisos.esperarPermiso(ROL_ADMINISTRADOR, PERMISO.CAMBIAR_ESTADO_CIERRES_CAJA, false);
+        await permisos.establecerPermiso(PERMISO.VALIDAR_CIERRE_CAJA, false);
+        await permisos.esperarPermiso(ROL_ADMINISTRADOR, PERMISO.VALIDAR_CIERRE_CAJA, false);
       });
     }
   });
