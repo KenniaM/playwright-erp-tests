@@ -1073,28 +1073,94 @@ test.describe('Restaurante — Órdenes para Llevar', () => {
   // orden), nunca el ciclo real "crear orden formal → guardarla → volver más
   // tarde a editarla" que un mesero/cajero de verdad usaría con un pedido
   // para llevar que no se factura de inmediato.
-  test('25. Reabrir y editar una orden para llevar ya creada: agregar un producto nuevo, eliminar uno existente y modificar cantidad — las líneas no tocadas permanecen intactas', async ({ pos, llevar, sharedPage }) => {
+  // BUG DE SISTEMA CONFIRMADO EN VIVO, INTERMITENTE (NO es un bug de
+  // automatización — corrección de una caracterización anterior de esta
+  // misma auditoría, que había reportado "2/2, 100%" con una muestra
+  // demasiado chica):
+  //
+  // Hipótesis inicial descartada: una reproducción simplificada (reabrir la
+  // orden y cambiar la cantidad de una línea INMEDIATAMENTE, sin ningún paso
+  // de por medio) recalculó bien 2/2 veces — "línea reabierta" por sí sola
+  // NO es la causa real.
+  //
+  // Causa real, cuando se manifiesta, reproduciendo la secuencia EXACTA de
+  // este escenario (reabrir → agregar un producto nuevo → ELIMINAR una de
+  // las líneas originales → recién ahí cambiar la cantidad de la línea
+  // restante): el evento `onchange` del campo de cantidad SÍ dispara la
+  // petición real (`updateDiscountFromRestInvoiceOrder`, misma que en Mesas)
+  // — pero su payload trae `rest_order_item_id=NaN` en vez del id real de la
+  // línea (confirmado byte a byte del body real interceptado, en las
+  // corridas donde apareció). El backend no puede identificar qué línea
+  // recalcular y no actualiza nada: el campo de cantidad SÍ cambia
+  // (confirmado en pantalla, "Cant.: 2"), pero el "Total" de esa fila queda
+  // congelado en el valor anterior.
+  //
+  // TASA REAL MEDIDA (muestra ampliada tras la caracterización inicial de
+  // "2/2"): 6 reproducciones dedicadas en esta sesión → solo 2 mostraron el
+  // bug (~33%) — las 4 restantes (incluida una tanda de 3 corridas
+  // consecutivas con captura visual en cada una) recalcularon correctamente.
+  //
+  // Es la misma FAMILIA de bug ya confirmada en Mesas (Escenario 29 de
+  // pos-restaurante-mesas.spec.ts: cambiar cantidad de una línea justo
+  // después de una mutación del carrito sobre OTRA línea, ahí un modal de
+  // Aditivos), con un mecanismo de falla distinto y más preciso aquí: en
+  // Mesas la petición nunca llega a dispararse; aquí SÍ se dispara, pero con
+  // un identificador de línea corrupto (NaN) — en ambos casos, una mutación
+  // previa sobre otra línea dentro del mismo carrito dispara un
+  // reseteo/pérdida de algún estado interno de JS ("línea actualmente
+  // activa") que el siguiente cambio de cantidad necesita para saber a cuál
+  // fila aplicar el recálculo.
+  //
+  // NO se documenta con `test.fail()` (que asume falla SIEMPRE): con ~67%
+  // de éxito real, reportaría "passed unexpectedly" en la mayoría de las
+  // corridas de CI. Se deja la aserción REAL sin debilitar — la mayoría de
+  // las corridas pasarán limpio, y si este test falla en una corrida real,
+  // es evidencia legítima del bug intermitente ya confirmado arriba.
+  test(
+    '25. Reabrir y editar una orden para llevar ya creada: agregar un producto nuevo, eliminar uno existente y modificar cantidad — las líneas no tocadas permanecen intactas (bug de sistema intermitente ~33% — ver comentario)',
+    async ({ pos, llevar, sharedPage }) => {
     test.setTimeout(TIMEOUTS.TEST_CON_RECUPERACION);
     const erroresJS = espiarErroresJS(sharedPage);
     const nombreCliente = `Cliente Reabrir QA ${Date.now()}`;
 
     let id = '';
-    let claveOriginalUno = '', claveOriginalDos = '';
+    let nombreOriginalUno = '', nombreOriginalDos = '';
     await test.step('Crear una orden formal con 2 productos', async () => {
       await llevar.volverAProductos();
       await llevar.agregarPrimerProductoNoPresente();
       await llevar.agregarPrimerProductoNoPresente();
       const claves = await pos.obtenerClavesFilasCarrito();
       expect(claves.length).toBe(2);
-      [claveOriginalUno, claveOriginalDos] = claves;
+      [nombreOriginalUno, nombreOriginalDos] = await Promise.all(claves.map((c) => pos.obtenerNombreProducto(c)));
       id = await llevar.crearOrdenParaLlevar(nombreCliente);
     });
 
+    // CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO: las claves de línea
+    // del carrito FLOTANTE (antes de persistir la orden) son tokens
+    // temporales del lado del cliente (ej. "K8UTV0BXZR") — al reabrir la
+    // orden ya PERSISTIDA, el servidor asigna sus propios ids numéricos
+    // reales a cada línea (ej. "70168"), distintos de esos tokens. Mismo
+    // patrón ya documentado en el repo para líneas IMPORTADAS de Orden de
+    // Caja/Ruteo/Apartado (ver el comentario de `obtenerClavesFilasCarrito()`),
+    // nunca antes confirmado para el ciclo crear→reabrir de Para Llevar.
+    // Comparar las claves crudas antes/después ("Expected K8UTV0BXZR,
+    // Received 70168") producía un falso positivo de pérdida de datos: las 2
+    // líneas SÍ persisten, solo bajo una clave técnica distinta. La
+    // identidad real y estable de una línea a través de ese ciclo es su
+    // NOMBRE de producto, no su clave técnica — se valida por nombre y se
+    // re-resuelven las claves REALES (post-persistencia) para los pasos
+    // siguientes, que sí necesitan operar sobre el DOM actual.
+    let claveOriginalUno = '', claveOriginalDos = '';
     await test.step('Reabrir la orden recién creada y confirmar que las 2 líneas originales persistieron', async () => {
       await llevar.abrirOrdenesParaLlevar();
       await llevar.abrirOrden(id);
       const claves = await pos.obtenerClavesFilasCarrito();
-      expect(claves.sort(), 'Las líneas originales deben persistir exactamente al reabrir').toEqual([claveOriginalUno, claveOriginalDos].sort());
+      expect(claves.length, 'Deben persistir exactamente 2 líneas al reabrir').toBe(2);
+      const nombres = await Promise.all(claves.map((c) => pos.obtenerNombreProducto(c)));
+      expect(nombres.sort(), 'Las líneas originales deben persistir exactamente al reabrir (mismos productos)').toEqual([nombreOriginalUno, nombreOriginalDos].sort());
+
+      claveOriginalUno = claves[nombres.indexOf(nombreOriginalUno)];
+      claveOriginalDos = claves[nombres.indexOf(nombreOriginalDos)];
     });
 
     let claveNueva = '';
@@ -1127,7 +1193,8 @@ test.describe('Restaurante — Órdenes para Llevar', () => {
 
     await validarSinMensajesDeError(sharedPage);
     expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
-  });
+    }
+  );
 
 
   // ─── 26. Cliente cambia de opinión: combinación de acciones ──────────────
@@ -1216,6 +1283,35 @@ test.describe('Restaurante — Órdenes para Llevar', () => {
     await test.step('Imprimir su Pre-Factura y confirmar que la ventana de impresión se abrió', async () => {
       await llevar.abrirOrdenesParaLlevar();
       await llevar.imprimirPreFactura(id);
+    });
+
+    await validarSinMensajesDeError(sharedPage);
+    expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+  });
+
+
+  // ─── 28. Imprimir Pre-Factura DIVIDIDA (subconjunto de productos) ────────
+  // Brecha de cobertura real detectada por el usuario del proyecto,
+  // mirando una corrida --headed de la suite: cada tarjeta de "Para Llevar"
+  // tiene un SEGUNDO ícono de impresión, distinto del Escenario 27 de
+  // arriba — ver el hallazgo completo en
+  // PosRestauranteOrdenesLlevar.imprimirPreFacturaDividida().
+  test('28. Imprimir Pre-Factura dividida: elegir un subconjunto de productos de una orden ya creada e imprimir solo esos', async ({ pos, llevar, sharedPage }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const erroresJS = espiarErroresJS(sharedPage);
+    const nombreCliente = `Cliente PreFacturaDividida QA ${Date.now()}`;
+
+    let id = '';
+    await test.step('Crear una orden propia con 2 productos', async () => {
+      await llevar.volverAProductos();
+      await llevar.agregarPrimerProductoNoPresente();
+      await llevar.agregarPrimerProductoNoPresente();
+      id = await llevar.crearOrdenParaLlevar(nombreCliente);
+    });
+
+    await test.step('Abrir el selector de Pre-Factura dividida, mover un producto y confirmar que la ventana de impresión se abrió', async () => {
+      await llevar.abrirOrdenesParaLlevar();
+      await llevar.imprimirPreFacturaDividida(id);
     });
 
     await validarSinMensajesDeError(sharedPage);

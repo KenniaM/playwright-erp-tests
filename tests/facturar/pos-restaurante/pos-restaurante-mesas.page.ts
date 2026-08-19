@@ -142,18 +142,53 @@ const L_MESA = {
   // Ícono "X" roja real junto al encabezado "🍴 Mesa:" — cierra la VISTA de
   // la orden actual sin facturar (confirmado en vivo: la orden permanece
   // intacta, "reabrir" es simplemente volver a clickear la misma mesa).
-  BTN_CERRAR_ORDEN_SIN_FACTURAR: '#close_selected_rest_order',
+  //
+  // BUG DE AUTOMATIZACIÓN CONFIRMADO EN VIVO (cambio real de frontend, no un
+  // problema de overlay/timing — mismo patrón ya visto con el selector de
+  // salón de este archivo): el id `#close_selected_rest_order` documentado
+  // arriba YA NO EXISTE en este ambiente (confirmado en vivo con
+  // `count()===0`, incluso ya sobre la vista de la orden). Volcando TODOS
+  // los elementos con "close" en su id, el botón real y actualmente visible
+  // es `#rest_quick_action_close_table`
+  // (`class="rest-order-quick-action-btn rest-order-quick-action-btn--close"`)
+  // — la app rediseñó este control a un ícono de "acciones rápidas" con un
+  // id distinto. Root-cause real de las fallas de `cerrarOrdenSinFacturar()`
+  // (Escenarios 17/19): el botón nunca llegaba a existir, con cualquier
+  // cantidad de reintentos.
+  BTN_CERRAR_ORDEN_SIN_FACTURAR: '#rest_quick_action_close_table',
 
   // ─── Selección de Salón ──────────────────────────────────────────────────
   // Cada salón visible en el panel de Mesas es un botón real
   // `.rest-lounge-top-tab` en la barra superior (`#rest_lounge_top_tabs`),
-  // con `title="<nombre real del salón>"` y
-  // `onclick="load_rest_table_by_lounge(<id>)"` — confirmado en vivo
-  // inspeccionando el DOM real del POS tras abrir "MESAS". Se localiza
-  // SIEMPRE por `title` (nombre visible real), nunca por el id numérico del
-  // onclick — mismo criterio de todo el repo (nunca hardcodear ids
-  // específicos de un ambiente, ver CLAUDE.md).
-  TAB_SALON: (nombreSalon: string) => `.rest-lounge-top-tab[title="${nombreSalon}"]`,
+  // con `onclick="load_rest_table_by_lounge(<id>)"` — confirmado en vivo
+  // inspeccionando el DOM real del POS tras abrir "MESAS". Se localiza por
+  // texto visible (nunca por el id numérico del onclick — mismo criterio de
+  // todo el repo, ver CLAUDE.md).
+  //
+  // BUG DE AUTOMATIZACIÓN CONFIRMADO EN VIVO (cambio real de frontend, no un
+  // problema de datos/ambiente): el atributo `title` documentado arriba ya
+  // NO existe en ningún `.rest-lounge-top-tab` (confirmado volcando los 6
+  // salones reales de este ambiente — `title` null en los 6, sin excepción),
+  // y el propio texto visible ahora llega truncado con "..." ya en el DOM
+  // (no es solo `text-overflow:ellipsis` por CSS — el `textContent` real ya
+  // trae el string cortado, ej. "QA Automatizacion Play..." en vez del
+  // nombre completo "QA Automatizacion Playwright") — probablemente para
+  // acomodar más salones en la misma barra (este ambiente pasó de 4 a 6
+  // salones reales desde que se documentó originalmente este módulo). Un
+  // `[title="<nombre completo>"]` nunca volvía a matchear nada, agotando el
+  // timeout completo de `_seleccionarSalonQA()`/`abrirMesas()` — root-cause
+  // real del bloqueo total de la suite completa (el setup del ambiente
+  // restaurante llama `abrirMesas()` para liberar mesas antes de guardar la
+  // sesión). Corregido usando `:has-text()` (extensión real del motor CSS de
+  // Playwright, sustring/case-insensitive) con un prefijo corto de
+  // `nombreSalon` (sus primeras 2 palabras) — suficientemente único entre
+  // los 6 salones reales de este ambiente y corto de sobra para sobrevivir a
+  // cualquier punto de truncado razonable, sin depender de contar caracteres
+  // exactos ni de ningún id.
+  TAB_SALON: (nombreSalon: string) => {
+    const prefijo = nombreSalon.split(' ').slice(0, 2).join(' ');
+    return `.rest-lounge-top-tab:has-text("${prefijo}")`;
+  },
   TAB_SALON_ACTIVA_CLASE: 'rest-lounge-top-tab-active',
 } as const;
 
@@ -396,14 +431,49 @@ export class PosRestauranteMesas {
    * del carrito cambia a un encabezado propio de mesa ("🍴 Mesa:") —
    * confirmado en vivo, no asumido. Devuelve los datos de la mesa elegida.
    */
+  /**
+   * CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO (condición de carrera
+   * real entre workers/procesos concurrentes — root-cause real de fallas
+   * intermitentes con "líneas de más"/"cantidad inesperada de filas"
+   * reproducidas en corridas con `--workers` > 1, ej. Escenarios 17/23):
+   * `localizarMesaDisponible()` lee el plano de mesas y devuelve la primera
+   * NO ocupada de forma DETERMINISTA (mismo orden siempre) — pero ese plano
+   * es una lectura COMPARTIDA entre TODOS los workers activos contra el
+   * mismo salón (solo 8 mesas reales en `NOMBRE_SALON_QA`), y una mesa solo
+   * queda "ocupada" del lado del servidor una vez que su orden realmente
+   * guarda un producto. Confirmado en vivo: con 2 workers, ambos pueden leer
+   * "disponible" para la MISMA mesa antes de que cualquiera de los dos
+   * alcance a ocuparla, y el segundo termina agregando sus productos al
+   * carrito que el primero ya empezó a llenar. Se verifica ahora, tras
+   * seleccionar la mesa, que su carrito realmente esté VACÍO — si ya trae
+   * líneas (de otro worker, o de una mesa que quedó mal liberada), se
+   * descarta como candidata y se reintenta con la siguiente, en vez de
+   * devolver una mesa contaminada.
+   */
   async seleccionarMesaDisponible(): Promise<DatosMesaPlano> {
-    const mesa = await this.localizarMesaDisponible();
-    await this.clickMesa(mesa.mesaId);
-    await expect(
-      this.page.locator('text=División de cuentas >> visible=true'),
-      'El panel de "Mesa" (con "División de cuentas") no apareció tras seleccionar una mesa disponible'
-    ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
-    return mesa;
+    const MAX_INTENTOS = 5;
+    const idsDescartados: string[] = [];
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      const mesasPlano = await this.obtenerMesasDelPlano();
+      const candidata = mesasPlano.find((m) => !m.ocupada && !idsDescartados.includes(m.mesaId));
+      expect(
+        candidata,
+        `No hay ninguna mesa realmente disponible entre las ${mesasPlano.length} mesas cargadas en el plano (descartadas por ya tener líneas: ${idsDescartados.join(', ') || 'ninguna'})`
+      ).toBeDefined();
+
+      await this.clickMesa(candidata!.mesaId);
+      await expect(
+        this.page.locator('text=División de cuentas >> visible=true'),
+        'El panel de "Mesa" (con "División de cuentas") no apareció tras seleccionar una mesa disponible'
+      ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+      const claves = await this.pos.obtenerClavesFilasCarrito();
+      if (claves.length === 0) return candidata!;
+
+      idsDescartados.push(candidata!.mesaId);
+      await this.abrirMesas();
+    }
+    throw new Error(`Ninguna mesa quedó realmente vacía tras ${MAX_INTENTOS} intentos — posible contención real entre workers/procesos concurrentes sobre el salón "${NOMBRE_SALON_QA}".`);
   }
 
 
@@ -479,9 +549,23 @@ export class PosRestauranteMesas {
    * más común): confirma primero si el modal realmente abrió antes de
    * intentar cerrarlo.
    */
+  /**
+   * CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO (root-cause real de un
+   * cuelgue de 300s reproducido 3/3 veces, incluso en aislamiento total —
+   * Escenario 18 de pos-restaurante-mesas.spec.ts, atascado dentro del
+   * bucle de agregar 12 productos candidatos): el timeout previo (3_000ms)
+   * de esta espera es demasiado corto — `agregarProductoConAditivo()` (más
+   * abajo en este mismo archivo) ya documenta que este mismo popup puede
+   * tardar hasta 6s en abrir bajo carga. Cuando el popup aparece DESPUÉS de
+   * esos 3s, este método concluía "no está abierto" y devolvía el control
+   * sin cerrarlo — la instantánea del timeout confirmó el modal "Aditivos"
+   * todavía abierto y tapando la pantalla, bloqueando con su backdrop el
+   * siguiente click (discount/eliminar) indefinidamente. Se amplía a 8s
+   * (6s documentados + margen), consistente con el resto del archivo.
+   */
   async _cerrarModalAditivosSiApareceAutomaticamente() {
     const abierto = await this.modalAditivos
-      .waitFor({ state: 'visible', timeout: 3_000 })
+      .waitFor({ state: 'visible', timeout: 8_000 })
       .then(() => true)
       .catch(() => false);
     if (!abierto) return;
@@ -524,11 +608,34 @@ export class PosRestauranteMesas {
   }
 
 
-  /** Abre el dropdown de "División de cuentas" (lista de clientes/cuentas de la mesa) si no está ya abierto. */
+  /**
+   * Abre el dropdown de "División de cuentas" (lista de clientes/cuentas de
+   * la mesa) si no está ya abierto.
+   *
+   * CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO: investigado con un spec
+   * dedicado, el click SINTÉTICO de Playwright sobre el trigger SÍ dispara
+   * `toggleCustomDropdown()` correctamente en condiciones normales (no es un
+   * caso más de "necesita click nativo") — pero confirmado en vivo (2/2,
+   * Escenarios 13/14) que bajo carga sostenida el dropdown puede tardar en
+   * abrir más de lo que un único intento cubre, dejando el método entero sin
+   * reintento propio (a diferencia de prácticamente todos los demás clicks
+   * de este archivo). Se agrega el mismo patrón de reintento acotado ya
+   * usado en el resto del módulo, beneficiando de una sola vez a TODOS los
+   * métodos que dependen de este (`obtenerTotalClienteDivision()`,
+   * `obtenerNombresClientesDivision()`, `activarClienteDivision()`).
+   */
   async abrirDropdownDivisionCuentas() {
     const lista = this.page.locator(L_MESA.DROPDOWN_DIVISION_LISTA);
     if (await lista.isVisible().catch(() => false)) return;
-    await this.page.locator(L_MESA.DROPDOWN_DIVISION_TRIGGER).click();
+
+    const trigger = this.page.locator(L_MESA.DROPDOWN_DIVISION_TRIGGER);
+    const MAX_INTENTOS = 3;
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      await trigger.click({ timeout: 5_000 }).catch(() => {});
+      const abierto = await lista.waitFor({ state: 'visible', timeout: 5_000 }).then(() => true).catch(() => false);
+      if (abierto) return;
+    }
+
     await expect(lista, 'El dropdown de "División de cuentas" no se abrió').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
   }
 
@@ -596,19 +703,33 @@ export class PosRestauranteMesas {
     // offset de posición a ciegas, para no depender del layout exacto de
     // la fila. Confirmado en vivo que un único intento puede no registrar
     // el cambio si el dropdown estaba recién re-renderizado (AJAX previo).
+    //
+    // CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO: `abrirDropdownDivisionCuentas()`
+    // y el `expect(fila).toBeVisible()` de abajo son aserciones reales que
+    // LANZAN — sin este try/catch, un solo tropiezo en el primer intento
+    // (ej. el dropdown tardó más de lo esperado en abrir bajo carga)
+    // abortaba el método completo de inmediato, sin llegar nunca a los
+    // intentos 2 y 3 — el bucle de reintentos era, en la práctica, un único
+    // intento disfrazado. Confirmado en vivo (Escenario 14): la excepción de
+    // `abrirDropdownDivisionCuentas()` escapaba directo hasta el spec.
     const MAX_INTENTOS = 3;
     for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
-      await this.abrirDropdownDivisionCuentas();
-      const fila = this.page.locator(L_MESA.DIVISION_FILAS_CLIENTE, { hasText: nombre });
-      await expect(fila, `No se encontró el cliente "${nombre}" en la división de cuentas`).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
-      await fila.locator('[id^="tableClientName_"]').click();
+      try {
+        await this.abrirDropdownDivisionCuentas();
+        const fila = this.page.locator(L_MESA.DIVISION_FILAS_CLIENTE, { hasText: nombre });
+        await expect(fila, `No se encontró el cliente "${nombre}" en la división de cuentas`).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+        await fila.locator('[id^="tableClientName_"]').click();
 
-      const activado = await this.page.locator(L_MESA.DROPDOWN_DIVISION_TEXTO_ACTUAL)
-        .filter({ hasText: nombre })
-        .waitFor({ state: 'visible', timeout: 3_000 })
-        .then(() => true)
-        .catch(() => false);
-      if (activado) return;
+        const activado = await this.page.locator(L_MESA.DROPDOWN_DIVISION_TEXTO_ACTUAL)
+          .filter({ hasText: nombre })
+          .waitFor({ state: 'visible', timeout: 3_000 })
+          .then(() => true)
+          .catch(() => false);
+        if (activado) return;
+      } catch {
+        // Reintentar desde cero: el dropdown puede no haber llegado a abrir
+        // a tiempo o la fila todavía no estar renderizada en este intento.
+      }
     }
 
     expect(
@@ -700,11 +821,35 @@ export class PosRestauranteMesas {
    * puede disparar sola tras agregar el producto — confirmado en vivo que
    * ese popup automático es asíncrono (AJAX propio) y su tiempo de
    * respuesta no fue consistente entre corridas aisladas.
+   *
+   * CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO (condición de carrera
+   * real, root-cause de una falla reproducida con evidencia completa —
+   * Escenario 13): `agregarProductoConAditivo()` espera hasta 6s a que el
+   * popup automático abra solo antes de llamar a este método como
+   * respaldo — pero confirmado en vivo que, bajo carga, ese popup puede
+   * tardar MÁS de 6s en abrir y de todas formas terminar apareciendo justo
+   * después de esa decisión. El click de este método (sin timeout propio,
+   * la versión anterior) quedaba entonces bloqueado por el propio modal ya
+   * abierto (`#dialog_rest_mod_view ... intercepts pointer events`)
+   * indefinidamente (este proyecto no configura `actionTimeout` global),
+   * agotando el timeout completo del test. Ahora se revisa primero si el
+   * modal ya está abierto (nada que hacer) y, si no, se reintenta el click
+   * de forma acotada, revisando de nuevo esa misma condición en cada
+   * intento — nunca un único click sin límite.
    */
   async abrirAditivosDeLinea(nombreProducto: string) {
     const fila = this.page.locator('#table_buy_list tr[id^="table_product_name_"]', { hasText: nombreProducto }).first();
     await expect(fila, `No se encontró en el carrito ninguna línea del producto "${nombreProducto}"`).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
-    await fila.locator(L_MESA.BTN_ADITIVOS_FILA).click();
+
+    const MAX_INTENTOS = 4;
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      if (await this.modalAditivos.isVisible().catch(() => false)) return;
+      const clickeado = await fila.locator(L_MESA.BTN_ADITIVOS_FILA)
+        .click({ timeout: 3_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (clickeado) return;
+    }
   }
 
 
@@ -765,6 +910,81 @@ export class PosRestauranteMesas {
     await expect(this.modalAditivos, 'El modal de Aditivos no se cerró').toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
 
     return nombreOpcion;
+  }
+
+
+  /**
+   * Variante de agregarProductoConAditivo() que selecciona específicamente
+   * la PRIMERA opción con precio propio (> 0), en vez de la primera opción
+   * a secas.
+   *
+   * HALLAZGO REAL detectado auditando este módulo en vivo (observado
+   * directamente por el usuario del proyecto mirando una corrida
+   * `--headed`): el catálogo de aditivos de `PRODUCTO_CON_ADITIVOS` mezcla
+   * opciones GRATIS (precio 0, ej. "HAWAIANA"/"NAPOLITADA"/"aguacate") con
+   * opciones que sí cobran (ej. "JAMON Y QUESO"/"MEXICANA"/"SUPREMA" ₡500,
+   * "doble torta" ₡1.000, "Coca con Ron" ₡2.000 — confirmado en vivo
+   * volcando el onclick real de cada opción,
+   * `select_modifier(this, <ordenId>, <clave>, <stockId>, <precio>, '<nombre>', '<color>')`).
+   * `agregarProductoConAditivo()` siempre toma `.first()` — que en este
+   * catálogo resultó ser justo una opción GRATIS, así que ningún escenario
+   * de este repo llegó a validar nunca que el precio de un aditivo real se
+   * sume al total de la línea/carrito. Se lee el precio directo del propio
+   * `onclick` (fuente más confiable que el texto visible, que muestra
+   * "Gratis" sin ningún monto cuando el precio es 0, en vez de "₡0.00").
+   */
+  async agregarProductoConAditivoConPrecio(): Promise<{ nombreOpcion: string; precio: number }> {
+    const nombre = PosRestauranteMesas.PRODUCTO_CON_ADITIVOS;
+    const producto = this.pos.productoPorNombre(nombre);
+    await expect(
+      producto,
+      `El producto de prueba "${nombre}" (con Aditivos configurados) no está en el catálogo de este ambiente`
+    ).toHaveCount(1, { timeout: TIMEOUTS.PRODUCTS_LOAD });
+
+    const filasAntes = await this.pos.obtenerClavesFilasCarrito();
+    await producto.click();
+    await expect.poll(
+      async () => (await this.pos.obtenerClavesFilasCarrito()).length,
+      { timeout: TIMEOUTS.PRODUCTS_LOAD, message: `"${nombre}" no quedó agregado al carrito de la mesa` }
+    ).toBeGreaterThan(filasAntes.length);
+
+    const abrioSolo = await this.modalAditivos
+      .waitFor({ state: 'visible', timeout: 6_000 })
+      .then(() => true)
+      .catch(() => false);
+
+    if (!abrioSolo) {
+      await this.abrirAditivosDeLinea(nombre);
+      await expect(
+        this.modalAditivos,
+        'El editor de Aditivos no abrió — este producto de prueba dejó de tener aditivos configurados en el ambiente'
+      ).toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    }
+
+    const opciones = await this.page.locator(L_MESA.MODAL_ADITIVOS_OPCION).all();
+    expect(opciones.length, 'El producto con Aditivos configurados no mostró ninguna opción seleccionable').toBeGreaterThan(0);
+
+    let elegida: Locator | null = null;
+    let nombreOpcion = '';
+    let precio = 0;
+    for (const op of opciones) {
+      const onclick = (await op.getAttribute('onclick')) ?? '';
+      const match = onclick.match(/select_modifier\([^,]+,[^,]+,[^,]+,[^,]+,\s*([\d.]+)\s*,/);
+      const precioCandidato = match ? parseFloat(match[1]) : 0;
+      if (precioCandidato > 0) {
+        elegida = op;
+        nombreOpcion = (await op.getAttribute('title')) ?? '';
+        precio = precioCandidato;
+        break;
+      }
+    }
+    expect(elegida, 'Ninguna opción de Aditivos de este producto tiene precio propio (> 0) en esta corrida — no se puede validar el impacto en el total').not.toBeNull();
+
+    await elegida!.click();
+    await this.page.locator(L_MESA.MODAL_ADITIVOS_BTN_CERRAR).click();
+    await expect(this.modalAditivos, 'El modal de Aditivos no se cerró').toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    return { nombreOpcion, precio };
   }
 
 
@@ -874,9 +1094,55 @@ export class PosRestauranteMesas {
    * abrirMesas() (mismo método ya usado por el resto del módulo para
    * "reabrir": volver a clickear la misma mesa recupera exactamente el
    * mismo carrito, la orden queda intacta del lado del servidor).
+   *
+   * CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO (1ª ronda): este era el
+   * único método de todo el módulo que hacía un único `.click()` sin el
+   * patrón de reintento acotado cerrando overlays conocidos antes de cada
+   * intento, ya usado en TODOS los demás clicks del archivo (`abrirMesas()`,
+   * `volverAProductos()`, `clickMesa()`, `_seleccionarSalonQA()`) —
+   * precisamente porque el modal de tipo de cambio (BCCR) del Dashboard
+   * puede reaparecer de forma asíncrona sobre este mismo botón. Root-cause
+   * real confirmado en vivo: sin timeout propio ni reintento, un click
+   * bloqueado por ese overlay queda esperando su propia accionabilidad
+   * indefinidamente (este proyecto no configura `actionTimeout` global) y
+   * agota el timeout COMPLETO del test (300s) terminando con "Target page,
+   * context or browser has been closed" — reproducido 2/2 en corridas
+   * reales (Escenarios 17 y 19).
+   *
+   * CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO (2ª ronda, root-cause
+   * real y definitivo — investigado con un spec dedicado tras persistir el
+   * fallo incluso con el reintento de arriba): `#close_selected_rest_order`
+   * (`count()`) directamente NO EXISTE en el DOM mientras el sub-tab activo
+   * es "Productos" — confirmado en vivo volcando el conteo real justo en el
+   * estado en el que los Escenarios 17/18/19 lo invocaban (recién vueltos de
+   * "Productos" tras agregar productos, nunca de vuelta en "MESAS"). No es
+   * un problema de timing/overlay: el reintento de la 1ª ronda solo podía
+   * agotar sus 4 intentos más rápido (20s en vez de 300s), nunca tener
+   * éxito. Se agrega `mesaId` como parámetro: reseleccionar la mesa
+   * (`abrirMesas()` + `clickMesa()`, mismo mecanismo real de "reabrir" ya
+   * usado en el resto del módulo — una mesa YA ocupada carga su orden
+   * existente, sin perder ningún producto) garantiza estar sobre la vista de
+   * la orden, donde el ícono sí existe. `abrirMesas()` es indispensable
+   * antes de `clickMesa()`, no solo este último: confirmado en vivo que la
+   * propia figura de la mesa (`#rest_table_on_plane_item_fig_<mesaId>`) NO
+   * existe en el DOM mientras el sub-tab activo sigue siendo "Productos" —
+   * un primer intento de esta corrección que omitió `abrirMesas()` fallaba
+   * igual, ahora en `clickMesa()` ("No se pudo clickear la mesa ... tras 4
+   * intentos") en vez de en el botón de cerrar.
    */
-  async cerrarOrdenSinFacturar() {
-    await this.page.locator(L_MESA.BTN_CERRAR_ORDEN_SIN_FACTURAR).click();
+  async cerrarOrdenSinFacturar(mesaId: string) {
+    await this.abrirMesas();
+    await this.clickMesa(mesaId);
+
+    const boton = this.page.locator(L_MESA.BTN_CERRAR_ORDEN_SIN_FACTURAR);
+    const MAX_INTENTOS = 4;
+    let cerrado = false;
+    for (let intento = 1; intento <= MAX_INTENTOS && !cerrado; intento++) {
+      await this.pos.cerrarOverlaysConocidos();
+      await this.pos._cerrarModalMonedaSiAparece();
+      cerrado = await boton.click({ timeout: 5_000 }).then(() => true).catch(() => false);
+    }
+    expect(cerrado, `El botón de cerrar orden sin facturar no se pudo clickear tras ${MAX_INTENTOS} intentos`).toBe(true);
     await this.abrirMesas();
   }
 
@@ -1016,7 +1282,30 @@ export class PosRestauranteMesas {
     await campoNombre.fill(nombreTemporal);
     await campoNombre.blur();
 
-    await this.page.getByRole('button', { name: 'Renombrar mesa' }).click();
+    // Click NATIVO (vía evaluate), no sintético: mismo patrón ya usado en
+    // otros botones de este módulo ("Unificar", "Renombrar mesa" del menú
+    // hamburguesa) — confirmado en vivo que este botón también lo necesita
+    // (un click sintético no deja rastro reconocible del submit real).
+    //
+    // BUG DE SISTEMA CONFIRMADO EN VIVO (investigado a fondo, NO es
+    // automatización — ver el hallazgo completo documentado como
+    // `test.fail()` en pos-restaurante-mesas.spec.ts, Escenario 5):
+    // interceptando TODA la red de la página (no solo un endpoint asumido) e
+    // inspeccionando su payload real, se confirmó que este botón (un simple
+    // `<button class="confirm">` de SweetAlert v1, sin `onclick` ni `<form>`
+    // propio) NUNCA envía ninguna petición con el nombre nuevo al backend —
+    // la única petición que dispara al confirmarlo es
+    // `updateDiscountFromRestInvoiceOrder`, cuyo payload real (confirmado en
+    // vivo) solo trae campos de descuento/impuestos/totales
+    // (`order_id`, `discount_percent`, `total`, `subtotal`, `total_tax`,
+    // etc.) — SIN NINGÚN campo de nombre. Es una coincidencia de timing (un
+    // refresco genérico de totales que el mismo callback dispara), no el
+    // mecanismo real de renombrado. El nombre nunca llega al servidor, así
+    // que nunca persiste en el plano (confirmado 3/3 corridas, incluidas 2
+    // en aislamiento total). Este método solo puede confirmar que el modal
+    // se cerró — no hay ninguna petición de red real que esperar como señal
+    // de éxito, porque el propio frontend nunca la envía.
+    await this.page.getByRole('button', { name: 'Renombrar mesa' }).evaluate((el: HTMLElement) => el.click());
 
     await expect(
       titulo,

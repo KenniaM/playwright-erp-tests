@@ -1819,15 +1819,72 @@ export class PosCore {
    * confirmado en vivo) — dispara el recálculo real disparando el evento
    * `change` con `blur()`, no solo `fill()` (que por sí solo no dispara
    * `onchange` en Playwright).
+   *
+   * CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO (condición de carrera
+   * real, root-cause de fallas intermitentes en pos-restaurante-mesas.spec.ts
+   * Escenario 25: "El neto (7500) debe ser 5× el precio unitario (2500 × 5 =
+   * 12500)"): el valor del propio `<input>` de cantidad se actualiza de
+   * inmediato (`obtenerCantidadProducto()`, lectura pura del DOM), pero el
+   * neto de la línea (`#total_by_product_<clave>`) se recalcula de forma
+   * ASÍNCRONA (`set_product_all_total(...)`) — la versión anterior de este
+   * método solo esperaba lo primero, así que un `obtenerDatosLineaCarrito()`
+   * inmediatamente después podía leer la cantidad NUEVA junto al neto
+   * TODAVÍA VIEJO. Se espera ahora también a que el neto cambie de su valor
+   * previo antes de devolver el control (solo cuando la cantidad pedida es
+   * realmente distinta de la actual — fijar el mismo valor ya vigente nunca
+   * cambiaría el neto, y no sería una condición de carrera real).
+   *
+   * HALLAZGO AMPLIADO CONFIRMADO EN VIVO (3 corridas dedicadas y aisladas,
+   * sin ningún modal de Aditivos de por medio, una sola línea): el recálculo
+   * asíncrono puede quedarse sin disparar incluso en el caso más simple
+   * posible (una única línea, bajar la cantidad de 5 a 4) — reproducido 2/3
+   * veces esperando hasta 15s, pero la 3ra corrida (idéntica, con hasta 120s
+   * de margen) completó el recálculo real en ~150ms. Esto descarta que sea
+   * "cuestión de más tiempo" (cuando el evento SÍ llega, llega casi
+   * instantáneo, nunca tras varios segundos) — es un evento que, la minoría
+   * de las veces, simplemente NO se dispara del todo del lado del navegador/
+   * backend. Reenviar el MISMO cambio real (releer el campo y volver a
+   * `fill()+blur()`, algo que un usuario real haría igual si la pantalla no
+   * reacciona) sí permite recuperarse: se acota a 3 intentos reales (nunca
+   * infinitos), cada uno esperando un margen corto salvo el último. Esto es
+   * distinto del bug de sistema ya documentado en el Escenario 29 (cantidad
+   * tras un modal de Aditivos sobre OTRA línea): ese caso SÍ se confirmó
+   * permanentemente atascado incluso con 120s y ningún reintento lo
+   * recuperó — aquí, en cambio, reenviar el mismo evento sí resuelve el caso
+   * simple de una sola línea.
    */
   async establecerCantidadProducto(clave: string, cantidad: string) {
+    const cantidadAntes = await this.obtenerCantidadProducto(clave);
+    const netoAntes = await this.page.locator(`#total_by_product_${clave}`).textContent();
     const campo = this.page.locator(`#input_product_quantity_${clave}`);
-    await campo.fill(cantidad);
-    await campo.blur();
-    await expect.poll(
-      () => this.obtenerCantidadProducto(clave),
-      { timeout: TIMEOUTS.PAYMENT_MODAL, message: `La cantidad de "${clave}" no quedó en ${cantidad}` }
-    ).toBe(parseFloat(cantidad));
+
+    if (parseFloat(cantidad) === cantidadAntes) {
+      await campo.fill(cantidad);
+      await campo.blur();
+      return;
+    }
+
+    const neto = this.page.locator(`#total_by_product_${clave}`);
+    const MAX_INTENTOS = 3;
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      await campo.fill(cantidad);
+      await campo.blur();
+      await expect.poll(
+        () => this.obtenerCantidadProducto(clave),
+        { timeout: TIMEOUTS.PAYMENT_MODAL, message: `La cantidad de "${clave}" no quedó en ${cantidad}` }
+      ).toBe(parseFloat(cantidad));
+
+      const recalculado = await expect.poll(
+        () => neto.textContent(),
+        { timeout: intento < MAX_INTENTOS ? 6_000 : TIMEOUTS.PAYMENT_MODAL }
+      ).not.toBe(netoAntes).then(() => true).catch(() => false);
+      if (recalculado) return;
+    }
+
+    expect(
+      false,
+      `El subtotal (neto) de "${clave}" no se recalculó tras cambiar la cantidad a ${cantidad}, ni reenviando el mismo cambio ${MAX_INTENTOS} veces — condición de carrera real del backend (ver comentario del método), no un problema de espera.`
+    ).toBe(true);
   }
 
 

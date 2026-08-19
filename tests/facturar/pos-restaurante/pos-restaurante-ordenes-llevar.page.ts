@@ -195,13 +195,28 @@ export class PosRestauranteOrdenesLlevar {
     // el repo para otros AJAX lentos, ver TIMEOUTS.CIERRE_CAJA) — con 15s,
     // una corrida real bajo carga expiraba aquí aunque el borrado real
     // terminara completándose igual del lado del servidor poco después.
-    const respuestaPromise = this.page.waitForResponse(
-      (res) => res.url().includes('deletePosResOrderPrev'),
-      { timeout: TIMEOUTS.PRODUCTS_LOAD }
-    );
-    await this.page.getByRole('button', { name: 'Continuar' }).click();
-    const respuesta = await respuestaPromise;
-    expect(respuesta.ok(), `"deletePosResOrderPrev" respondió con estado ${respuesta.status()}`).toBe(true);
+    //
+    // CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO (auditoría de
+    // Restaurante, Escenario 21: "Timeout 120000ms exceeded while waiting
+    // for event 'response'" — la petición nunca llegó a dispararse):
+    // reproducido con la respuesta esperando el pleno de los 120s sin que
+    // ninguna petición "deletePosResOrderPrev" existiera — indicio real de
+    // que el click sobre "Continuar" no llegó a registrarse (mismo tipo de
+    // click perdido ya documentado para otros botones de confirmación de
+    // este módulo). Reintento acotado (2 intentos) del click ANTES de
+    // esperar la respuesta, en vez de un único click confiado ciegamente.
+    const MAX_INTENTOS = 2;
+    let respuesta: import('@playwright/test').Response | undefined;
+    for (let intento = 1; intento <= MAX_INTENTOS && !respuesta; intento++) {
+      const respuestaPromise = this.page.waitForResponse(
+        (res) => res.url().includes('deletePosResOrderPrev'),
+        { timeout: intento < MAX_INTENTOS ? 20_000 : TIMEOUTS.PRODUCTS_LOAD }
+      ).catch(() => null);
+      await this.page.getByRole('button', { name: 'Continuar' }).click({ timeout: 5_000 }).catch(() => {});
+      respuesta = (await respuestaPromise) ?? undefined;
+    }
+    expect(respuesta, '"deletePosResOrderPrev" nunca se disparó tras confirmar el borrado').toBeDefined();
+    expect(respuesta!.ok(), `"deletePosResOrderPrev" respondió con estado ${respuesta!.status()}`).toBe(true);
 
     await expect(tituloModal, 'El modal de eliminar no se cerró tras confirmar').toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
   }
@@ -308,6 +323,33 @@ export class PosRestauranteOrdenesLlevar {
     await expect(sweetAlert, 'El SweetAlert de confirmación de "Para Llevar" no apareció').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
     await sweetAlert.locator('input').fill(nombreCliente);
 
+    // CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO (auditoría en vivo,
+    // investigado con un spec dedicado interceptando eventos "popup"):
+    // confirmar este SweetAlert dispara, además del POST real
+    // (`sendPosRestProductSale`), un popup automático de impresión
+    // (`about:blank`, mismo mecanismo ya documentado en
+    // `esperarVentanaImpresion()`/`PosRestauranteMesas` para comandas/pre-
+    // facturas) — este método nunca lo esperaba ni lo cerraba, dejando una
+    // pestaña sin rastrear por cada orden formal creada (8+ escenarios de
+    // este archivo llaman a este método). Se registra y cierra
+    // explícitamente, mismo criterio que el resto del repo, en vez de
+    // dejarlo como efecto colateral sin manejar.
+    //
+    // CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO (2ª ronda — indicado
+    // directamente por el usuario del proyecto mirando una corrida real: "la
+    // impresión de comanda nunca se cierra"): el primer intento de este fix
+    // solo esperaba 5s por el popup, un margen a ciegas nunca confirmado en
+    // vivo — si el popup real tarda más (mismo patrón ya documentado en
+    // esperarVentanaImpresion(), que usa TIMEOUTS.PRINT_POPUP=15s para el
+    // mismo tipo de popup), el `.catch(() => null)` resolvía a null ANTES
+    // de que el popup real llegara a existir, y el `if (popupAutomatico)`
+    // nunca se cumplía — la pestaña quedaba abierta sin que nada la
+    // cerrara. Se alarga a TIMEOUTS.PRINT_POPUP (mismo margen ya probado
+    // para este tipo de popup en el resto del repo): la promesa se arma
+    // ANTES del click igual que antes, así que esperar más no retrasa el
+    // resto del método — solo le da al popup real el tiempo que
+    // efectivamente necesita para existir antes de intentar cerrarlo.
+    const popupPromise = this.page.waitForEvent('popup', { timeout: TIMEOUTS.PRINT_POPUP }).catch(() => null);
     const respuestaPromise = this.page.waitForResponse(
       (res) => res.url().includes('sendPosRestProductSale'),
       { timeout: TIMEOUTS.PAYMENT_MODAL }
@@ -316,6 +358,9 @@ export class PosRestauranteOrdenesLlevar {
     const respuesta = await respuestaPromise;
     expect(respuesta.ok(), `"sendPosRestProductSale" respondió con estado ${respuesta.status()}`).toBe(true);
     await expect(sweetAlert, 'El SweetAlert de "Para Llevar" no se cerró tras Enviar').toBeHidden({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    const popupAutomatico = await popupPromise;
+    if (popupAutomatico) await popupAutomatico.close().catch(() => {});
 
     const idsDespues = await this.obtenerIdsOrdenesListadas();
     const idNuevo = idsDespues.find((id) => !idsAntes.has(id));
@@ -346,6 +391,79 @@ export class PosRestauranteOrdenesLlevar {
   }
 
 
+  // ─── Impresión: Pre-Factura DIVIDIDA ───────────────────────────────────
+  //
+  // Brecha de cobertura real detectada auditando este módulo en vivo
+  // (--headed, observación directa del usuario del proyecto): cada tarjeta
+  // de "Para Llevar" tiene un SEGUNDO ícono de impresión, distinto de
+  // imprimirPreFactura() de arriba —
+  // `open_modal_print_preinvoice(<id>)` (clase real `print_divided_rest_order_icon`,
+  // confirmado en vivo volcando el HTML real de la tarjeta) — nunca antes
+  // investigado ni probado. Abre un modal real y completo
+  // ("IMPRIMIR PRE-FACTURA DIVIDIDA", `#dialog_print_divided_preinvoice`,
+  // Bootstrap `data-backdrop="static"`) con un selector de doble lista:
+  // "LISTA DE PRODUCTOS" (todos los productos de la orden aún no elegidos)
+  // y "PRODUCTOS SELECCIONADOS" (el subconjunto elegido para ESTA
+  // impresión) — permite imprimir la orden completa fraccionada en más de
+  // una pre-factura, cada una con un subconjunto distinto de productos, sin
+  // límite de cuántas veces se repita el flujo. Mecanismo real confirmado
+  // en vivo: cada producto de la lista izquierda es un
+  // `<li onclick="item_left_change(this, '<id>')">` — clickearlo lo mueve a
+  // la lista derecha (confirmado con datos reales: el total del panel
+  // derecho reflejó exactamente el precio del producto recién movido, ₡0 →
+  // ₡2,825.00 tras mover un único producto).
+  get modalPreFacturaDividida(): Locator {
+    return this.page.locator('#dialog_print_divided_preinvoice');
+  }
+
+  /**
+   * Abre el selector de "Pre-factura dividida" de la orden dada, mueve el
+   * primer producto disponible de "Lista de productos" a "Productos
+   * Seleccionados", imprime, y confirma que la ventana de impresión se
+   * abrió (misma limitación de contenido ya documentada para
+   * imprimirPreFactura()/PosRestauranteMesas: solo se puede confirmar que
+   * el popup se abrió, no leer su contenido).
+   */
+  async imprimirPreFacturaDividida(ordenId: string): Promise<void> {
+    const tarjeta = this.page.locator(L_LLEVAR.TARJETA_ORDEN(ordenId));
+    await tarjeta.locator('[onclick*="open_modal_print_preinvoice"]').evaluate((el: HTMLElement) => el.click());
+
+    const modal = this.modalPreFacturaDividida;
+    await expect(modal, 'El modal "Imprimir pre-factura dividida" no apareció').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    const primerProducto = modal.locator('.left_side_box li').first();
+    await expect(primerProducto, 'La lista de productos del modal de pre-factura dividida está vacía').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+
+    const totalIzquierdo = modal.locator('#total_list_left_preinvoice');
+    const totalAntes = await totalIzquierdo.textContent();
+
+    // CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO: un click sintético
+    // sobre este `<li onclick="item_left_change(...)">` no siempre deja
+    // rastro reconocible del evento real (mismo patrón ya confirmado en
+    // otros widgets personalizados de este módulo — "Renombrar mesa",
+    // "Unificar mesas") — reproducido en vivo: el total izquierdo quedó
+    // exactamente igual tras el click sintético. Reintento acotado con
+    // click NATIVO (vía evaluate), verificando en cada intento si el total
+    // ya cambió antes de reintentar.
+    const MAX_INTENTOS = 4;
+    let movido = false;
+    for (let intento = 1; intento <= MAX_INTENTOS && !movido; intento++) {
+      await primerProducto.evaluate((el: HTMLElement) => el.click());
+      movido = await expect.poll(
+        () => totalIzquierdo.textContent(),
+        { timeout: 5_000 }
+      ).not.toBe(totalAntes).then(() => true).catch(() => false);
+    }
+    expect(movido, 'El producto no se movió de "Lista de productos" (su total no cambió) tras varios intentos').toBe(true);
+
+    await esperarVentanaImpresion(
+      this.page,
+      () => modal.getByText('IMPRIMIR', { exact: true }).click(),
+      TIMEOUTS.PRINT_POPUP
+    );
+  }
+
+
   // ─── Cliente ──────────────────────────────────────────────────────────
   //
   // No se reimplementa nada aquí: confirmado en vivo que tanto el buscador
@@ -368,9 +486,17 @@ export class PosRestauranteOrdenesLlevar {
    * producto con aditivos configurados desde "Para Llevar" (mismo catálogo
    * de productos de la compañía), confirmado en vivo.
    */
+  /**
+   * CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO: mismo timeout
+   * insuficiente (3_000ms) confirmado y corregido en
+   * `PosRestauranteMesas._cerrarModalAditivosSiApareceAutomaticamente()`
+   * (root-cause real de un cuelgue de 300s reproducido 3/3 veces en Mesas,
+   * Escenario 18) — ampliado igual a 8s aquí, mismo popup real y mismo
+   * catálogo de productos compartido entre ambos módulos.
+   */
   async _cerrarModalAditivosSiApareceAutomaticamente() {
     const modal = this.page.locator('#dialog_rest_mod_view');
-    const abierto = await modal.waitFor({ state: 'visible', timeout: 3_000 }).then(() => true).catch(() => false);
+    const abierto = await modal.waitFor({ state: 'visible', timeout: 8_000 }).then(() => true).catch(() => false);
     if (!abierto) return;
 
     await this.page.locator('#closeBtnModifierView').click().catch(() => {});

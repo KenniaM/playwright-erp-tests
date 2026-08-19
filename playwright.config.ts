@@ -205,6 +205,12 @@ const TODOS_LOS_PROYECTOS = [
     use: {
       ...devices['Desktop Firefox'],
       storageState: 'playwright/.auth/restaurant.json',
+      // TEMPORAL — ajuste solo para una demo en vivo pedida por el usuario
+      // (ventana headed muy pequeña, acciones demasiado rápidas para seguir
+      // a simple vista). Revertir tras la demo, no es un cambio permanente
+      // de la suite.
+      viewport: { width: 1600, height: 1000 },
+      launchOptions: { slowMo: 500 },
     },
     dependencies: ['setup-restaurant'],
   },

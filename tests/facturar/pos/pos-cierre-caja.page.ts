@@ -116,13 +116,29 @@ export class PosCierreCaja {
    * si un overlay transitorio del encabezado (banner de notificaciones, un
    * toast) está tapando el <li> en ese instante, un click sin límite propio
    * puede quedar bloqueado hasta agotar los 300 s del test entero — confirmado
-   * en vivo. Con un límite corto, el bucle de reintento que llama a este método
-   * puede volver a intentar en vez de quedar colgado en un único click.
+   * en vivo.
+   *
+   * CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO (auditoría de
+   * Restaurante — Órdenes para Llevar, Escenario 18: "Timeout 5000ms
+   * exceeded... element is not visible"): el JSDoc original de este método
+   * asumía que "el bucle de reintento que llama a este método" se encargaba
+   * de reintentar, pero no todos los llamadores lo envuelven en uno propio
+   * (`abrirDetalleDeCierre()` sí; el flujo de Órdenes para Llevar lo
+   * invocaba directo, un único intento). Se agrega el mismo reintento
+   * acotado (4 intentos, cerrando overlays antes de cada uno) que ya usa
+   * `abrirMenuCaja()` un método arriba — el método queda resiliente por sí
+   * mismo, sin depender de que cada sitio de llamada lo recuerde.
    */
   async seleccionarAbrirCerrarCaja() {
-    await this.core.cerrarModalNotificacionesSiAparece();
-    await this.core.cerrarTodosLosToastsSiAparecen();
-    await this.page.locator('li', { hasText: L.MENU_CAJA_ITEM_F12 }).click({ timeout: 5_000 });
+    const item = this.page.locator('li', { hasText: L.MENU_CAJA_ITEM_F12 });
+    const MAX_INTENTOS = 4;
+    let clickeado = false;
+    for (let intento = 1; intento <= MAX_INTENTOS && !clickeado; intento++) {
+      await this.core.cerrarModalNotificacionesSiAparece();
+      await this.core.cerrarTodosLosToastsSiAparecen();
+      clickeado = await item.click({ timeout: 5_000 }).then(() => true).catch(() => false);
+    }
+    expect(clickeado, `El ítem "Abrir/Cerrar Caja" no se pudo clickear tras ${MAX_INTENTOS} intentos`).toBe(true);
   }
 
 

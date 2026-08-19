@@ -324,6 +324,25 @@ export class HistoricoVentasPage {
    * `leerFormaDePagoFacturaAbierta()` (sin clase CSS propia por campo,
    * acotado entre el encabezado real "Resumen de totales" y el pie de
    * página real "TallerAlpha - Versión", presente en toda la pantalla).
+   *
+   * CORRECCIÓN DE AUTOMATIZACIÓN CONFIRMADA EN VIVO (bug real, root-cause de
+   * `resumen.total` devolviendo el mismo valor que `resumen.subtotal` — hallazgo
+   * de la auditoría de Restaurante, Escenario 28 de pos-restaurante-mesas.spec.ts:
+   * "El total en Histórico (4500) debe coincidir con el facturado (4825)",
+   * con `subtotal` e `impuestos:0` sugiriendo el mismo número mal leído dos
+   * veces): `leerMonto('TOTAL')` (la versión anterior, sin límite de
+   * palabra) buscaba la subcadena "total" en CUALQUIER posición del texto,
+   * case-insensitive — y "Subtotal" CONTIENE literalmente "total" como
+   * subcadena. Como "Subtotal" siempre aparece ANTES que "TOTAL" en la
+   * sección "Resumen de totales", `.exec()` (sin flag `g`, se queda con el
+   * PRIMER match) encontraba y devolvía el valor del Subtotal disfrazado de
+   * TOTAL, siempre — nunca llegaba a leer la línea real de TOTAL. El único
+   * test que ya validaba este método (`historico-ventas.spec.ts`, "Detalle
+   * de factura") usa deliberadamente un escenario sin descuento ni impuestos
+   * (subtotal===total), así que el bug quedaba enmascarado ahí: ambos
+   * campos coincidían igual, por la razón equivocada. Se agrega un límite de
+   * palabra real (lookbehind negativo: la etiqueta no puede estar precedida
+   * de una letra) para que "TOTAL" nunca matchee dentro de "Subtotal".
    */
   async leerResumenTotalesFactura(): Promise<ResumenTotalesFactura> {
     const bodyTexto = await this.page.locator('body').innerText();
@@ -332,7 +351,7 @@ export class HistoricoVentasPage {
     const texto = inicio >= 0 ? bodyTexto.slice(inicio, fin >= 0 ? fin : undefined) : bodyTexto;
 
     const leerMonto = (etiqueta: string): number => {
-      const m = new RegExp(`${etiqueta}:?\\s*[A-Za-z$₡]*\\s*(-?[0-9.,]+)`, 'i').exec(texto);
+      const m = new RegExp(`(?<![A-Za-z])${etiqueta}:?\\s*[A-Za-z$₡]*\\s*(-?[0-9.,]+)`, 'i').exec(texto);
       if (!m) return 0;
       const crudo = m[1];
       const limpio = crudo.lastIndexOf(',') > crudo.lastIndexOf('.')
