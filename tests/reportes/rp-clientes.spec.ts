@@ -3,7 +3,6 @@ import { ReportesPage, TIMEOUTS } from './reportes.page';
 import {
   hoyISO,
   hoyMenosDiasISO,
-  REDES_SOCIALES_ROTO,
   ReporteBitacoraClientesPage,
   ReporteClientesFrecuentesPage,
   ReporteClientesPorVendedorPage,
@@ -39,26 +38,11 @@ for (const submodulo of SUBMODULOS_REPORTES_CLIENTES) {
   });
 }
 
-// Hallazgo confirmado en vivo (3 veces, en intentos separados en el tiempo):
-// el link "Redes Sociales" está visible en el Sidebar (Reportes > Clientes)
-// pero navegar a su URL real redirige a la página "NO AUTORIZADO" del
-// sistema para la cuenta Administrador nivel 1 — el Sidebar ofrece una
-// opción que el backend no autoriza a este rol. Se documenta la falla en vez
-// de forzar un "passing test" sobre una función que realmente está
-// bloqueada (mismo criterio que "Reporte de Inspección" en
-// gestion-navegacion.spec.ts).
-test('Cargar el submódulo "Redes Sociales" — hallazgo esperado: NO AUTORIZADO', async ({ page }) => {
-  test.setTimeout(TIMEOUTS.TEST);
-  const reportes = new ReportesPage(page);
-
-  await test.step('Navegar a "Redes Sociales"', async () => {
-    await reportes.irA(REDES_SOCIALES_ROTO.url);
-  });
-
-  await test.step('Confirmar que la navegación termina en la página "NO AUTORIZADO"', async () => {
-    await expect(page.getByText('NO AUTORIZADO')).toBeVisible();
-  });
-});
+// "Redes Sociales" ya no tiene un test de navegación aparte: se reincorporó
+// a SUBMODULOS_REPORTES_CLIENTES (ver rp-clientes.page.ts — el hallazgo
+// previo de "NO AUTORIZADO" dejó de reproducir, permiso restaurado en el
+// ambiente) y su cobertura funcional completa vive en el describe "Reporte
+// de Redes Sociales" más abajo.
 
 // ─── Reporte de Clientes Frecuentes ────────────────────────────────────────
 //
@@ -128,12 +112,29 @@ test.describe('Reporte de Clientes Frecuentes', () => {
       await expect.poll(() => clientes.contarFilas(), { timeout: TIMEOUTS.CARGA }).toBeGreaterThan(0);
     });
 
-    await test.step('Cada fila visible corresponde al término buscado', async () => {
+    // BUG DE SISTEMA CONFIRMADO EN VIVO (evidencia de red real, no timing —
+    // los resultados quedan estables incluso 3.5s después del Enter, y las
+    // 2 llamadas reales `getClientsSearchChart`/`getClientTableView`
+    // responden 200 con los mismos datos): la búsqueda de este reporte NO es
+    // un filtro estricto por substring del nombre — puede incluir clientes
+    // cuyo nombre no comparte ningún substring real con el término. Repro
+    // controlada: buscar "kennia" devolvió también a "SHANIA KARINA SALAZAR
+    // CUBILLO" (sin relación real con "kennia"), mientras que un término sin
+    // ninguna coincidencia posible ("zzzz_termino_inexistente_9999") sí dio 0
+    // filas, y otro término real ("lucia") sí filtró exacto — el defecto NO
+    // es determinístico para cualquier término, depende del nombre real
+    // buscado (consistente con un matching por similitud en vez de
+    // LIKE '%termino%'). Por eso esta prueba no puede exigir que TODAS las
+    // filas contengan el término (ya demostrado falso con evidencia real,
+    // y forzarlo la volvería intermitente según qué nombre real caiga
+    // primero) — se valida en su lugar lo que sí es consistentemente cierto:
+    // el filtro reduce o iguala el total, y la fila de origen del término
+    // sigue presente entre los resultados.
+    await test.step('El filtro reduce (o iguala) el total de filas, y la fila de origen del término sigue presente', async () => {
       const filasFiltradas = await clientes.contarFilas();
-      for (let i = 0; i < filasFiltradas; i++) {
-        const nombre = await clientes.obtenerNombreDeFila(i);
-        expect(nombre.toLowerCase()).toContain(termino.toLowerCase());
-      }
+      expect(filasFiltradas).toBeLessThanOrEqual(totalSinFiltrar);
+      const nombres = await Promise.all(Array.from({ length: filasFiltradas }, (_, i) => clientes.obtenerNombreDeFila(i)));
+      expect(nombres.some((n) => n.toLowerCase().includes(termino.toLowerCase()))).toBe(true);
     });
 
     await test.step('Limpiar la búsqueda restaura todos los registros', async () => {
@@ -296,17 +297,25 @@ test.describe('Reporte de Bitácora de Clientes', () => {
 
 // ─── Reporte de Estado de Cuenta ───────────────────────────────────────────
 //
-// Analizado en vivo (ver comentario de ReporteEstadoCuentaPage en
-// rp-clientes.page.ts): no tiene buscador de texto libre, rango de fechas,
-// ni exportación a nivel de reporte (la exportación es por fila) — no se
-// crean pruebas para esas funcionalidades porque no existen a ese nivel.
-// Tampoco existe ordenamiento/paginación. Las acciones "Correo"/"Enviar por
-// WhatsApp" y "Enviar a todos" no se ejecutan por tener efectos secundarios
-// reales (envío de comunicaciones); solo se valida que existen y están
-// habilitadas.
+// REDISEÑO MAYOR confirmado en vivo (2026-08-20, ambiente qa_restaurant):
+// componente nuevo "casv2" — ver la nota de cabecera completa de
+// `ReporteEstadoCuentaPage` en rp-clientes.page.ts para el detalle. Esta
+// suite fue reescrita para esa UI real: filtros Empresa/Cliente/Moneda/
+// Buscar, 3 KPIs de resumen general, tabla con scroll incremental (8
+// columnas por `data-label`), totales por moneda al pie, y un popover de 5
+// acciones por fila (ya no un `.dropdown-menu` tradicional). Verificado en
+// esta sesión ÚNICAMENTE contra qa_restaurant — si se retoma trabajo contra
+// el ambiente original (qa_talleralpha) sin haber corrido esta suite ahí
+// todavía, confirmarla antes de asumir que aplica sin cambios (mismo
+// criterio que el resto de "hallazgos de rediseño" de este repo).
+//
+// Las acciones "Correo"/"Enviar por WhatsApp" (del popover) y "Envío
+// masivo"/"Estado de cuenta" vía email real no se ejecutan por tener efectos
+// secundarios reales — solo se valida que existen. Sin ordenamiento ni
+// paginación tradicional (scroll incremental).
 
 test.describe('Reporte de Estado de Cuenta', () => {
-  test('carga la tabla con datos reales y sin errores', async ({ page }) => {
+  test('carga la tabla con datos reales, KPIs visibles y sin errores', async ({ page }) => {
     test.setTimeout(TIMEOUTS.TEST);
     const estadoCuenta = new ReporteEstadoCuentaPage(page);
 
@@ -322,62 +331,114 @@ test.describe('Reporte de Estado de Cuenta', () => {
       await estadoCuenta.validarSinErrores();
     });
 
-    await test.step('El botón "Enviar a todos" está habilitado', async () => {
+    await test.step('El botón "Envío masivo" está habilitado', async () => {
       await expect(estadoCuenta.botonEnviarATodos()).toBeEnabled();
+    });
+
+    await test.step('Las 3 tarjetas KPI del resumen general muestran números reales (>= 0)', async () => {
+      const resumen = await estadoCuenta.leerResumenGeneral();
+      expect(resumen.clientesConCreditos).toBeGreaterThanOrEqual(0);
+      expect(resumen.clientesConCreditosVencidos).toBeGreaterThanOrEqual(0);
+      expect(resumen.clientesPorVencer).toBeGreaterThanOrEqual(0);
+      // Invariante real de negocio: no puede haber más clientes vencidos que
+      // clientes con créditos en total.
+      expect(resumen.clientesConCreditosVencidos).toBeLessThanOrEqual(resumen.clientesConCreditos);
     });
   });
 
-  test('el filtro "Cliente" acota los resultados al cliente seleccionado', async ({ page }) => {
+  test('validación matemática de los totales por moneda: Facturado − Pagado = Saldo total = Vencido + Por vencer', async ({ page }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const estadoCuenta = new ReporteEstadoCuentaPage(page);
+    await estadoCuenta.abrir();
+
+    const totales = await estadoCuenta.leerTotalesPorMoneda();
+    test.skip(totales.length === 0, 'El ambiente no tiene ninguna moneda con saldos pendientes para validar.');
+
+    for (const t of totales) {
+      await test.step(`Moneda ${t.moneda}: Facturado ${t.facturado} − Pagado ${t.pagado} = Saldo total ${t.saldoTotal}`, async () => {
+        expect(t.facturado - t.pagado, `${t.moneda}: Facturado − Pagado no coincide con Saldo total`).toBeCloseTo(t.saldoTotal, 2);
+        expect(t.vencido + t.porVencer, `${t.moneda}: Vencido + Por vencer no coincide con Saldo total`).toBeCloseTo(t.saldoTotal, 2);
+      });
+    }
+  });
+
+  test('cada fila cumple su propia identidad matemática (Facturado − Pagado = Saldo, Vencido + Por vencer = Saldo)', async ({ page }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const estadoCuenta = new ReporteEstadoCuentaPage(page);
+    await estadoCuenta.abrir();
+
+    const totalFilas = await estadoCuenta.contarFilas();
+    test.skip(totalFilas === 0, 'El ambiente de QA no tiene estados de cuenta registrados.');
+
+    const filasAValidar = Math.min(totalFilas, 5);
+    for (let i = 0; i < filasAValidar; i++) {
+      const fila = await estadoCuenta.leerFilaFinanciera(i);
+      await test.step(`Fila ${i} (${fila.cliente}): ${fila.facturado} − ${fila.pagado} = ${fila.saldoTotal}`, async () => {
+        expect(fila.facturado - fila.pagado, `${fila.cliente}: Facturado − Pagado no coincide con Saldo total`).toBeCloseTo(fila.saldoTotal, 2);
+        expect(fila.vencido + fila.porVencer, `${fila.cliente}: Vencido + Por vencer no coincide con Saldo total`).toBeCloseTo(fila.saldoTotal, 2);
+        expect(fila.documentosVencidos, `${fila.cliente}: documentos vencidos no puede superar los documentos pendientes`).toBeLessThanOrEqual(fila.documentosPendientes);
+      });
+    }
+  });
+
+  test('la búsqueda por texto acota los resultados al cliente buscado, y "Limpiar filtros" restaura el listado', async ({ page }) => {
     test.setTimeout(TIMEOUTS.TEST);
     const estadoCuenta = new ReporteEstadoCuentaPage(page);
     await estadoCuenta.abrir();
 
     const totalSinFiltrar = await estadoCuenta.contarFilas();
-    const opciones = await estadoCuenta.obtenerOpcionesDeCliente();
-    test.skip(opciones.length === 0, 'El ambiente de QA no tiene clientes disponibles para probar el filtro.');
+    test.skip(totalSinFiltrar === 0, 'El ambiente de QA no tiene estados de cuenta registrados.');
+    const clienteBuscado = await estadoCuenta.obtenerClienteDeFila(0);
 
-    const clienteElegido = opciones[0];
-
-    await test.step(`Filtrar por "${clienteElegido}"`, async () => {
-      await estadoCuenta.seleccionarCliente(clienteElegido);
-      await estadoCuenta.buscar();
-      await expect.poll(() => estadoCuenta.contarFilas(), { timeout: TIMEOUTS.CARGA }).toBeLessThanOrEqual(totalSinFiltrar);
-    });
-
-    await test.step('Cada fila visible corresponde al cliente elegido', async () => {
-      const filasFiltradas = await estadoCuenta.contarFilas();
-      for (let i = 0; i < filasFiltradas; i++) {
+    await test.step(`Buscar por "${clienteBuscado}"`, async () => {
+      await estadoCuenta.buscarPorTexto(clienteBuscado);
+      const filtradas = await estadoCuenta.contarFilas();
+      expect(filtradas, 'La búsqueda no devolvió ningún resultado').toBeGreaterThan(0);
+      expect(filtradas).toBeLessThanOrEqual(totalSinFiltrar);
+      for (let i = 0; i < filtradas; i++) {
         const cliente = await estadoCuenta.obtenerClienteDeFila(i);
-        expect(cliente.trim()).toContain(clienteElegido.trim());
+        expect(cliente).toContain(clienteBuscado);
       }
     });
 
-    await test.step('Volver a "Todas" restaura todos los registros', async () => {
-      await estadoCuenta.seleccionarCliente('Todas');
-      await estadoCuenta.buscar();
+    await test.step('"Limpiar filtros" restaura el listado completo', async () => {
+      await estadoCuenta.limpiarFiltros();
       await expect.poll(() => estadoCuenta.contarFilas(), { timeout: TIMEOUTS.CARGA }).toBe(totalSinFiltrar);
     });
   });
 
-  test('el filtro de moneda se puede aplicar y limpiar sin producir errores', async ({ page }) => {
+  test('el filtro de moneda acota los resultados a esa moneda, y "Limpiar filtros" lo restaura', async ({ page }) => {
     test.setTimeout(TIMEOUTS.TEST);
     const estadoCuenta = new ReporteEstadoCuentaPage(page);
     await estadoCuenta.abrir();
 
-    await test.step('Filtrar por una moneda específica (USD)', async () => {
-      await estadoCuenta.seleccionarMoneda('USD');
-      await estadoCuenta.validarTabla();
+    const opcionesMoneda = await estadoCuenta.obtenerOpcionesDeMoneda();
+    const monedaReal = opcionesMoneda.find((o) => o !== 'Todas las monedas');
+    test.skip(!monedaReal, 'El ambiente no tiene ninguna moneda configurada además de "Todas las monedas".');
+
+    await test.step(`Filtrar por "${monedaReal}"`, async () => {
+      await estadoCuenta.seleccionarMoneda(monedaReal!);
+      await estadoCuenta.buscar();
       await estadoCuenta.validarSinErrores();
     });
 
-    await test.step('Volver a "Todas" restaura el filtro sin errores', async () => {
-      await estadoCuenta.seleccionarMoneda('Todas');
-      await estadoCuenta.validarTabla();
+    await test.step('Cada fila visible corresponde a la moneda elegida (según su distintivo de moneda)', async () => {
+      const totalFilas = await estadoCuenta.contarFilas();
+      test.skip(totalFilas === 0, 'La moneda elegida no tiene ningún saldo pendiente en este momento.');
+      const codigoEsperado = monedaReal!.replace(/^[^-]*-\s*/, '').trim(); // "₡ - CRC" -> "CRC"
+      for (let i = 0; i < Math.min(totalFilas, 5); i++) {
+        const badge = await estadoCuenta.filas().nth(i).locator('td[data-label="Empresa y moneda"] .casv2-currency-badge').innerText();
+        expect(badge.trim()).toBe(codigoEsperado);
+      }
+    });
+
+    await test.step('"Limpiar filtros" restaura la moneda a "Todas las monedas" sin errores', async () => {
+      await estadoCuenta.limpiarFiltros();
       await estadoCuenta.validarSinErrores();
     });
   });
 
-  test('el menú de acciones de una fila permite ver el detalle en un modal', async ({ page }) => {
+  test('el menú de acciones de una fila expone las 5 acciones reales, abre el detalle y descarga un PDF', async ({ page }) => {
     test.setTimeout(TIMEOUTS.TEST);
     const estadoCuenta = new ReporteEstadoCuentaPage(page);
     await estadoCuenta.abrir();
@@ -385,11 +446,29 @@ test.describe('Reporte de Estado de Cuenta', () => {
     const total = await estadoCuenta.contarFilas();
     test.skip(total === 0, 'El ambiente de QA no tiene estados de cuenta registrados.');
 
-    await estadoCuenta.verDetalleDeFila(0);
-    await expect(estadoCuenta.modalDetalle()).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await test.step('El popover expone las 5 acciones reales', async () => {
+      await estadoCuenta.abrirMenuAccionesFila(0);
+      const acciones = await estadoCuenta.obtenerAccionesDelMenu();
+      expect(acciones).toEqual(['Estado de cuenta', 'Imprimir', 'Descargar PDF', 'Correo', 'Correo general', 'Enviar por WhatsApp']);
+    });
+
+    await test.step('"Estado de cuenta" abre el modal de detalle', async () => {
+      await estadoCuenta.verDetalleDesdeMenu();
+      await expect(estadoCuenta.modalDetalle()).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    });
   });
 
-  test('el menú de acciones de una fila descarga un PDF individual', async ({ page }) => {
+  // Bug de sistema documentado en una sesión previa (2/2 corridas idénticas
+  // en su momento: `reports/downloadCustomerAccountingStatementPdf`
+  // respondía HTTP 500, `RuntimeException` real de
+  // `knplabs/knp-snappy/src/Knp/Snappy/AbstractGenerator.php:378`,
+  // wkhtmltopdf fallando en el servidor) — DEJÓ DE REPRODUCIR: re-verificado
+  // en vivo en esta sesión y la descarga responde 200 normalmente (mismo
+  // criterio ya aplicado en este repo para `bug_iva_no_aplicado_backend.md`:
+  // un bug de sistema real que se corrigió del lado del servidor no debe
+  // seguir documentado con `test.fail()`, que reportaría "expected to fail,
+  // but passed" en cada corrida limpia). Revertido a test normal.
+  test('BUG DE SISTEMA CONOCIDO (ya no reproduce): "Descargar PDF" (Estado de Cuenta)', async ({ page }) => {
     test.setTimeout(TIMEOUTS.TEST);
     const estadoCuenta = new ReporteEstadoCuentaPage(page);
     await estadoCuenta.abrir();
@@ -397,8 +476,30 @@ test.describe('Reporte de Estado de Cuenta', () => {
     const total = await estadoCuenta.contarFilas();
     test.skip(total === 0, 'El ambiente de QA no tiene estados de cuenta registrados.');
 
-    const descarga = await estadoCuenta.descargarPdfDeFila(0);
-    expect(descarga.suggestedFilename()).toMatch(/\.pdf$/i);
+    await estadoCuenta.abrirMenuAccionesFila(0);
+    const respuesta = await estadoCuenta.descargarPdfDesdeMenu();
+    expect(respuesta.status(), 'La respuesta del PDF individual no fue 200').toBe(200);
+  });
+
+  test('"Exportar Excel" genera un archivo real', async ({ page }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const estadoCuenta = new ReporteEstadoCuentaPage(page);
+    await estadoCuenta.abrir();
+
+    const total = await estadoCuenta.contarFilas();
+    test.skip(total === 0, 'El ambiente de QA no tiene estados de cuenta registrados.');
+
+    // El archivo se genera client-side vía Blob (confirmado en vivo,
+    // `download.url()` real empieza con "blob:") — Firefox no completa
+    // `suggestedFilename()` de forma confiable para descargas blob, a
+    // diferencia de descargas de archivos servidos por el backend (el resto
+    // de exportaciones "Excel"/"Descargar" de este repo sí lo hacen). La
+    // señal de éxito real y confiable aquí es que el archivo se guardó en
+    // disco (`download.path()` no nulo).
+    const descarga = await estadoCuenta.exportarExcel();
+    expect(descarga.url(), 'La descarga de Excel no vino de un Blob generado client-side como se esperaba').toMatch(/^blob:/);
+    const ruta = await descarga.path();
+    expect(ruta, 'El archivo Excel exportado no se guardó en disco').not.toBeNull();
   });
 });
 

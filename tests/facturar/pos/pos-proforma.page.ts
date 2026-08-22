@@ -247,7 +247,7 @@ export class PosProforma {
    * nombre sugerido sigue el patrón "PROFORMA #<número>.pdf".
    */
   async descargarPdfProforma(): Promise<Download> {
-    const downloadPromise = this.page.waitForEvent('download', { timeout: TIMEOUTS.PRINT_POPUP });
+    const downloadPromise = this.page.waitForEvent('download', { timeout: TIMEOUTS.PDF_PROFORMA_CLIENTE });
     await this.page.locator(L.GESTION_PROFORMA_BTN_PDF).click();
     return downloadPromise;
   }
@@ -850,7 +850,7 @@ export class PosProforma {
    */
   async descargarPdfProformaDesdeTab(tarjeta: Locator): Promise<Download> {
     await this.abrirMenuDeTarjeta(tarjeta);
-    const downloadPromise = this.page.waitForEvent('download', { timeout: TIMEOUTS.PRINT_POPUP });
+    const downloadPromise = this.page.waitForEvent('download', { timeout: TIMEOUTS.PDF_PROFORMA_CLIENTE });
     await tarjeta.locator(L.PROFORMA_TAB_MENU_LINK_PDF).click();
     return downloadPromise;
   }
@@ -941,7 +941,7 @@ export class PosProforma {
    * descargarPdfProforma().
    */
   async descargarPdfProformaSeleccionadaDelListado(listado: Page): Promise<Download> {
-    const downloadPromise = listado.waitForEvent('download', { timeout: TIMEOUTS.PRINT_POPUP });
+    const downloadPromise = listado.waitForEvent('download', { timeout: TIMEOUTS.PDF_PROFORMA_CLIENTE });
     await listado.locator(L.LISTADO_PROFORMA_BTN_PDF).click();
     return downloadPromise;
   }

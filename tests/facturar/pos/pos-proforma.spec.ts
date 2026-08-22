@@ -638,6 +638,63 @@ test.describe('Proformas — Gestión', () => {
     await pos.cerrarModalGestionProforma();
   });
 
+  // ─── BUG DE SISTEMA CONFIRMADO EN VIVO (no cubierto por este test — ver nota) ──
+  //
+  // Investigación de moneda en Cotizaciones (2026-08-20): el PDF real que
+  // genera `descargarPdfProforma()` (endpoint `downloadProformPdf`, DISTINTO
+  // del PDF de una Orden de Taller — `generateProformOrderPDF`, ese sí
+  // correcto) tiene el símbolo de moneda **"L" (Lempira) HARDCODEADO** en 5
+  // etiquetas de la sección de impuestos: "Total Exento L:", "Importe
+  // gravado 15.00% L:", "Importe gravado 18.00% L:", "ISV 15.00% L:", "ISV
+  // 18.00% L:" — sin importar cuál sea la moneda real de la Proforma. Los
+  // MONTOS junto a esas etiquetas SÍ usan el símbolo correcto de la moneda
+  // real (confirmado con 2 PDFs reales descargados y leídos directamente,
+  // no solo inspeccionados por texto):
+  //   - Proforma en moneda BASE ($, dólares): "Total Exento L: $9,000.00",
+  //     "ISV 15.00% L: $0.00" — etiqueta dice "L", monto en "$".
+  //   - Proforma en moneda NO BASE (₡, colones): "Total Exento L:
+  //     ₡5,715,000.00", "ISV 15.00% L: ₡0.00" — MISMA etiqueta "L" pese a
+  //     que la moneda real es otra — confirma que el símbolo "L" de esas 5
+  //     etiquetas está fijo en la plantilla del PDF, no calculado
+  //     dinámicamente a partir de la moneda real (probablemente la
+  //     plantilla se diseñó originalmente pensando en Lempira hondureño
+  //     como moneda fija y nunca se actualizó para usar el símbolo real).
+  //   - El resto del documento (Subtotal/Descuento/Total, y el propio
+  //     monto junto a cada etiqueta de impuesto) SÍ refleja correctamente
+  //     la moneda real en ambos casos.
+  //
+  // AMPLIADO (misma investigación, confirmaciones adicionales en vivo):
+  //   - El mismo bug (etiqueta "L" fija) aparece TAMBIÉN en la ventana de
+  //     "Imprimir" (`imprimirProforma()`, texto idéntico al PDF — misma
+  //     plantilla compartida por ambas acciones) y en el PDF descargado
+  //     desde el modal "¡Enviar WhatsApp!" (`descargarProformaDesdeModalWhatsApp()`,
+  //     endpoint `downloadWhatsappDocument('proforma', ...)`, DISTINTO de
+  //     `downloadProformPdf` pero con el mismo defecto) — no es exclusivo
+  //     de un solo botón/endpoint, es un problema de la plantilla/lógica de
+  //     formato compartida entre las 3 vías.
+  //   - Confirmado con un producto que SÍ tiene IVA real (10%, no solo
+  //     casos en $0.00): "Importe gravado 10.00% L: $909.09", "ISV 10.00%
+  //     L: $90.91" — el símbolo "L" aparece sin importar el monto real,
+  //     no es un caso especial de montos en cero.
+  //   - HALLAZGO MÁS GRAVE, específico del documento de WhatsApp: la
+  //     primera línea ("Total Exento") en ese documento concreto apareció
+  //     como "Total Exento L: **0.00**" — el monto SIN NINGÚN símbolo de
+  //     moneda (ni "L" ni el símbolo real), mientras las líneas
+  //     inmediatamente debajo sí muestran "$0.00" correctamente con
+  //     símbolo. Es el caso más literal encontrado en toda la investigación
+  //     de "el símbolo de moneda no se visualiza" — no solo un símbolo
+  //     incorrecto (L en vez de la moneda real), sino la AUSENCIA total del
+  //     símbolo en un monto específico del mismo documento.
+  //
+  // No se agregó un test permanente que verifique esto automáticamente: no
+  // hay ninguna librería de parsing de PDF instalada en el proyecto (ni
+  // `pdftotext` disponible en el sistema) para leer el texto del documento
+  // desde el código, y el usuario pidió explícitamente documentarlo aquí en
+  // vez de instalar una dependencia nueva — decisión consciente, no un
+  // olvido. Si se retoma: instalar `pdf-parse` (u otra librería equivalente
+  // sin dependencias nativas) permitiría un test real que descargue el PDF
+  // y falle si esas 5 etiquetas siguen mostrando "L" con una moneda real
+  // distinta.
   test('Descargar el PDF de una Proforma', async ({ pos }) => {
     test.setTimeout(TIMEOUTS.TEST);
     await agregarProductoNormalAlCarrito(pos);

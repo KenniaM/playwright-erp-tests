@@ -225,6 +225,45 @@ test.describe('Reporte de Gastos Operativos', () => {
     expect(seAbrioVentanaNueva).toBe(true);
     await gastos.validarSinErrores();
   });
+
+  test('la pantalla no expone ningún filtro/campo adicional a los ya documentados (categoría/moneda/método de pago/proveedor/cliente/estado/usuario/sucursal/caja)', async ({ page }) => {
+    test.setTimeout(TIMEOUTS.TEST);
+    const gastos = new ReporteGastosOperativosPage(page);
+    await gastos.abrirReporteGastosOperativos();
+
+    // Excluye explícitamente todo lo que viva dentro de #dialog_add_family_expenses:
+    // ese modal ya está presente en el DOM (oculto) antes de abrirse, así que un
+    // selector sin acotar mezclaría sus campos con los filtros reales de la pantalla.
+    const idsFiltros = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('.content-wrapper input:not([type="hidden"]), .content-wrapper select'))
+        .filter((el) => !el.closest('#dialog_add_family_expenses'))
+        .map((el) => el.id)
+        .filter(Boolean)
+    );
+    // "selected_company_to_add" es un campo real presente en el DOM (cuentas con
+    // más de una compañía) pero confirmado INTERMITENTE (presente/ausente entre
+    // cargas de la misma pantalla, sin patrón claro) — no forma parte de la
+    // aserción dura. Lo importante y establemente confirmado: los 4 filtros
+    // reales están presentes y NINGÚN campo de categoría/moneda/método de
+    // pago/proveedor/cliente/estado/usuario/sucursal/caja aparece jamás.
+    const FILTROS_REALES_CONOCIDOS = ['company_select', 'end_date', 'product_search', 'selected_company_to_add', 'start_date'];
+    for (const id of idsFiltros) {
+      expect(FILTROS_REALES_CONOCIDOS, `Campo nuevo/inesperado encontrado: "${id}"`).toContain(id);
+    }
+    expect(idsFiltros).toEqual(expect.arrayContaining(['company_select', 'end_date', 'product_search', 'start_date']));
+
+    await gastos.abrirModalAgregarGasto();
+    const idsModal = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#dialog_add_family_expenses input:not([type="hidden"]), #dialog_add_family_expenses select, #dialog_add_family_expenses textarea'))
+        .map((el) => el.id)
+        .filter(Boolean)
+    );
+    const CAMPOS_MODAL_CONOCIDOS = ['code_expense', 'product_observation', 'search_parameter', 'selected_company_to_add'];
+    for (const id of idsModal) {
+      expect(CAMPOS_MODAL_CONOCIDOS, `Campo nuevo/inesperado en el modal: "${id}"`).toContain(id);
+    }
+    expect(idsModal).toEqual(expect.arrayContaining(['code_expense', 'product_observation', 'search_parameter']));
+  });
 });
 
 // ─── Agregar y Eliminar gasto operativo ────────────────────────────────────
@@ -316,6 +355,68 @@ test.describe('Agregar y Eliminar gasto operativo', () => {
       const totalFila = await gastos.obtenerTotalNumericoDeFila(0);
       expect(totalFila).toBeCloseTo(totalEsperado, 2);
     });
+  });
+
+  test('"Agregar gasto operativo" con VARIOS productos distintos: el total general suma correctamente cada línea (subtotal 1 + subtotal 2 = total)', async ({ page }) => {
+    test.setTimeout(90_000);
+    const gastos = new ReporteGastosOperativosPage(page);
+    await gastos.abrirReporteGastosOperativos();
+
+    const observacion = `Gasto de prueba automatizada multi-producto ${Date.now()}`;
+    const codigoReporte = `QA-${Date.now()}`;
+
+    await gastos.abrirModalAgregarGasto();
+
+    const { costoUnitario: costo1 } = await test.step('Agregar el primer producto real (cantidad 1)', async () => {
+      await gastos.buscarProductoEnModalAgregar('a');
+      return gastos.agregarPrimerProductoResultadoModal();
+    });
+
+    const { costoUnitario: costo2 } = await test.step('Agregar un segundo producto real distinto (cantidad 3)', async () => {
+      // Un término más específico que "a" para maximizar la chance de que
+      // devuelva un producto DISTINTO al de arriba — confirmado en vivo que
+      // términos muy genéricos de una sola letra pueden coincidir con el
+      // mismo primer resultado en catálogos pequeños. Si ambos términos
+      // resuelven al mismo producto, la app simplemente actualiza la
+      // cantidad de la fila existente (sin crear una duplicada) y este test
+      // seguiría siendo válido, solo que probando 1 línea en vez de 2.
+      await gastos.buscarProductoEnModalAgregar('e');
+      const agregado = await gastos.agregarPrimerProductoResultadoModal();
+      // NO se reutiliza fijarCantidadProductoModal() aquí a propósito: ese
+      // helper valida que el total del modal == costoUnitario × cantidad,
+      // asunción correcta solo cuando hay UN único producto en el carrito.
+      // Con 2 líneas, el total del modal es la SUMA de ambas — se fija la
+      // cantidad directamente y la suma total se valida aparte, más abajo.
+      const cantidadInput = page.locator(`#product_quantity_${agregado.productId}`);
+      await cantidadInput.fill('3');
+      await cantidadInput.dispatchEvent('change');
+      return agregado;
+    });
+
+    const totalEsperado = Number((costo1 * 1 + costo2 * 3).toFixed(2));
+    await test.step('El total del modal (suma de ambas líneas) coincide antes de guardar', async () => {
+      const totalModal = page.locator('#opex-total-amount');
+      await expect
+        .poll(async () => parseFloat(((await totalModal.textContent()) ?? '').replace(/[^\d.-]/g, '')), { timeout: TIMEOUTS.CARGA })
+        .toBeCloseTo(totalEsperado, 2);
+    });
+
+    await gastos.llenarCodigoReporteModal(codigoReporte);
+    await gastos.llenarObservacionesModal(observacion);
+
+    const idGasto = await gastos.guardarGastoModal();
+    expect(idGasto).toBeGreaterThan(0);
+
+    await test.step('El gasto recién creado aparece en el listado con el total correcto (suma de ambas líneas)', async () => {
+      await gastos.aumentarRangoFechas(hoyISO(), hoyISO());
+      await gastos.buscar(observacion);
+      await expect.poll(() => gastos.contarFilas(), { timeout: TIMEOUTS.CARGA }).toBe(1);
+
+      const totalFila = await gastos.obtenerTotalNumericoDeFila(0);
+      expect(totalFila, 'El total del listado no es la suma de los subtotales de ambos productos').toBeCloseTo(totalEsperado, 2);
+    });
+
+    await gastos.validarSinErrores();
   });
 
   test('"Eliminar" borra un gasto creado por el propio test: confirma el SweetAlert2 real y el registro deja de aparecer en el listado', async ({ page }) => {

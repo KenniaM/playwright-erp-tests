@@ -219,6 +219,39 @@ export class PosRestauranteMesas {
   constructor(private readonly pos: PosPage, private readonly page: Page) {}
 
 
+  /**
+   * Cierra, antes de un intento de click, los overlays "conocidos" ya
+   * cubiertos por `PosCore` (notificaciones/aviso de consecutivo/toasts +
+   * modal de tipo de cambio) MÁS el modal "Abrir Caja" (`#dialog_cash_opening`)
+   * si está visible.
+   *
+   * HALLAZGO REAL confirmado en vivo (ambiente qa_restaurant, cuenta sin
+   * ninguna caja asignada todavía): este mismo modal, con el mismo id, puede
+   * aparecer en una variante distinta a la ya documentada en
+   * `PosCore.cargarPosYCerrarModalSiAparece()` ("Abrir Caja", caja existente
+   * pero cerrada) — el encabezado real dice **"No tiene caja asignada" /
+   * "Crear y abrir caja"** cuando la cuenta no tiene ninguna caja creada en
+   * esta compañía. Ambas variantes comparten el mismo id/estructura (mismo
+   * botón real "Cancelar", `.cash-open-button-cancel[data-dismiss="modal"]`,
+   * que `PosCore.cerrarModalAbrirCaja()` ya localiza por rol+nombre, sin
+   * depender del título) y, crucialmente, la app la muestra de forma
+   * ASÍNCRONA: confirmado en vivo que `PosCore.modalAbrirCajaVisible()`
+   * puede devolver `false` justo tras `irAlPos()` y el modal aparecer
+   * recién unos segundos después, exactamente durante los reintentos de
+   * click sobre "MESAS" — por eso no basta con comprobarlo una sola vez
+   * antes de entrar a este módulo (como sí alcanza en el resto de la suite,
+   * ambiente original): cada intento de este archivo debe volver a
+   * comprobarlo.
+   */
+  private async _cerrarOverlaysYCajaSiAparecen() {
+    await this.pos.cerrarOverlaysConocidos();
+    await this.pos._cerrarModalMonedaSiAparece();
+    if (await this.pos.modalAbrirCajaVisible()) {
+      await this.pos.cerrarModalAbrirCaja().catch(() => {});
+    }
+  }
+
+
   // ─── Navegación al módulo Mesas ─────────────────────────────────────────
 
   /**
@@ -241,8 +274,7 @@ export class PosRestauranteMesas {
     const MAX_INTENTOS = 4;
     let activado = false;
     for (let intento = 1; intento <= MAX_INTENTOS && !activado; intento++) {
-      await this.pos.cerrarOverlaysConocidos();
-      await this.pos._cerrarModalMonedaSiAparece();
+      await this._cerrarOverlaysYCajaSiAparecen();
       await tab.click({ timeout: 5_000 }).catch(() => {});
       activado = await tab.evaluate((el, clase) => el.className.includes(clase), L_MESA.TAB_SALON_ACTIVA_CLASE).catch(() => false);
     }
@@ -270,8 +302,7 @@ export class PosRestauranteMesas {
     const MAX_INTENTOS_TAB = 4;
     let tabAbierta = false;
     for (let intento = 1; intento <= MAX_INTENTOS_TAB && !tabAbierta; intento++) {
-      await this.pos.cerrarOverlaysConocidos();
-      await this.pos._cerrarModalMonedaSiAparece();
+      await this._cerrarOverlaysYCajaSiAparecen();
       tabAbierta = await tabMesas.click({ timeout: 5_000 }).then(() => true).catch(() => false);
     }
     expect(tabAbierta, `El tab "MESAS" no se pudo abrir tras ${MAX_INTENTOS_TAB} intentos`).toBe(true);
@@ -311,8 +342,7 @@ export class PosRestauranteMesas {
     const MAX_INTENTOS = 4;
     let abierto = false;
     for (let intento = 1; intento <= MAX_INTENTOS && !abierto; intento++) {
-      await this.pos.cerrarOverlaysConocidos();
-      await this.pos._cerrarModalMonedaSiAparece();
+      await this._cerrarOverlaysYCajaSiAparecen();
       abierto = await tab.click({ timeout: 5_000 }).then(() => true).catch(() => false);
     }
     expect(abierto, `El tab "PRODUCTOS" no se pudo abrir tras ${MAX_INTENTOS} intentos`).toBe(true);
@@ -417,8 +447,7 @@ export class PosRestauranteMesas {
     let clickeado = false;
     for (let intento = 1; intento <= MAX_INTENTOS && !clickeado; intento++) {
       await this._cerrarModalVerMesaSiAparece();
-      await this.pos.cerrarOverlaysConocidos();
-      await this.pos._cerrarModalMonedaSiAparece();
+      await this._cerrarOverlaysYCajaSiAparecen();
       clickeado = await fig.click({ timeout: 5_000 }).then(() => true).catch(() => false);
     }
     expect(clickeado, `No se pudo clickear la mesa ${mesaId} tras ${MAX_INTENTOS} intentos`).toBe(true);
@@ -1138,8 +1167,7 @@ export class PosRestauranteMesas {
     const MAX_INTENTOS = 4;
     let cerrado = false;
     for (let intento = 1; intento <= MAX_INTENTOS && !cerrado; intento++) {
-      await this.pos.cerrarOverlaysConocidos();
-      await this.pos._cerrarModalMonedaSiAparece();
+      await this._cerrarOverlaysYCajaSiAparecen();
       cerrado = await boton.click({ timeout: 5_000 }).then(() => true).catch(() => false);
     }
     expect(cerrado, `El botón de cerrar orden sin facturar no se pudo clickear tras ${MAX_INTENTOS} intentos`).toBe(true);

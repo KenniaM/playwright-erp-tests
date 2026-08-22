@@ -7,7 +7,7 @@ import {
   CABYS_BUSQUEDA_SIN_IVA, PRECIO_PRODUCTO_RAPIDO, EscenarioDescuento, ResultadoDescuento,
   EstadoCheckIva, ConfigBusquedaCabys, LineaCarrito, MetadatoProducto, DASHBOARD_URL,
   ResumenTabGeneral, ReporteAvanzado, FilaFacturaVenta, FilaFacturaSimple, FilaMovimientoCaja,
-  SubTabFacturas,
+  SubTabFacturas, MetodoValidacionPagoId, MetodoValidacionPago, ValidacionMetodoPago,
 } from './pos.types';
 import { PosCore } from './pos-core.page';
 
@@ -232,6 +232,156 @@ export class PosCierreCaja {
 
     await cierreConfirmadoPromise;
 
+    const printPage = await popupPromise;
+    if (printPage) {
+      await this.core.mostrarYCerrarVentanaImpresion(printPage);
+    }
+  }
+
+
+  // ─── "Validación por método de pago" ───────────────────────────────────────
+  // Feature real nueva del modal "Detalle de Cierre" (código fuente de la app
+  // fechado 18-08-2026, investigada en vivo leyendo `js/pos.js` — sin
+  // documentación previa en este repo). Mecánica real confirmada:
+  // - 4 tarjetas por id de método (1=Efectivo/2=Tarjeta/4=SINPE ("check"
+  //   internamente)/3=Transacción). Efectivo SIEMPRE queda validado (su
+  //   switch nace "checked disabled" — no se puede desactivar) y su "Monto
+  //   contado" es un ESPEJO de CIERRE_EFECTIVO_CAJA (`#closure_posted_balance`),
+  //   no un campo independiente — escribir en uno sincroniza el otro
+  //   (`payment_validation_push_cash_to_master`/`sync_payment_validation_from_cash`).
+  // - Los otros 3 métodos nacen DESACTIVADOS (`toggle_payment_validation` solo
+  //   activa method_id===1 por defecto) — su campo "Monto contado" queda
+  //   deshabilitado hasta activarlos (switch o botón "Validar").
+  // - "Monto sistema" es de solo lectura: el total real consolidado de ese
+  //   método (ventas + abonos + pago inicial), MISMO dato que
+  //   `CIERRE_METODO_PAGO_*` ("Ingresos por Método de Pago") — se puede (y
+  //   debe) cruzar contra `leerResumenTabGeneral().metodoPago`.
+  // - "Diferencia" = Monto contado − Monto sistema (positivo = sobrante,
+  //   negativo = faltante) — mismo signo que "Diferencia de cierre" general.
+  // - Al cerrar caja (`confirm_close_cash()`): CUALQUIER método con la
+  //   validación activa DEBE tener un "Monto contado" no vacío, o el cierre se
+  //   bloquea (toast de error, foco en el primer campo faltante) — nunca
+  //   navega ni recarga. Si hay diferencias (≠0) en métodos validados, se
+  //   listan en el SweetAlert de confirmación como advertencia, pero NO
+  //   bloquean el cierre.
+  // - El contenedor completo (`L.CIERRE_PV_CONTENEDOR`) puede no existir en el
+  //   DOM en absoluto según compañía/configuración — la propia app comprueba
+  //   `$('#container_payment_validation').length===0` antes de tocar
+  //   cualquier campo; esta suite hace lo mismo (`validacionMetodoPagoExiste()`)
+  //   antes de operar sobre esta sección, nunca asume su presencia.
+
+  /** Indica si la sección "Validación por método de pago" existe en este modal de cierre (puede depender de compañía/configuración). */
+  async validacionMetodoPagoExiste(): Promise<boolean> {
+    return (await this.modalCerrarCaja.locator(L.CIERRE_PV_CONTENEDOR).count()) > 0;
+  }
+
+  /** Lee el estado completo (activo/estado/montos/diferencia) de la tarjeta de validación de un método. */
+  async leerValidacionMetodo(metodoId: MetodoValidacionPagoId): Promise<ValidacionMetodoPago> {
+    const activo = await this.modalCerrarCaja.locator(L.CIERRE_PV_SWITCH(metodoId)).isChecked();
+    const estado = await this.modalCerrarCaja.locator(L.CIERRE_PV_ESTADO(metodoId)).innerText();
+    const montoSistema = await this._leerMontoDelModal(L.CIERRE_PV_MONTO_SISTEMA(metodoId));
+    const montoContadoTexto = await this.modalCerrarCaja.locator(L.CIERRE_PV_MONTO_CONTADO(metodoId)).inputValue();
+    const diferencia = await this._leerMontoDelModal(L.CIERRE_PV_DIFERENCIA(metodoId));
+    return {
+      activo,
+      estado: estado.trim(),
+      montoSistema,
+      montoContado: montoContadoTexto.trim().length > 0 ? this.core._leerMontoDeTexto(montoContadoTexto) : null,
+      diferencia,
+    };
+  }
+
+  /** Lee la validación de los 4 métodos reales (1/2/4/3) en un solo snapshot. */
+  async leerTodasLasValidacionesMetodoPago(): Promise<Record<MetodoValidacionPago, ValidacionMetodoPago>> {
+    const [efectivo, tarjeta, sinpe, transaccion] = await Promise.all([
+      this.leerValidacionMetodo(1),
+      this.leerValidacionMetodo(2),
+      this.leerValidacionMetodo(4),
+      this.leerValidacionMetodo(3),
+    ]);
+    return { efectivo, tarjeta, sinpe, transaccion };
+  }
+
+  /**
+   * Activa la validación de un método (switch/botón "Validar") si todavía no
+   * lo está — no-op para Efectivo (id 1, siempre activo, switch
+   * deshabilitado — confirmado en vivo que intentar clickearlo no hace nada).
+   */
+  async activarValidacionMetodo(metodoId: MetodoValidacionPagoId) {
+    if (metodoId === 1) return;
+    const yaActivo = await this.modalCerrarCaja.locator(L.CIERRE_PV_SWITCH(metodoId)).isChecked();
+    if (!yaActivo) {
+      await this.modalCerrarCaja.locator(L.CIERRE_PV_SWITCH(metodoId)).evaluate((el: HTMLElement) => el.click());
+    }
+  }
+
+  /** Desactiva la validación de un método (limpia su "Monto contado" real, confirmado en vivo). No-op para Efectivo (id 1, no se puede desactivar). */
+  async desactivarValidacionMetodo(metodoId: MetodoValidacionPagoId) {
+    if (metodoId === 1) return;
+    const activo = await this.modalCerrarCaja.locator(L.CIERRE_PV_SWITCH(metodoId)).isChecked();
+    if (activo) {
+      await this.modalCerrarCaja.locator(L.CIERRE_PV_SWITCH(metodoId)).evaluate((el: HTMLElement) => el.click());
+    }
+  }
+
+  /**
+   * Establece el "Monto contado" de un método YA ACTIVADO — dispara `keyup`
+   * manualmente (mismo patrón ya usado en el resto de esta suite para
+   * campos con recálculo real vía JS: confirmado en vivo que `.fill()` solo
+   * no recalcula "Diferencia"/el estado del badge).
+   *
+   * Hallazgo real confirmado en vivo: este campo NO acepta valores
+   * negativos — es un monto físico contado, la app lo sanea silenciosamente
+   * (pierde el signo "-", nunca lo rechaza con error) en vez de reflejarlo.
+   * Si `monto` es negativo (p. ej. al restar un delta de un "Monto sistema"
+   * cercano a 0), el valor real que queda en el campo es su magnitud
+   * positiva — quien llame a este método con un "Monto sistema" pequeño
+   * debe asegurar margen suficiente antes de restar, no asumir que un
+   * resultado negativo se refleja tal cual.
+   */
+  async establecerMontoContadoValidacion(metodoId: MetodoValidacionPagoId, monto: string) {
+    const campo = this.modalCerrarCaja.locator(L.CIERRE_PV_MONTO_CONTADO(metodoId));
+    await campo.fill(monto);
+    await campo.evaluate((el) => el.dispatchEvent(new Event('keyup', { bubbles: true })), undefined, { timeout: TIMEOUTS.PAYMENT_MODAL });
+  }
+
+  /** Activa la validación de los 4 métodos a la vez ("Validar todos"). */
+  async activarValidarTodosLosMetodos() {
+    await this.modalCerrarCaja.locator(L.CIERRE_PV_VALIDAR_TODOS).click();
+  }
+
+  /**
+   * Presiona el botón real "Cerrar Caja" SIN completar el resto del flujo de
+   * `confirmarCerrarCaja()` — pensado exclusivamente para escenarios que
+   * esperan que `confirm_close_cash()` BLOQUEE el cierre (campo obligatorio
+   * faltante, método de validación activo sin monto contado): en esos casos
+   * el propio backend real nunca llega a mostrarse ni el SweetAlert de
+   * confirmación ni la petición `closePosCash`, así que reutilizar
+   * `confirmarCerrarCaja()` colgaría esperando algo que nunca ocurre.
+   */
+  async presionarBotonCerrarCaja() {
+    await this.modalCerrarCaja.locator(L.CIERRE_BTN_CERRAR).click();
+  }
+
+  /**
+   * Lee el mensaje completo del SweetAlert de confirmación de cierre, YA
+   * VISIBLE tras `presionarBotonCerrarCaja()` (cuando el cierre SÍ puede
+   * proceder) — permite validar el texto de advertencia real de
+   * "Validación por método de pago" (diferencias encontradas) antes de
+   * confirmar. No hace clic en ningún botón.
+   */
+  async leerMensajeConfirmacionCerrarCaja(): Promise<string> {
+    const dialogo = this.page.locator('.sweet-alert.visible');
+    await expect(dialogo, 'El SweetAlert de confirmación de cierre no apareció').toBeVisible({ timeout: TIMEOUTS.PAYMENT_MODAL });
+    return dialogo.innerText();
+  }
+
+  /** Confirma el SweetAlert de cierre YA VISIBLE (tras `leerMensajeConfirmacionCerrarCaja()`) — completa el resto del flujo real de `confirmarCerrarCaja()`. */
+  async confirmarSweetAlertDeCierre() {
+    const cierreConfirmadoPromise = this.page.waitForResponse((res) => res.url().includes('closePosCash'), { timeout: TIMEOUTS.CIERRE_CAJA });
+    const popupPromise = this.page.waitForEvent('popup', { timeout: TIMEOUTS.CIERRE_CAJA }).catch(() => null);
+    await this.core._confirmarSweetAlertV1();
+    await cierreConfirmadoPromise;
     const printPage = await popupPromise;
     if (printPage) {
       await this.core.mostrarYCerrarVentanaImpresion(printPage);

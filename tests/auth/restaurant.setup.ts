@@ -68,6 +68,22 @@ setup('authenticate as restaurante (Restaurante Rancho Robertos)', async ({ page
   const pos = new PosPage(page);
   await pos.irAlPos();
 
+  // CORRECCIÓN DE AUTOMATIZACIÓN confirmada en vivo: si la caja de esta
+  // compañía quedó cerrada (p. ej. tras un cierre de una corrida anterior),
+  // el POS muestra el modal "Abrir Caja" (`#dialog_cash_opening`,
+  // `data-backdrop="static"`) ENCIMA de todo, incluidos los tabs
+  // PRODUCTOS/MESAS/PARA LLEVAR — `PosRestauranteMesas.abrirMesas()` fallaba
+  // los 4 reintentos de clic sobre "MESAS" con "elemento visible pero
+  // tapado", confirmado con `document.elementFromPoint()` devolviendo el
+  // propio modal en las coordenadas reales del tab. Se descarta aquí (sin
+  // completar la apertura, mismo criterio que `cargarPosYCerrarModalSiAparece()`
+  // en pos-core.page.ts: liberar mesas no depende de tener la caja abierta) —
+  // cualquier flujo real que sí necesite facturar ya maneja "Abrir Caja" por
+  // su cuenta (ver PosPayment).
+  if (await pos.modalAbrirCajaVisible()) {
+    await pos.cerrarModalAbrirCaja();
+  }
+
   // ─── Liberar el salón de pruebas dedicado ──────────────────────────────
   // CORRECCIÓN DE CONFIABILIDAD (hallazgo real de la auditoría de Mesas/Para
   // Llevar): ninguna orden de mesa se limpia automáticamente entre corridas

@@ -133,11 +133,26 @@ export class CuentasPorCobrarPage {
   async leerResumenPorMoneda(): Promise<ResumenPorMonedaCxC> {
     const texto = await this.page.locator('body').innerText();
     const inicio = texto.indexOf('Resumen por moneda');
-    const fin = texto.indexOf('Cuentas pendientes por cliente', inicio);
+    // CORRECCIÓN DE AUTOMATIZACIÓN confirmada en vivo (ambiente qa_restaurant):
+    // el encabezado real del listado es "Cuentas por cobrar por cliente" —
+    // "Cuentas pendientes por cliente" (el texto asumido originalmente) no
+    // existe en el DOM, dejando `fin` siempre en -1 y `bloque` sin acotar.
+    // Inofensivo mientras el resumen sea el primer bloque de la página (sigue
+    // siéndolo hoy en ambos ambientes), pero se prueban ambos textos para no
+    // depender de esa casualidad de orden.
+    const fin = ['Cuentas pendientes por cliente', 'Cuentas por cobrar por cliente']
+      .map((candidato) => texto.indexOf(candidato, inicio))
+      .find((idx) => idx >= 0) ?? -1;
     const bloque = inicio >= 0 ? texto.slice(inicio, fin >= 0 ? fin : undefined) : texto;
 
     const leerMonto = (etiqueta: string): number => {
-      const m = new RegExp(`${etiqueta}\\s*\\$?\\s*([0-9.,]+)`, 'i').exec(bloque);
+      // CORRECCIÓN DE AUTOMATIZACIÓN confirmada en vivo (ambiente qa_restaurant,
+      // moneda ₡): el regex original solo toleraba un "$" opcional entre la
+      // etiqueta y el número — con cualquier otro símbolo real (₡, €, L...)
+      // el match completo fallaba y `leerMonto` devolvía 0 siempre, pese a que
+      // el monto real sí estaba en el DOM. `[^0-9]*` tolera cualquier símbolo
+      // de moneda real, no solo "$".
+      const m = new RegExp(`${etiqueta}[^0-9]*([0-9.,]+)`, 'i').exec(bloque);
       if (!m) return 0;
       const limpio = m[1].replace(/\./g, '').replace(',', '.');
       const valor = parseFloat(limpio);
@@ -172,11 +187,16 @@ export class CuentasPorCobrarPage {
         const texto = (fila as HTMLElement).innerText;
         const nombre = fila.querySelector('.acr-v2-client-name')?.textContent?.trim() ?? '';
         const facturasMatch = /(\d+)\s*Facturas/i.exec(texto);
-        const totalMatch = /TOTAL\s*\$?\s*([0-9.,]+)/i.exec(texto);
-        const abonadoMatch = /ABONADO\s*\$?\s*([0-9.,]+)/i.exec(texto);
-        const saldoMatch = /SALDO\s*\$?\s*([0-9.,]+)/i.exec(texto);
-        const vencidoMatch = /VENCIDO\s*\$?\s*([0-9.,]+)/i.exec(texto);
-        const porVencerMatch = /POR VENCER\s*\$?\s*([0-9.,]+)/i.exec(texto);
+        // CORRECCIÓN DE AUTOMATIZACIÓN confirmada en vivo (ambiente
+        // qa_restaurant, moneda ₡): "$" opcional no cubre otros símbolos
+        // reales (₡, €, L...) — con cualquiera de esos el match completo
+        // fallaba y el monto quedaba siempre en 0 pese a estar presente en el
+        // DOM. `[^0-9]*` tolera cualquier símbolo de moneda real.
+        const totalMatch = /TOTAL[^0-9]*([0-9.,]+)/i.exec(texto);
+        const abonadoMatch = /ABONADO[^0-9]*([0-9.,]+)/i.exec(texto);
+        const saldoMatch = /SALDO[^0-9]*([0-9.,]+)/i.exec(texto);
+        const vencidoMatch = /VENCIDO[^0-9]*([0-9.,]+)/i.exec(texto);
+        const porVencerMatch = /POR VENCER[^0-9]*([0-9.,]+)/i.exec(texto);
         const estado = /En morosidad|Al día/i.exec(texto)?.[0] ?? '';
         return {
           cliente: nombre,
@@ -308,6 +328,139 @@ export class CuentasPorCobrarPage {
     ).toBeVisible({ timeout: TIMEOUTS.MODAL });
   }
 
+  /**
+   * Abre "Ver historial de abonos" de una factura del modal de gestión ya
+   * abierto — mismo dropdown por fila que `abrirRegistrarAbono()`, acción
+   * real `[data-action="view-history"]`. Deja abierto el modal
+   * `.acr-v2-history-table` (reutiliza el mismo `pms-header`/`pms-close` que
+   * el resto de modales secundarios de este componente).
+   */
+  async abrirHistorialAbonos(idFactura: string) {
+    const fila = this.page.locator(`tr.invoice_list[data-invoice-id="${idFactura}"]`);
+    await this._abrirDropdownFilaConReintentos(fila);
+    await fila.locator('[data-action="view-history"]').first().waitFor({ state: 'visible', timeout: 5_000 });
+    await fila.locator('[data-action="view-history"]').first().click();
+    await expect(this.page.locator('.acr-v2-history-table'), 'La tabla de historial de abonos no apareció').toBeVisible({ timeout: TIMEOUTS.MODAL });
+  }
+
+  /**
+   * Abre el dropdown de acciones de una fila (`.dropdown-toggle`) con
+   * reintentos acotados — necesario tras cerrar un modal secundario
+   * (`cerrarModalSecundario()`): confirmado en vivo que un `.modal-backdrop`
+   * residual de Bootstrap puede seguir intercepting clicks un instante
+   * después de que el modal ya reporta oculto (mismo mecanismo ya
+   * documentado en `confirmarAbono()`), colgando un único intento largo.
+   */
+  private async _abrirDropdownFilaConReintentos(fila: Locator) {
+    const banner = this.page.locator('#workshop-web-notification-permission');
+    const MAX_INTENTOS = 4;
+    let abierto = false;
+    for (let intento = 1; intento <= MAX_INTENTOS && !abierto; intento++) {
+      if (await banner.isVisible().catch(() => false)) {
+        await banner.locator('#workshop-web-notification-permission-dismiss').click({ timeout: 3_000 }).catch(() => {});
+      }
+      abierto = await fila.locator('.dropdown-toggle, [data-toggle="dropdown"]').first().click({ timeout: 5_000 }).then(() => true).catch(() => false);
+    }
+    expect(abierto, 'El dropdown de acciones de la fila no se pudo abrir tras varios intentos').toBe(true);
+  }
+
+  /**
+   * Lee todas las filas del modal "Historial de abonos" ya abierto —
+   * columnas reales confirmadas en vivo: Fecha del abono, Monto abonado,
+   * Método/Referencia, Responsable, Estado/Observaciones.
+   */
+  async leerHistorialAbonos(): Promise<HistorialAbonoCxC[]> {
+    const filas = this.page.locator('.acr-v2-history-table tbody tr');
+    const total = await filas.count();
+    const resultado: HistorialAbonoCxC[] = [];
+    for (let i = 0; i < total; i++) {
+      const texto = await filas.nth(i).innerText();
+      const fechaMatch = /(\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}:\d{2})/.exec(texto);
+      // El monto es el único token con símbolo real de moneda (₡/$/€/L) —
+      // más robusto que separar por columnas/tabs (frágiles ante espacios
+      // en blanco reales del propio `innerText`).
+      const montoMatch = /[₡$€L]\s*([0-9][0-9.,]*)/.exec(texto);
+      const metodoMatch = /Efectivo|Tarjeta|SINPE|Transacci[oó]n/i.exec(texto);
+      resultado.push({
+        fecha: fechaMatch ? fechaMatch[1] : '',
+        monto: montoMatch ? this._leerMontoDeTexto(montoMatch[0]) : 0,
+        metodo: metodoMatch ? metodoMatch[0] : '',
+        textoCompleto: texto,
+      });
+    }
+    return resultado;
+  }
+
+  /**
+   * Cierra POR COMPLETO el modal de gestión (Historial de abonos / Productos
+   * y servicios incluidos) con su botón real "×" (`.pms-close`) y espera a
+   * que el `.modal-backdrop` de Bootstrap realmente desaparezca.
+   *
+   * CORRECCIÓN DE AUTOMATIZACIÓN confirmada en vivo: "Historial de abonos" y
+   * "Productos y servicios" NO son modales independientes apilados sobre el
+   * de gestión — son VISTAS que reemplazan el contenido del MISMO modal real
+   * (`data-dismiss="modal"` cierra el modal completo, no solo la vista
+   * actual) — confirmado en vivo: tras `cerrarModalSecundario()` la fila
+   * `tr.invoice_list` deja de existir por completo (no queda oculta, se
+   * pierde el modal de gestión entero). Para volver al listado de facturas
+   * del MISMO cliente sin perder el contexto, usar `volverAFacturasDesdeSubmodal()`.
+   */
+  async cerrarModalSecundario() {
+    await this.page.locator('.pms-close').first().click({ timeout: 5_000 }).catch(() => {});
+    await this.page.locator('.modal-backdrop').first().waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => {});
+  }
+
+  /**
+   * Vuelve del "Historial de abonos"/"Productos y servicios" al listado de
+   * facturas pendientes del MISMO cliente, dentro del mismo modal — botón
+   * real "Volver a facturas" (`[data-action="back-account"]`), a diferencia
+   * de `cerrarModalSecundario()` (cierra todo el modal de gestión).
+   */
+  async volverAFacturasDesdeSubmodal() {
+    await this.page.locator('[data-action="back-account"]').first().click({ timeout: 5_000 });
+    await expect(this.page.locator('tr.invoice_list').first(), 'El listado de facturas pendientes no reapareció tras "Volver a facturas"').toBeVisible({ timeout: TIMEOUTS.MODAL });
+  }
+
+  /**
+   * Abre "Ver productos y servicios" de una factura del modal de gestión ya
+   * abierto — mismo dropdown por fila, acción real
+   * `[data-action="view-invoice-items"]`.
+   */
+  async abrirDetalleFactura(idFactura: string) {
+    const fila = this.page.locator(`tr.invoice_list[data-invoice-id="${idFactura}"]`);
+    await this._abrirDropdownFilaConReintentos(fila);
+    await fila.locator('[data-action="view-invoice-items"]').first().waitFor({ state: 'visible', timeout: 5_000 });
+    await fila.locator('[data-action="view-invoice-items"]').first().click();
+    await expect(this.page.locator('.acr-v2-invoice-items-table'), 'La tabla de productos y servicios no apareció').toBeVisible({ timeout: TIMEOUTS.MODAL });
+  }
+
+  /**
+   * Lee el resumen financiero (Subtotal/Descuento/Impuesto/Total/Saldo) del
+   * modal "Productos y servicios de la factura" ya abierto — permite validar
+   * matemáticamente Subtotal − Descuento + Impuesto = Total sin depender de
+   * datos creados en esta misma sesión.
+   */
+  async leerResumenDetalleFactura(): Promise<ResumenDetalleFacturaCxC> {
+    const resumen = this.page.locator('.acr-v2-invoice-items-summary');
+    const leer = async (etiqueta: string) => {
+      const texto = await resumen.locator('div', { hasText: etiqueta }).last().innerText();
+      return this._leerMontoDeTexto(texto);
+    };
+    return {
+      subtotal: await leer('Subtotal'),
+      descuento: await leer('Descuento'),
+      impuesto: await leer('Impuesto'),
+      total: await leer('Total'),
+      saldo: await leer('Saldo'),
+    };
+  }
+
+  private _leerMontoDeTexto(texto: string): number {
+    const limpio = texto.replace(/[^0-9,.-]/g, '').replace(/\./g, '').replace(',', '.');
+    const valor = parseFloat(limpio);
+    return Number.isNaN(valor) ? 0 : valor;
+  }
+
   // ─── Modal final "Registrar abono" (credit-payment-redesign-modal) ────────
   // Reutiliza, confirmado en vivo campo por campo, los MISMOS ids que el
   // modal de pago legado ya documentado (ver la nota de cabecera) — nunca
@@ -345,6 +498,18 @@ export class CuentasPorCobrarPage {
     await this._asegurarMetodoAbono('is_payment_cash', false);
     await this._asegurarMetodoAbono(CHECKBOX_METODO_ABONO[metodo], true);
     await this.page.locator(MONTO_METODO_ABONO[metodo]).fill(total);
+  }
+
+  /**
+   * Variante de `seleccionarAbonoMetodoExacto()` con un monto EXPLÍCITO
+   * (abono PARCIAL con un método distinto a Efectivo) en vez del 100% del
+   * saldo — mismo mecanismo real (desmarca Efectivo primero, marca el
+   * método destino), solo cambia el monto escrito en el campo.
+   */
+  async seleccionarAbonoMetodoConMonto(metodo: MetodoAbono, monto: string) {
+    await this._asegurarMetodoAbono('is_payment_cash', false);
+    await this._asegurarMetodoAbono(CHECKBOX_METODO_ABONO[metodo], true);
+    await this.page.locator(MONTO_METODO_ABONO[metodo]).fill(monto);
   }
 
   private async _asegurarMetodoAbono(checkboxId: string, activo: boolean) {
@@ -445,6 +610,21 @@ export type FilaClienteCxC = {
   vencido: number;
   porVencer: number;
   estado: string;
+};
+
+export type HistorialAbonoCxC = {
+  fecha: string;
+  monto: number;
+  metodo: string;
+  textoCompleto: string;
+};
+
+export type ResumenDetalleFacturaCxC = {
+  subtotal: number;
+  descuento: number;
+  impuesto: number;
+  total: number;
+  saldo: number;
 };
 
 // Métodos de abono reales confirmados en vivo dentro del modal "Registrar

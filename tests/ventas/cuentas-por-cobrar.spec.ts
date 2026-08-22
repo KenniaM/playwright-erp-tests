@@ -32,6 +32,55 @@ test('Cargar Cuentas por Cobrar y validar el listado + resumen por moneda', asyn
   });
 });
 
+test('El "Resumen por moneda" es matemáticamente consistente con la suma real de los clientes listados', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const cxc = new CuentasPorCobrarPage(page);
+  await cxc.irA();
+
+  const resumen = await cxc.leerResumenPorMoneda();
+  const clientes = await cxc.leerClientesVisibles();
+  expect(clientes.length).toBeGreaterThan(0);
+
+  // Invariante interna del propio resumen: Vencido + Por vencer = Saldo pendiente.
+  expect(resumen.vencido + resumen.porVencer, 'Resumen por moneda: Vencido + Por vencer ≠ Saldo pendiente').toBeCloseTo(resumen.saldoPendiente, 2);
+
+  // El agregado del resumen debe coincidir con la SUMA real de todos los
+  // clientes listados (no solo "ser mayor a 0") — mismo criterio de
+  // precisión pedido para el resto de esta suite.
+  const sumaSaldos = clientes.reduce((acc, c) => acc + c.saldo, 0);
+  const sumaVencido = clientes.reduce((acc, c) => acc + c.vencido, 0);
+  const sumaPorVencer = clientes.reduce((acc, c) => acc + c.porVencer, 0);
+  expect(resumen.saldoPendiente, 'Resumen "Saldo pendiente" ≠ suma real de los saldos de cada cliente listado').toBeCloseTo(sumaSaldos, 2);
+  expect(resumen.vencido, 'Resumen "Vencido" ≠ suma real del vencido de cada cliente listado').toBeCloseTo(sumaVencido, 2);
+  expect(resumen.porVencer, 'Resumen "Por vencer" ≠ suma real del por vencer de cada cliente listado').toBeCloseTo(sumaPorVencer, 2);
+  expect(resumen.clientes, 'Resumen "Clientes" ≠ cantidad real de filas listadas').toBe(clientes.length);
+
+  // Cada fila también cumple su propia identidad: Vencido + Por vencer = Saldo, y Total − Abonado = Saldo.
+  for (const c of clientes) {
+    expect(c.vencido + c.porVencer, `${c.cliente}: Vencido + Por vencer ≠ Saldo`).toBeCloseTo(c.saldo, 2);
+    expect(c.total - c.abonado, `${c.cliente}: Total − Abonado ≠ Saldo`).toBeCloseTo(c.saldo, 2);
+  }
+});
+
+test('Los filtros "En morosidad" y "Al día" muestran ÚNICAMENTE clientes en ese estado real (no solo reducen la cantidad)', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const cxc = new CuentasPorCobrarPage(page);
+  await cxc.irA();
+
+  for (const condicion of ['En morosidad', 'Al día'] as const) {
+    await test.step(`Condición = "${condicion}"`, async () => {
+      await cxc.filtrarPorCondicion(condicion);
+      const clientes = await cxc.leerClientesVisibles();
+      test.skip(clientes.length === 0, `El ambiente de QA no tiene ningún cliente en estado "${condicion}" en este momento.`);
+      for (const c of clientes) {
+        expect(c.estado, `El cliente "${c.cliente}" aparece bajo el filtro "${condicion}" pero su estado real es "${c.estado}"`).toBe(condicion);
+      }
+    });
+  }
+
+  await cxc.limpiarFiltros();
+});
+
 test('Filtrar por condición de la cuenta ("En morosidad")', async ({ page }) => {
   test.setTimeout(TIMEOUTS.TEST);
   const cxc = new CuentasPorCobrarPage(page);
@@ -239,5 +288,210 @@ test('Cancelar un abono sin confirmar no debe afectar el saldo del cliente', asy
     const clienteDespues = clientesDespues.find((c) => c.cliente === nombreCliente);
     expect(clienteDespues, `El cliente "${nombreCliente}" no volvió a aparecer`).toBeTruthy();
     expect(clienteDespues!.saldo, 'El saldo cambió pese a cancelar el abono sin confirmar').toBeCloseTo(saldoAntes, 2);
+  });
+});
+
+// ─── "Ver productos y servicios" / "Ver historial de abonos" ──────────────
+//
+// Dos acciones reales del menú por factura, investigadas en vivo pero nunca
+// cubiertas hasta ahora (ver el comentario de `abrirDetalleFactura()` /
+// `abrirHistorialAbonos()` en cuentas-por-cobrar.page.ts para la evidencia
+// completa). No dependen de datos creados en esta sesión — funcionan contra
+// CUALQUIER factura pendiente real del ambiente compartido.
+
+test('"Ver productos y servicios" — Subtotal − Descuento + Impuesto = Total, y Total − Saldo = suma del historial de abonos', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const cxc = new CuentasPorCobrarPage(page);
+
+  await cxc.irA();
+  const clientes = await cxc.leerClientesVisibles();
+  expect(clientes.length, 'No hay clientes con saldo pendiente para validar').toBeGreaterThan(0);
+
+  await cxc.abrirGestionCliente(0);
+  const ids = await cxc.obtenerIdsFacturasPendientes();
+  expect(ids.length).toBeGreaterThan(0);
+  const idFactura = ids[0];
+  const saldoEnGestion = await cxc.leerSaldoFacturaPendiente(idFactura);
+
+  let resumen: Awaited<ReturnType<typeof cxc.leerResumenDetalleFactura>>;
+  await test.step('"Ver productos y servicios": Subtotal − Descuento + Impuesto = Total', async () => {
+    await cxc.abrirDetalleFactura(idFactura);
+    resumen = await cxc.leerResumenDetalleFactura();
+    expect(resumen.subtotal - resumen.descuento + resumen.impuesto, 'Subtotal − Descuento + Impuesto ≠ Total').toBeCloseTo(resumen.total, 2);
+    expect(resumen.saldo, 'El saldo mostrado en "Productos y servicios" no coincide con el de la fila de gestión').toBeCloseTo(saldoEnGestion, 2);
+    await cxc.volverAFacturasDesdeSubmodal();
+  });
+
+  await test.step('"Ver historial de abonos": Total − Saldo = suma de todos los abonos aplicados', async () => {
+    await cxc.abrirHistorialAbonos(idFactura);
+    const historial = await cxc.leerHistorialAbonos();
+    const sumaAbonos = historial.reduce((acc, h) => acc + h.monto, 0);
+    expect(resumen.total - resumen.saldo, 'Total − Saldo ≠ suma real de los abonos del historial').toBeCloseTo(sumaAbonos, 2);
+  });
+});
+
+test('Registrar un abono deja un registro nuevo y exacto en "Ver historial de abonos"', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const cxc = new CuentasPorCobrarPage(page);
+  const erroresJS = espiarErroresJS(page);
+
+  await cxc.irA();
+  const clientes = await cxc.leerClientesVisibles();
+  expect(clientes.length).toBeGreaterThan(0);
+  const nombreCliente = clientes[0].cliente;
+  await cxc.abrirGestionCliente(0);
+  const ids = await cxc.obtenerIdsFacturasPendientes();
+  expect(ids.length).toBeGreaterThan(0);
+  const idFactura = ids[0];
+
+  let historialAntes = 0;
+  let saldoAntes = 0;
+  await test.step('Contar los abonos ya registrados ANTES', async () => {
+    await cxc.abrirHistorialAbonos(idFactura);
+    historialAntes = (await cxc.leerHistorialAbonos()).length;
+    await cxc.volverAFacturasDesdeSubmodal();
+    saldoAntes = await cxc.leerSaldoFacturaPendiente(idFactura);
+  });
+
+  const montoAbono = Number((saldoAntes / 3).toFixed(2));
+  await test.step(`Registrar un abono parcial (${montoAbono}) en Efectivo`, async () => {
+    await cxc.abrirRegistrarAbono(idFactura);
+    await cxc.seleccionarAbonoEfectivo(montoAbono.toFixed(2));
+    await cxc.confirmarAbono();
+  });
+
+  await test.step('El historial ganó al menos 1 registro, y contiene uno con el monto y método EXACTOS del abono recién registrado', async () => {
+    await cxc.irA();
+    await cxc.buscar(nombreCliente);
+    await cxc.abrirGestionCliente(0);
+    await cxc.abrirHistorialAbonos(idFactura);
+    const historialDespues = await cxc.leerHistorialAbonos();
+    // Comparación por CONTENIDO (monto+método exactos), no por posición ni
+    // por delta exacto de conteo: el ambiente de QA es compartido (ver
+    // CLAUDE.md) y esta misma factura puede recibir otros abonos reales de
+    // otro escenario/corrida entre la lectura ANTES y la lectura DESPUÉS —
+    // la validación real y precisa es que NUESTRO abono específico aparece,
+    // no cuántos registros hay en total.
+    expect(historialDespues.length, 'El historial no ganó ningún registro nuevo').toBeGreaterThan(historialAntes);
+    const nuestroAbono = historialDespues.find((h) => h.metodo === 'Efectivo' && Math.abs(h.monto - montoAbono) < 0.01);
+    expect(nuestroAbono, `No se encontró en el historial el abono recién registrado (Efectivo, ${montoAbono})`).toBeTruthy();
+  });
+
+  expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+});
+
+test('La búsqueda dentro del modal de gestión acota las facturas al término buscado', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const cxc = new CuentasPorCobrarPage(page);
+
+  await cxc.irA();
+  const clientes = await cxc.leerClientesVisibles();
+  const conVariasFacturas = clientes.find((c) => c.cantidadFacturas > 1);
+  test.skip(!conVariasFacturas, 'No hay ningún cliente con más de 1 factura pendiente para probar la búsqueda de forma significativa.');
+
+  const indice = clientes.indexOf(conVariasFacturas!);
+  await cxc.abrirGestionCliente(indice);
+  const totalSinFiltrar = await cxc.contarFacturasPendientesEnGestion();
+  expect(totalSinFiltrar).toBeGreaterThan(1);
+
+  const idFactura = (await cxc.obtenerIdsFacturasPendientes())[0];
+  await cxc.buscarFacturaEnGestion(idFactura);
+  const totalFiltrado = await cxc.contarFacturasPendientesEnGestion();
+  expect(totalFiltrado, 'La búsqueda por el id de una factura real no devolvió ningún resultado').toBeGreaterThan(0);
+  expect(totalFiltrado).toBeLessThanOrEqual(totalSinFiltrar);
+});
+
+test('Abono con Tarjeta (parcial, monto controlado): saldo restante y "Ver historial de abonos" quedan matemáticamente exactos', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const cxc = new CuentasPorCobrarPage(page);
+  const erroresJS = espiarErroresJS(page);
+
+  await cxc.irA();
+  const clientes = await cxc.leerClientesVisibles();
+  expect(clientes.length).toBeGreaterThan(0);
+  // Se toma el ÚLTIMO cliente (mismo criterio ya documentado en el resto de
+  // esta suite: reduce la probabilidad de colisión con otros escenarios de
+  // esta misma corrida que operan sobre el primero).
+  const indice = clientes.length - 1;
+  const nombreCliente = clientes[indice].cliente;
+  await cxc.abrirGestionCliente(indice);
+  const ids = await cxc.obtenerIdsFacturasPendientes();
+  expect(ids.length).toBeGreaterThan(0);
+  const idFactura = ids[0];
+  const saldoAntes = await cxc.leerSaldoFacturaPendiente(idFactura);
+
+  // Monto PARCIAL controlado (90% del saldo, nunca el 100%): a diferencia de
+  // seleccionarAbonoMetodoExacto() (siempre el saldo completo), esto deja la
+  // factura todavía pendiente — necesario para poder reabrir "Ver historial
+  // de abonos" de la MISMA factura después (una factura saldada a 0 ya no
+  // aparece en el listado de pendientes, ver el test de arriba con Efectivo).
+  const montoAbono = Number((saldoAntes * 0.9).toFixed(2));
+  await test.step(`Registrar el abono con Tarjeta (${montoAbono}, 90% del saldo)`, async () => {
+    await cxc.abrirRegistrarAbono(idFactura);
+    await cxc.seleccionarAbonoMetodoConMonto('tarjeta', montoAbono.toFixed(2));
+    await cxc.confirmarAbono();
+  });
+
+  const saldoEsperado = Number((saldoAntes - montoAbono).toFixed(2));
+  await test.step('SALDO ANTERIOR − ABONO = SALDO NUEVO, y el historial refleja Tarjeta por el monto exacto', async () => {
+    await cxc.irA();
+    await cxc.buscar(nombreCliente);
+    await cxc.abrirGestionCliente(0);
+    const saldoDespues = await cxc.leerSaldoFacturaPendiente(idFactura);
+    expect(saldoDespues, 'SALDO ANTERIOR − ABONO ≠ SALDO NUEVO').toBeCloseTo(saldoEsperado, 2);
+
+    await cxc.abrirHistorialAbonos(idFactura);
+    const historial = await cxc.leerHistorialAbonos();
+    const abonoTarjeta = historial.find((h) => h.metodo === 'Tarjeta' && Math.abs(h.monto - montoAbono) < 0.01);
+    expect(abonoTarjeta, `El historial no muestra un abono con Tarjeta por ${montoAbono}`).toBeTruthy();
+  });
+
+  expect(erroresJS, `Errores de JavaScript detectados: ${erroresJS.join(' | ')}`).toEqual([]);
+});
+
+test('Cliente con múltiples facturas: abonar UNA no afecta el saldo de las demás (aislamiento)', async ({ page }) => {
+  test.setTimeout(TIMEOUTS.TEST);
+  const cxc = new CuentasPorCobrarPage(page);
+
+  await cxc.irA();
+  const clientes = await cxc.leerClientesVisibles();
+  const conVariasFacturas = clientes.find((c) => c.cantidadFacturas > 1);
+  test.skip(!conVariasFacturas, 'No hay ningún cliente con más de 1 factura pendiente para probar aislamiento entre facturas.');
+
+  const indice = clientes.indexOf(conVariasFacturas!);
+  const nombreCliente = conVariasFacturas!.cliente;
+  await cxc.abrirGestionCliente(indice);
+  const ids = await cxc.obtenerIdsFacturasPendientes();
+  expect(ids.length).toBeGreaterThan(1);
+
+  const idAbonar = ids[0];
+  const idsTestigo = ids.slice(1); // NO se tocan — deben permanecer exactamente iguales
+  const saldosTestigoAntes: Record<string, number> = {};
+  for (const id of idsTestigo) {
+    saldosTestigoAntes[id] = await cxc.leerSaldoFacturaPendiente(id);
+  }
+  const saldoAbonarAntes = await cxc.leerSaldoFacturaPendiente(idAbonar);
+
+  const montoAbono = Number((saldoAbonarAntes / 2).toFixed(2));
+  await test.step(`Abonar SOLO la primera factura (${idAbonar}), un monto parcial (${montoAbono})`, async () => {
+    await cxc.abrirRegistrarAbono(idAbonar);
+    await cxc.seleccionarAbonoEfectivo(montoAbono.toFixed(2));
+    await cxc.confirmarAbono();
+  });
+
+  await test.step('La factura abonada bajó exactamente el monto; las demás quedaron intactas', async () => {
+    await cxc.irA();
+    await cxc.buscar(nombreCliente);
+    await cxc.abrirGestionCliente(0);
+
+    const saldoAbonarDespues = await cxc.leerSaldoFacturaPendiente(idAbonar);
+    expect(saldoAbonarDespues, 'La factura abonada no bajó exactamente el monto del abono').toBeCloseTo(
+      Number((saldoAbonarAntes - montoAbono).toFixed(2)), 2
+    );
+
+    for (const id of idsTestigo) {
+      const saldoTestigoDespues = await cxc.leerSaldoFacturaPendiente(id);
+      expect(saldoTestigoDespues, `La factura testigo ${id} cambió de saldo pese a no haber sido abonada`).toBeCloseTo(saldosTestigoAntes[id], 2);
+    }
   });
 });

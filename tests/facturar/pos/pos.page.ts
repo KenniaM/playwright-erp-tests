@@ -124,6 +124,36 @@ export class PosPage {
   async confirmarCerrarCaja(...args: Parameters<PosCierreCaja['confirmarCerrarCaja']>) {
     return this.cierreCaja.confirmarCerrarCaja(...args);
   }
+  async validacionMetodoPagoExiste(...args: Parameters<PosCierreCaja['validacionMetodoPagoExiste']>) {
+    return this.cierreCaja.validacionMetodoPagoExiste(...args);
+  }
+  async leerValidacionMetodo(...args: Parameters<PosCierreCaja['leerValidacionMetodo']>) {
+    return this.cierreCaja.leerValidacionMetodo(...args);
+  }
+  async leerTodasLasValidacionesMetodoPago(...args: Parameters<PosCierreCaja['leerTodasLasValidacionesMetodoPago']>) {
+    return this.cierreCaja.leerTodasLasValidacionesMetodoPago(...args);
+  }
+  async activarValidacionMetodo(...args: Parameters<PosCierreCaja['activarValidacionMetodo']>) {
+    return this.cierreCaja.activarValidacionMetodo(...args);
+  }
+  async desactivarValidacionMetodo(...args: Parameters<PosCierreCaja['desactivarValidacionMetodo']>) {
+    return this.cierreCaja.desactivarValidacionMetodo(...args);
+  }
+  async establecerMontoContadoValidacion(...args: Parameters<PosCierreCaja['establecerMontoContadoValidacion']>) {
+    return this.cierreCaja.establecerMontoContadoValidacion(...args);
+  }
+  async activarValidarTodosLosMetodos(...args: Parameters<PosCierreCaja['activarValidarTodosLosMetodos']>) {
+    return this.cierreCaja.activarValidarTodosLosMetodos(...args);
+  }
+  async presionarBotonCerrarCaja(...args: Parameters<PosCierreCaja['presionarBotonCerrarCaja']>) {
+    return this.cierreCaja.presionarBotonCerrarCaja(...args);
+  }
+  async leerMensajeConfirmacionCerrarCaja(...args: Parameters<PosCierreCaja['leerMensajeConfirmacionCerrarCaja']>) {
+    return this.cierreCaja.leerMensajeConfirmacionCerrarCaja(...args);
+  }
+  async confirmarSweetAlertDeCierre(...args: Parameters<PosCierreCaja['confirmarSweetAlertDeCierre']>) {
+    return this.cierreCaja.confirmarSweetAlertDeCierre(...args);
+  }
   async registrarMovimientoCaja(...args: Parameters<PosCierreCaja['registrarMovimientoCaja']>) {
     return this.cierreCaja.registrarMovimientoCaja(...args);
   }

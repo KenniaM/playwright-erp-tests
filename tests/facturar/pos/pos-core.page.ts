@@ -4068,6 +4068,22 @@ export class PosCore {
    * acotado individualmente, así que más intentos no arriesgan colgar el
    * test, solo dan más oportunidades de ganarle la carrera al overlay.
    *
+   * Bug de automatización CONFIRMADO EN VIVO (con captura de pantalla real,
+   * no supuesto): este método solo cerraba el modal de notificaciones y los
+   * toasts en cada vuelta — a diferencia de abrirCrearProforma() y de
+   * cerrarOverlaysConocidos(), que además cierran el "Aviso Consecutivo"
+   * (`cerrarAvisoConsecutivoSiAparece()`). Reproducido en vivo: una captura
+   * de pantalla en el momento exacto del fallo mostró el tooltip amarillo
+   * real "El consecutivo actual está fuera del rango configurado..."
+   * cubriendo físicamente el botón #menu_type_currency, e interceptando el
+   * click en las 8 vueltas del bucle sin que ninguna lo cerrara — esta
+   * condición es real y persistente en el ambiente (el consecutivo actual
+   * SÍ está fuera del rango configurado), no un parpadeo aleatorio. Puede
+   * reaparecer entre el cierre inicial (cerrarOverlaysConocidos() al cargar
+   * el POS) y una llamada posterior a este método, tras cualquier acción
+   * intermedia (agregar producto, etc.) que dispare su re-validación.
+   * Corregido agregando el mismo cierre que ya usa el resto de la suite.
+   *
    * Ventana de espera de setTypeCurrencyReceipByUser en 9s (no 4s como
    * originalmente): causa raíz confirmada en vivo (pos-facturar.spec.ts,
    * corrida completa de los 16 escenarios en un mismo worker/sesión larga):
@@ -4088,6 +4104,7 @@ export class PosCore {
     const MAX_INTENTOS = 8;
     for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
       await this.cerrarModalNotificacionesSiAparece();
+      await this.cerrarAvisoConsecutivoSiAparece();
       await this.cerrarTodosLosToastsSiAparecen();
 
       // Este proyecto no configura un actionTimeout por defecto — sin un

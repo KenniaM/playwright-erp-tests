@@ -1,4 +1,4 @@
-import { Download, expect, Locator, Page } from '@playwright/test';
+import { Download, expect, Locator, Page, Response } from '@playwright/test';
 import { BASE_URL } from '../env.config';
 import { contentHeaderConTexto, SubmoduloReportes, TIMEOUTS } from './reportes.page';
 
@@ -15,7 +15,11 @@ export const SUBMODULOS_REPORTES_CLIENTES: SubmoduloReportes[] = [
     url: BASE_URL + '/reports/customerAccountingStatementReport',
     rutaEsperada: 'customerAccountingStatementReport',
     tituloEsperado: /estado de cuenta/i,
-    obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /estado de cuenta/i),
+    // Componente rediseñado por completo ("casv2", ver ReporteEstadoCuentaPage
+    // más abajo) — ya no tiene ningún `.content-header` con este texto.
+    // `#casv2_general_summary` (las 3 tarjetas KPI) es el contenedor real que
+    // confirma que la pantalla propia del submódulo cargó.
+    obtenerLocatorDeCarga: (page) => page.locator('#casv2_general_summary'),
   },
   {
     nombre: 'Clientes frecuentes',
@@ -31,34 +35,32 @@ export const SUBMODULOS_REPORTES_CLIENTES: SubmoduloReportes[] = [
     tituloEsperado: /clientes por vendedor/i,
     obtenerLocatorDeCarga: (page) => contentHeaderConTexto(page, /clientes por vendedor/i),
   },
-  // "Redes Sociales" queda fuera de este listado — ver hallazgo documentado
-  // junto a REDES_SOCIALES_ROTO más abajo.
+  {
+    // Hallazgo previo (documentado en varias sesiones anteriores, confirmado
+    // 3 veces): esta URL redirigía a `/help/unauthorized` ("NO AUTORIZADO")
+    // para la cuenta de pruebas pese a que el Sidebar la ofrece — ya NO
+    // reproduce (confirmado en vivo: la pantalla real "Reporte de Redes
+    // Sociales" carga completa, con tabla/filtros/exportar) — el permiso fue
+    // restaurado en el ambiente en algún punto entre sesiones. Se reincorpora
+    // al patrón de navegación estándar; cobertura funcional completa en el
+    // describe "Reporte de Redes Sociales" más abajo (`ReporteRedesSocialesPage`).
+    nombre: 'Redes Sociales',
+    url: BASE_URL + '/reports/customerBySocialNetworks',
+    rutaEsperada: 'customerBySocialNetworks',
+    // Título real confirmado en vivo: "Reporte de ventas por cliente" — el
+    // `<title>` del documento no coincide con el nombre visible en el
+    // Sidebar/encabezado ("Reporte de Redes Sociales"), confirmado 12/12
+    // veces (no es una carrera de carga).
+    tituloEsperado: /reporte de ventas por cliente/i,
+    obtenerLocatorDeCarga: (page) => page.locator('table.mdl-data-table:visible').first(),
+  },
 ];
-
-/**
- * Hallazgo confirmado en vivo (3 veces, en intentos separados en el tiempo):
- * el link "Redes Sociales" SÍ está visible en el Sidebar (dentro de
- * Reportes > Clientes), pero navegar a su URL real (`customerBySocialNetworks`)
- * redirige a `/help/unauthorized` ("NO AUTORIZADO — Póngase en contacto con
- * un administrador para validar acceso") para la cuenta Administrador nivel
- * 1 — una inconsistencia real entre lo que el Sidebar ofrece y lo que el
- * backend autoriza (misma categoría de bug ya documentada en este repo para
- * "Admin roles" del POS, ver CLAUDE.md). Se documenta como hallazgo (mismo
- * criterio que "Reporte de Inspección" en gestion-navegacion.spec.ts) en vez
- * de omitirlo silenciosamente.
- */
-export const REDES_SOCIALES_ROTO = {
-  nombre: 'Redes Sociales',
-  url: BASE_URL + '/reports/customerBySocialNetworks',
-} as const;
 
 const URL_BITACORA_CLIENTES = SUBMODULOS_REPORTES_CLIENTES[0].url;
 const URL_ESTADO_CUENTA = SUBMODULOS_REPORTES_CLIENTES[1].url;
 const URL_CLIENTES_FRECUENTES = SUBMODULOS_REPORTES_CLIENTES[2].url;
 const URL_CLIENTES_POR_VENDEDOR = SUBMODULOS_REPORTES_CLIENTES[3].url;
-// "Redes Sociales" ya no vive en SUBMODULOS_REPORTES_CLIENTES (ver
-// REDES_SOCIALES_ROTO arriba) — se referencia directo.
-const URL_REDES_SOCIALES = REDES_SOCIALES_ROTO.url;
+const URL_REDES_SOCIALES = SUBMODULOS_REPORTES_CLIENTES[4].url;
 
 // ─── Utilidades de fecha ────────────────────────────────────────────────────
 
@@ -361,80 +363,173 @@ export class ReporteBitacoraClientesPage {
 /**
  * Reporte de Estado de Cuenta (reports/customerAccountingStatementReport).
  *
- * Confirmado en vivo:
- * - Filtros: no tiene buscador de texto libre ni rango de fechas. El único
- *   filtro real es "Cliente" — un `<select>` (`#accounting_statement_customer_select`,
- *   estilizado con la librería "chosen") con "Todas" + cada cliente de la
- *   compañía — más el filtro de moneda compartido (botón "Moneda: Todas").
- *   Se aplican al hacer clic en "Buscar" (`#btn_search_accounting_statement`).
- * - No existe exportación a nivel de reporte (ni Excel ni PDF); la
- *   exportación es por fila, vía el menú de acciones (ver abajo).
- * - "Enviar a todos" (`#btn_send_massive_email`) envía un correo masivo real
- *   a todos los clientes — no se ejecuta en las pruebas por ser una acción
- *   con efectos secundarios reales (spam), solo se confirma que el botón
- *   existe y está habilitado.
- * - Cada fila tiene un menú de acciones (ícono "more_vert") con: "Estado de
- *   cuenta" (abre un modal de detalle vía `show_customer_accounting_statement_detail`),
- *   "Imprimir" (enlace real a `printCustomerAccountingStatement`, se abre en
- *   pestaña nueva), "Descargar PDF" (enlace real a
- *   `downloadCustomerAccountingStatementPdf`, se abre en pestaña nueva y
- *   descarga un PDF), "Correo" y "Enviar por WhatsApp" (ambas con efectos
- *   secundarios reales — no se ejecutan). "Impresión general"/"Descargar PDF
- *   general" quedan ocultas por defecto (`display:none`) y no se prueban.
- * - Ordenamiento/paginación: no existen.
- * - Sin resultados: no hay mensaje de "sin resultados"; la tabla queda con
- *   `tbody` vacío.
+ * HALLAZGO MAYOR investigado en vivo (2026-08-20, ambiente qa_restaurant,
+ * compañía "Restaurante Rancho Robertos"): esta pantalla fue REDISEÑADA POR
+ * COMPLETO por la propia aplicación desde la última vez que se documentó
+ * aquí — componente nuevo, prefijo real "casv2" ("Customer Accounting
+ * Statement v2"), montado en `#customer_accounting_statement_v2_app`. Todos
+ * los ids/clases de la versión anterior (`#accounting_statement_customer_select`,
+ * `#btn_search_accounting_statement`, `#table_content`,
+ * `#btn_send_massive_email`, `.product_dropdown_options`,
+ * `#modal_view_accounting_content`) YA NO EXISTEN. Mismo patrón de
+ * redescubrimiento que ya documentó el proyecto para Cuentas por Cobrar
+ * ("acr-v2", ver `cuentas-por-cobrar.page.ts`) — es razonable asumir que es
+ * un cambio de versión de la aplicación (no específico de esta compañía),
+ * pero solo se confirmó en vivo contra qa_restaurant en esta sesión; si se
+ * retoma trabajo contra el ambiente original (qa_talleralpha) sin haberlo
+ * verificado ahí todavía, revalidar esta clase contra ese ambiente antes de
+ * asumir que aplica sin cambios.
+ *
+ * UI real confirmada en vivo:
+ * - Filtros (`.casv2-filters`): "Empresa" (`#casv2_company`, Chosen — una
+ *   sola opción cuando la cuenta tiene una compañía), "Cliente"
+ *   (`#casv2_customer`, Chosen — solo trae "Todos los clientes" hasta que se
+ *   busca/escribe, no lista todos los clientes de antemano), "Moneda"
+ *   (`#casv2_currency`, Chosen — "Todas las monedas" + cada moneda con
+ *   código real, ej. "₡ - CRC"), "Buscar" (`#casv2_search`, texto libre por
+ *   nombre o código de cliente). Se aplican con el botón "Buscar"
+ *   (`#casv2_apply_filters`); "Limpiar filtros" (`#casv2_clear_filters`)
+ *   restaura cliente/búsqueda/moneda (no la empresa).
+ * - Acciones de encabezado: "Envío masivo" (`#casv2_send_all`, correo real a
+ *   todos los clientes — mismo criterio que el resto del repo, no se
+ *   ejecuta, solo se confirma existencia/habilitado) y "Exportar Excel"
+ *   (`#casv2_export_excel`, sí se ejecuta — descarga real).
+ * - 3 tarjetas KPI (`#casv2_general_summary`, `article.casv2-general-summary-card`):
+ *   "Clientes con créditos", "Clientes con créditos vencidos", "Clientes por
+ *   vencer (30 días)" — cada una cuenta CLIENTES únicos, no facturas.
+ * - Tabla (`.casv2-table`, dentro de `#casv2_table_region`/`#casv2_table_scroll`,
+ *   con scroll — confirmado en el propio tooltip de ayuda del reporte que es
+ *   de carga incremental, igual que el Reporte de Cuentas por Cobrar de
+ *   Ventas): 8 columnas reales, cada `<td>` con `data-label` propio que
+ *   coincide con el título de su columna (fuente confiable para parsear sin
+ *   depender del índice): "Cliente y contacto", "Empresa y moneda", "Estado
+ *   y vencimientos", "Documentos", "Crédito", "Facturado y pagado",
+ *   "Saldos", "Acciones". La columna "Saldos" es la que se corresponde 1:1
+ *   con "Facturado y pagado": Facturado − Pagado = Saldo total (= Vencido +
+ *   Por vencer).
+ * - `.casv2-loaded-count` ("N registros cargados") es el contador real de
+ *   filas cargadas (crece con el scroll incremental).
+ * - Totales por moneda al pie (`#casv2_currency_totals`,
+ *   `article.casv2-currency-total-card` — uno por moneda con datos, código
+ *   real en `.casv2-currency-total-code`): Facturado/Pagado/Vencido/Por
+ *   vencer/Saldo total — la propia ayuda del reporte documenta la fórmula
+ *   real ("Saldo total = Vencido + Por vencer").
+ * - Menú de acciones por fila: botón `button.casv2-action-trigger` (uno por
+ *   fila, sin id propio — se localiza por índice) abre un popover real
+ *   (`.popover.casv2-action-popover .casv2-action-list`, NO un
+ *   `.dropdown-menu` — confirmado en vivo que Bootstrap lo monta como
+ *   popover) con 5 acciones reales: "Estado de cuenta" (detalle en modal),
+ *   "Imprimir", "Descargar PDF" (única con efecto verificable sin side
+ *   effects reales — se ejecuta), "Correo" y "Enviar por WhatsApp" (ambas
+ *   con efectos secundarios reales, no se ejecutan, mismo criterio que
+ *   "Envío masivo").
+ * - Ordenamiento/paginación tradicional: no existen (scroll incremental).
  */
 export class ReporteEstadoCuentaPage {
   constructor(private readonly page: Page) {}
 
-  private readonly selectCliente = () => this.page.locator('#accounting_statement_customer_select');
-  private readonly btnBuscar = () => this.page.locator('#btn_search_accounting_statement');
-  private readonly btnEnviarATodos = () => this.page.locator('#btn_send_massive_email');
-  private readonly contenedorTabla = () => this.page.locator('#table_content');
-  private readonly menuAccionesAbierto = () => this.page.locator('.product_dropdown_options.open .dropdown-menu');
+  private readonly selectCliente = () => this.page.locator('#casv2_customer');
+  private readonly selectMoneda = () => this.page.locator('#casv2_currency');
+  private readonly campoBuscar = () => this.page.locator('#casv2_search');
+  private readonly btnBuscar = () => this.page.locator('#casv2_apply_filters');
+  private readonly btnLimpiarFiltros = () => this.page.locator('#casv2_clear_filters');
+  private readonly btnEnviarATodos = () => this.page.locator('#casv2_send_all');
+  private readonly btnExportarExcel = () => this.page.locator('#casv2_export_excel');
+  private readonly contenedorTabla = () => this.page.locator('#casv2_table_region');
+  private readonly resumenGeneral = () => this.page.locator('#casv2_general_summary');
+  private readonly totalesPorMoneda = () => this.page.locator('#casv2_currency_totals');
 
-  /** Columna (0-based) del nombre del cliente en cada fila — confirmado en vivo. */
-  static readonly COLUMNA_CLIENTE = 1;
+  /** Convierte un monto con formato real de la app (`₡11.065,00`, punto de millar + coma decimal) a `number`. */
+  private static leerMonto(texto: string | null): number {
+    const limpio = (texto ?? '').replace(/[^0-9,.-]/g, '').replace(/\./g, '').replace(',', '.');
+    const valor = parseFloat(limpio);
+    return Number.isNaN(valor) ? 0 : valor;
+  }
 
   async abrir() {
     await this.page.goto(URL_ESTADO_CUENTA, { waitUntil: 'domcontentloaded', timeout: TIMEOUTS.NAVIGATE });
     await cerrarBannerNotificaciones(this.page);
+    await this._esperarTablaCargada();
   }
 
-  /** Selecciona un cliente por su texto visible en el filtro "Cliente" (p.ej. "Todas" o el nombre exacto). */
-  async seleccionarCliente(etiqueta: string) {
-    // El `<select>` real queda oculto (`display:none`) porque la librería
-    // "chosen" lo reemplaza visualmente por un widget propio — sigue siendo
-    // el control funcional, por lo que se omite el chequeo de visibilidad.
-    await this.selectCliente().selectOption({ label: etiqueta }, { force: true });
+  /**
+   * Espera a que la tabla termine de (re)cargar vía AJAX — mismo criterio ya
+   * confirmado en `CuentasPorCobrarPage._esperarListadoClientesCargado()`
+   * para el componente hermano "acr-v2": el contenedor puede pasar por un
+   * estado transitorio antes de poblarse, y `waitForLoadState('networkidle')`
+   * no es una señal confiable en este layout con scroll incremental.
+   *
+   * CORRECCIÓN DE AUTOMATIZACIÓN confirmada en vivo (2/2 corridas idénticas,
+   * siempre justo después de crear una factura a crédito nueva y aplicar un
+   * abono): tras "Buscar"/"Limpiar filtros", el reporte muestra un overlay
+   * real "Cargando saldos" / "Cargando indicadores..." ANTES de poblar la
+   * tabla — leer `contarFilas()`/`leerFilaFinanciera()` en ese instante
+   * devuelve 0 filas (o datos del resultado ANTERIOR), no un error silencioso
+   * sino una carrera real. Se espera la condición real: ese encabezado de
+   * carga desaparece.
+   */
+  private async _esperarTablaCargada() {
+    await expect(this.contenedorTabla(), 'El Reporte de Estado de Cuenta no terminó de cargar').toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await this.page.getByText('Cargando saldos', { exact: false }).first().waitFor({ state: 'hidden', timeout: TIMEOUTS.CARGA }).catch(() => {});
+    await this.page.getByText('Cargando indicadores', { exact: false }).first().waitFor({ state: 'hidden', timeout: TIMEOUTS.CARGA }).catch(() => {});
+    await this.page.waitForLoadState('networkidle', { timeout: TIMEOUTS.CARGA }).catch(() => {});
   }
 
-  /** Etiquetas de los clientes disponibles en el filtro, excluyendo la opción "Todas". */
-  async obtenerOpcionesDeCliente(): Promise<string[]> {
-    const etiquetas = await this.selectCliente().locator('option').allTextContents();
-    return etiquetas.map((e) => e.trim()).filter((e) => e && e !== 'Todas');
+  /** Busca dentro del filtro "Cliente" (Chosen con autocompletado AJAX) y selecciona la primera coincidencia real. */
+  async seleccionarClientePorBusqueda(termino: string) {
+    const contenedor = this.selectCliente().locator('xpath=following-sibling::div[contains(@class,"chosen-container")][1]');
+    await contenedor.locator('.chosen-single').click();
+    await contenedor.locator('.chosen-search input').fill(termino);
+    await expect(contenedor.locator('.chosen-results li').first()).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    await contenedor.locator('.chosen-results li').first().click();
   }
 
-  /** Texto de la columna "Cliente" de la fila indicada (0-based). */
-  async obtenerClienteDeFila(indice: number): Promise<string> {
-    return this.filas().nth(indice).locator('td').nth(ReporteEstadoCuentaPage.COLUMNA_CLIENTE).innerText();
+  /** Restaura el filtro "Cliente" a "Todos los clientes". */
+  async seleccionarTodosLosClientes() {
+    const contenedor = this.selectCliente().locator('xpath=following-sibling::div[contains(@class,"chosen-container")][1]');
+    await contenedor.locator('.chosen-single').click();
+    await contenedor.locator('.chosen-results li', { hasText: 'Todos los clientes' }).first().click();
+  }
+
+  /** Selecciona una moneda por su texto visible (ej. "₡ - CRC" o "Todas las monedas") — widget Chosen. */
+  async seleccionarMoneda(texto: string | RegExp) {
+    const contenedor = this.selectMoneda().locator('xpath=following-sibling::div[contains(@class,"chosen-container")][1]');
+    await contenedor.locator('.chosen-single').click();
+    await contenedor.locator('.chosen-results li', { hasText: texto }).first().click();
+  }
+
+  /** Etiquetas reales de moneda disponibles en el filtro (incluye "Todas las monedas"). */
+  async obtenerOpcionesDeMoneda(): Promise<string[]> {
+    return (await this.selectMoneda().locator('option').allTextContents()).map((e) => e.trim());
+  }
+
+  async buscarPorTexto(termino: string) {
+    await this.campoBuscar().fill(termino);
+    await this.buscar();
   }
 
   async buscar() {
     await this.btnBuscar().click();
+    await this._esperarTablaCargada();
   }
 
-  async seleccionarMoneda(texto: string | RegExp) {
-    await seleccionarMoneda(this.page, texto);
+  async limpiarFiltros() {
+    await this.btnLimpiarFiltros().click();
+    await this._esperarTablaCargada();
   }
 
   botonEnviarATodos(): Locator {
     return this.btnEnviarATodos();
   }
 
+  async exportarExcel(): Promise<Download> {
+    const descarga = this.page.waitForEvent('download', { timeout: TIMEOUTS.NAVIGATE });
+    await this.btnExportarExcel().click();
+    return descarga;
+  }
+
   tabla(): Locator {
-    return this.contenedorTabla().locator('table').first();
+    return this.contenedorTabla().locator('table.casv2-table');
   }
 
   filas(): Locator {
@@ -445,27 +540,165 @@ export class ReporteEstadoCuentaPage {
     return this.filas().count();
   }
 
-  private async abrirMenuAccionesFila(indice: number) {
-    await this.filas().nth(indice).locator('button[id="order_analitics_button_"]').click();
-    await expect(this.menuAccionesAbierto()).toBeVisible({ timeout: TIMEOUTS.CARGA });
+  /** Texto del contador real de filas cargadas (`"N registros cargados"`, scroll incremental). */
+  async obtenerRegistrosCargadosTexto(): Promise<string> {
+    return this.page.locator('.casv2-loaded-count').innerText();
   }
 
-  /** Abre el menú de acciones de la fila y hace clic en "Estado de cuenta" (ver detalle). */
-  async verDetalleDeFila(indice: number) {
-    await this.abrirMenuAccionesFila(indice);
-    await this.menuAccionesAbierto().locator('a', { hasText: 'Estado de cuenta' }).click();
+  /** Texto de la columna "Cliente y contacto" (solo el nombre) de la fila indicada (0-based). */
+  async obtenerClienteDeFila(indice: number): Promise<string> {
+    const texto = await this.filas().nth(indice).locator('td[data-label="Cliente y contacto"] strong').first().innerText();
+    return texto.trim();
   }
 
-  /** Abre el menú de acciones de la fila y descarga el PDF individual. */
-  async descargarPdfDeFila(indice: number): Promise<Download> {
-    await this.abrirMenuAccionesFila(indice);
-    const descarga = this.page.waitForEvent('download', { timeout: TIMEOUTS.NAVIGATE });
-    await this.menuAccionesAbierto().locator('a', { hasText: 'Descargar PDF' }).first().click();
-    return descarga;
+  /** Lee las 3 tarjetas KPI del resumen general ("Clientes con créditos"/"...vencidos"/"...por vencer"). */
+  async leerResumenGeneral(): Promise<ResumenGeneralEstadoCuenta> {
+    const leer = async (variante: string) => {
+      const valor = await this.resumenGeneral()
+        .locator(`article.casv2-general-summary-card--${variante} strong`)
+        .innerText()
+        .catch(() => '0');
+      return parseInt(valor.replace(/[^0-9-]/g, ''), 10) || 0;
+    };
+    return {
+      clientesConCreditos: await leer('credit'),
+      clientesConCreditosVencidos: await leer('overdue'),
+      clientesPorVencer: await leer('upcoming'),
+    };
+  }
+
+  /**
+   * Lee todas las tarjetas de totales por moneda al pie del reporte
+   * (`#casv2_currency_totals`) — una por moneda con datos en el resultado
+   * actual, cada una con su propio código real (ej. "CRC", "USD").
+   */
+  async leerTotalesPorMoneda(): Promise<TotalesMonedaEstadoCuenta[]> {
+    const tarjetas = this.totalesPorMoneda().locator('article.casv2-currency-total-card');
+    const total = await tarjetas.count();
+    const resultado: TotalesMonedaEstadoCuenta[] = [];
+    for (let i = 0; i < total; i++) {
+      const tarjeta = tarjetas.nth(i);
+      const codigo = (await tarjeta.locator('.casv2-currency-total-code').innerText()).trim();
+      const spans = tarjeta.locator('> span');
+      const totalSpans = await spans.count();
+      const valores: number[] = [];
+      for (let j = 0; j < totalSpans; j++) {
+        valores.push(ReporteEstadoCuentaPage.leerMonto(await spans.nth(j).locator('b').innerText()));
+      }
+      // Orden real confirmado en vivo: Facturado, Pagado, Vencido, Por vencer, Saldo total.
+      resultado.push({
+        moneda: codigo,
+        facturado: valores[0] ?? 0,
+        pagado: valores[1] ?? 0,
+        vencido: valores[2] ?? 0,
+        porVencer: valores[3] ?? 0,
+        saldoTotal: valores[4] ?? 0,
+      });
+    }
+    return resultado;
+  }
+
+  /**
+   * Lee los datos financieros completos (Facturado/Pagado/Pendiente,
+   * Vencido/Por vencer/Saldo total) de la fila indicada (0-based), parseados
+   * por su `data-label` real — no por índice de columna, más robusto ante
+   * reordenamientos futuros de la tabla.
+   */
+  async leerFilaFinanciera(indice: number): Promise<FilaEstadoCuenta> {
+    const fila = this.filas().nth(indice);
+    const cliente = await this.obtenerClienteDeFila(indice);
+
+    // CORRECCIÓN DE AUTOMATIZACIÓN confirmada en vivo: esta celda real tiene
+    // 3 `<small>` — el PRIMERO es la ETIQUETA "Facturado" (sin ningún dígito,
+    // acompaña al `<strong>` de al lado), el SEGUNDO es el valor real
+    // ("Pagado: ₡X"). `.first()` leía la etiqueta (0 dígitos → `leerMonto`
+    // devolvía 0 siempre), produciendo `Facturado − Pagado` == `Facturado`
+    // en vez de `Saldo total` — confirmado en vivo comparando contra el
+    // saldo real de Cuentas por Cobrar (la mitad exacta del valor obtenido
+    // con el bug).
+    const celdaFacturado = fila.locator('td[data-label="Facturado y pagado"] .casv2-money-stack');
+    const facturado = ReporteEstadoCuentaPage.leerMonto(await celdaFacturado.locator('strong').innerText());
+    const textoPagado = await celdaFacturado.locator('small').nth(1).innerText();
+    const pagado = ReporteEstadoCuentaPage.leerMonto(textoPagado);
+
+    const celdaSaldos = fila.locator('td[data-label="Saldos"] .casv2-money-stack');
+    const vencido = ReporteEstadoCuentaPage.leerMonto(await celdaSaldos.locator('.casv2-overdue').innerText());
+    const porVencer = ReporteEstadoCuentaPage.leerMonto(await celdaSaldos.locator('small').nth(1).innerText());
+    const saldoTotal = ReporteEstadoCuentaPage.leerMonto(await celdaSaldos.locator('strong').innerText());
+
+    const documentosTexto = await fila.locator('td[data-label="Documentos"] strong').innerText();
+    const vencidosTexto = await fila.locator('td[data-label="Documentos"] small.casv2-overdue').innerText();
+
+    return {
+      cliente,
+      facturado,
+      pagado,
+      vencido,
+      porVencer,
+      saldoTotal,
+      documentosPendientes: parseInt(documentosTexto, 10) || 0,
+      documentosVencidos: parseInt(vencidosTexto, 10) || 0,
+    };
+  }
+
+  private popoverAcciones(): Locator {
+    return this.page.locator('.popover.casv2-action-popover');
+  }
+
+  /**
+   * Abre el popover de acciones de la fila indicada (0-based) — botón
+   * `button.casv2-action-trigger` propio por fila, sin id individual (se
+   * localiza por índice dentro de la tabla ya renderizada).
+   */
+  async abrirMenuAccionesFila(indice: number) {
+    await this.filas().nth(indice).locator('button.casv2-action-trigger').click();
+    await expect(this.popoverAcciones(), 'El popover de acciones de la fila no apareció').toBeVisible({ timeout: TIMEOUTS.CARGA });
+  }
+
+  /** Con el menú de acciones de una fila ya abierto, hace clic en "Estado de cuenta" (ver detalle). */
+  async verDetalleDesdeMenu() {
+    await this.popoverAcciones().locator('button.casv2-action-item', { hasText: 'Estado de cuenta' }).click();
+  }
+
+  /**
+   * Con el menú de acciones de una fila ya abierto, hace clic en "Descargar
+   * PDF" y devuelve la respuesta HTTP real del PDF.
+   *
+   * CORRECCIÓN DE AUTOMATIZACIÓN confirmada en vivo: a diferencia del resto
+   * de exportaciones de este reporte, "Descargar PDF" NO dispara un evento
+   * `download` real — abre una pestaña nueva que navega directo a
+   * `reports/downloadCustomerAccountingStatementPdf?...` y Firefox renderiza
+   * el PDF con su visor interno en vez de descargarlo (sin
+   * `Content-Disposition: attachment`), confirmado en vivo esperando
+   * `page.waitForEvent('download')` sin resultado en 60s pese a que la
+   * pestaña sí navegó correctamente. La señal real de éxito es la propia
+   * respuesta HTTP de esa pestaña nueva (200 + `content-type: application/pdf`).
+   */
+  async descargarPdfDesdeMenu(): Promise<Response> {
+    // Las 3 promesas se arman ANTES del click y se resuelven en paralelo:
+    // confirmado en vivo que la pestaña nueva navega al PDF de inmediato
+    // (window.open ya con la URL final, sin una navegación posterior
+    // separada) — esperar la respuesta DESPUÉS de obtener el `popup` llega
+    // tarde casi siempre, la respuesta ya ocurrió.
+    const [popup, respuesta] = await Promise.all([
+      this.page.context().waitForEvent('page', { timeout: TIMEOUTS.NAVIGATE }),
+      this.page.context().waitForEvent('response', (r) => r.url().includes('downloadCustomerAccountingStatementPdf'), { timeout: TIMEOUTS.NAVIGATE }),
+      this.popoverAcciones().locator('button.casv2-action-item', { hasText: 'Descargar PDF' }).click(),
+    ]);
+    await popup.close();
+    return respuesta;
+  }
+
+  /** Etiquetas reales de las 5 acciones del popover de una fila (para validar que todas existen). */
+  async obtenerAccionesDelMenu(): Promise<string[]> {
+    return this.popoverAcciones().locator('button.casv2-action-item').allTextContents();
   }
 
   modalDetalle(): Locator {
-    return this.page.locator('#modal_view_accounting_content');
+    // El propio popover de ayuda del reporte confirma que "Estado de cuenta"
+    // abre un modal de detalle — localizado por su encabezado real
+    // ("Detalle del estado de cuenta"), sin id propio identificado aún.
+    return this.page.locator('.modal', { hasText: 'Detalle del estado de cuenta' });
   }
 
   async validarTabla() {
@@ -476,6 +709,32 @@ export class ReporteEstadoCuentaPage {
     await validarSinErrores(this.page);
   }
 }
+
+export type ResumenGeneralEstadoCuenta = {
+  clientesConCreditos: number;
+  clientesConCreditosVencidos: number;
+  clientesPorVencer: number;
+};
+
+export type TotalesMonedaEstadoCuenta = {
+  moneda: string;
+  facturado: number;
+  pagado: number;
+  vencido: number;
+  porVencer: number;
+  saldoTotal: number;
+};
+
+export type FilaEstadoCuenta = {
+  cliente: string;
+  facturado: number;
+  pagado: number;
+  vencido: number;
+  porVencer: number;
+  saldoTotal: number;
+  documentosPendientes: number;
+  documentosVencidos: number;
+};
 
 // ─── Reporte de Clientes por Vendedor ──────────────────────────────────────
 

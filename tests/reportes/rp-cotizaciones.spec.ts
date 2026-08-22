@@ -9,6 +9,7 @@ import {
   ReporteProductosMasCotizadosPage,
   SUBMODULOS_REPORTES_COTIZACIONES,
 } from './rp-cotizaciones.page';
+import { PosPage, TIMEOUTS as POS_TIMEOUTS } from '../facturar/pos/pos.page';
 
 for (const submodulo of SUBMODULOS_REPORTES_COTIZACIONES) {
   test(`Cargar el submódulo "${submodulo.nombre}" del módulo Reportes > Cotizaciones`, async ({ page }) => {
@@ -567,3 +568,306 @@ test.describe('Productos Más Cotizados', () => {
     await productos.validarSinErrores();
   });
 });
+
+// ─── Bugs de sistema confirmados en vivo (módulo Cotizaciones) ─────────────
+//
+// Investigación disparada por: "el símbolo de moneda no se registra
+// correctamente en Cotizaciones al crear una proforma". Se probó
+// exhaustivamente crear Proformas en moneda base y no-base (Normal,
+// Consignación), con cliente existente y nombre libre, con descuento general
+// y facturadas, consultando las 3 superficies reales donde "Cotizaciones"
+// puede mostrar una Proforma: la pestaña interna "Proforma / Cotizaciones"
+// del POS, el listado externo `/proform/printPosProform` y este Reporte de
+// Cotizaciones (`/reports/seeProformaReport`) — en TODOS los casos probados
+// el símbolo/código de moneda mostrado coincidió exactamente con la moneda
+// realmente usada al crear (confirmado además con el payload crudo de
+// `getPosProformSearch`: campos `local_currency`/`currency_code` siempre
+// correctos). No se encontró ningún caso de símbolo de moneda incorrecto,
+// vacío o de otra moneda.
+//
+// Sí se encontraron, en el camino, 2 bugs de sistema reales y 100%
+// reproducibles en este MISMO Reporte — no sobre el símbolo en sí, sino
+// sobre la VISIBILIDAD de la Proforma (y, por extensión, de su moneda/total)
+// una vez editada o facturada. Se documentan aquí con `test.fail()` (mismo
+// criterio ya usado en rp-caja.spec.ts para bugs de sistema confirmados) en
+// vez de debilitar ninguna aserción existente.
+test.describe('Reporte de Cotizaciones — bugs de sistema confirmados', () => {
+
+  // ─── Bug 1: editar una Proforma la borra del índice de búsqueda del Reporte ──
+  //
+  // Repro controlada (mismo id de Proforma, antes y después de UNA sola
+  // edición que no toca moneda/monto, ninguna otra variable de por medio):
+  //   1. Crear una Proforma Normal simple → SÍ aparece de inmediato en el
+  //      Reporte (`getPosProformSearch`, buscando por el nombre de cliente).
+  //   2. Editar esa misma Proforma desde la pestaña "Proforma / Cotizaciones"
+  //      del POS (solo se cambia la Observación — `updateProform`) → la
+  //      MISMA Proforma deja de aparecer POR COMPLETO en el Reporte, con
+  //      cualquier filtro de estado, incluso buscando por el nombre exacto
+  //      de su cliente.
+  // Confirmado que NO es un retraso de indexación genérico: una Proforma
+  // recién creada (sin editar) aparece de inmediato, y re-consultar el
+  // Reporte varios minutos después de editar (incluyendo un reload completo
+  // de la página) sigue sin mostrarla. La Proforma editada SÍ sigue
+  // existiendo y visible con datos correctos en las otras 2 superficies
+  // (pestaña interna del POS y listado externo `printPosProform`) — el
+  // problema es específico del índice/consulta que alimenta este Reporte
+  // tras un `updateProform`, no una pérdida real del registro.
+  test.fail(
+    'BUG CONOCIDO: editar una Proforma (updateProform) la hace desaparecer del Reporte de Cotizaciones, aunque siga existiendo y visible en la pestaña interna del POS y en el listado externo printPosProform',
+    async ({ page, context }) => {
+      test.setTimeout(POS_TIMEOUTS.TEST);
+      const pos = new PosPage(page);
+      // Página SEPARADA para el Reporte: `reporte.abrirReporteCotizaciones()`
+      // navega la página que reciba a `/reports/seeProformaReport` — usar la
+      // misma `page` del POS la dejaría fuera de la pestaña "Proforma /
+      // Cotizaciones" (confirmado en vivo: la siguiente llamada a
+      // abrirMenuTarjetaProformaEnTab() se queda esperando #btn_proform_option
+      // el timeout completo, porque `page` ya no está en el POS).
+      const reportPage = await context.newPage();
+      const reporte = new ReporteCotizacionesPage(reportPage);
+
+      await test.step('Cargar el POS y crear una Proforma Normal simple, desechable', async () => {
+        await pos.cargarPosDesdeDashboard();
+        await pos.cerrarOverlaysConocidos();
+        await pos.esperarEstadoInicial();
+        if (await pos.modalAbrirCajaVisible()) {
+          await pos.cerrarModalAbrirCaja();
+        }
+      });
+
+      const nombreCliente = `Cliente Reporte BugEditar ${Date.now()}`;
+      let proformaId = '';
+      await test.step('Crear la Proforma', async () => {
+        const producto = await pos.obtenerPrimerProductoNormal();
+        await pos.agregarProductoAlCarrito(producto);
+        await pos.abrirCrearProforma();
+        await pos.seleccionarTipoProforma('normal');
+        await pos.llenarNombreClienteProforma(nombreCliente);
+        const respuesta = await pos.guardarProformaYObtenerRespuesta();
+        await pos.validarProformaCreada(respuesta);
+        proformaId = await pos.obtenerIdProformaCreada();
+        await pos.cerrarModalGestionProforma();
+      });
+
+      await test.step('ANTES de editar: la Proforma aparece en el Reporte de Cotizaciones', async () => {
+        await reporte.abrirReporteCotizaciones();
+        await reporte.buscar(nombreCliente);
+        expect(await reporte.contarFilas(), 'La Proforma recién creada debería aparecer en el Reporte antes de editarla').toBe(1);
+      });
+
+      await test.step('Editar la Proforma (solo la Observación) desde la pestaña interna del POS', async () => {
+        const tarjeta = await pos.abrirMenuTarjetaProformaEnTab(nombreCliente, 'normal');
+        await pos.editarProformaSeleccionada(tarjeta, proformaId);
+        await pos.llenarObservacionProforma(`Editada ${Date.now()}`);
+        const respuestaEdicion = await pos.guardarEdicionProformaYObtenerRespuesta();
+        expect(respuestaEdicion.ok(), 'updateProform no respondió OK').toBe(true);
+      });
+
+      await test.step('DESPUÉS de editar: la Proforma debería seguir apareciendo en el Reporte (falla: desaparece)', async () => {
+        await reporte.abrirReporteCotizaciones();
+        await reporte.buscar(nombreCliente);
+        expect(await reporte.contarFilas(), 'La Proforma editada desapareció del Reporte de Cotizaciones').toBe(1);
+      });
+
+      await reportPage.close();
+    }
+  );
+
+  // ─── Bug 2: el chip "Todos" no incluye las Proformas en estado "Facturados" ──
+  //
+  // Confirmado comparando los 3 chips de estado del propio Reporte
+  // (mutuamente excluyentes: Todos/Facturados/Pendientes/Anuladas) con la
+  // misma Proforma facturada: buscándola con el chip "Facturados" activo SÍ
+  // aparece; con el chip "Todos" (el que carga por defecto al abrir el
+  // Reporte) NO aparece. Confirmado además a nivel de conteo total: en una
+  // corrida real, "Pendientes" + "Facturados" sumó más filas que "Todos" —
+  // los resultados de "Todos" fueron un subconjunto EXACTO de "Pendientes"
+  // (mismos ids, mismo orden), es decir "Todos" se comporta como
+  // "Pendientes" y excluye silenciosamente el estado "Facturados" pese a su
+  // nombre. Esto también implica que los totales agregados por moneda del
+  // pie de tabla ("Total CRC"/"Total USD"/"Total HNL"), calculados sobre el
+  // filtro activo, quedan subestimados por defecto (excluyen todo lo ya
+  // facturado) sin ninguna advertencia visible para quien use el Reporte.
+  test.fail(
+    'BUG CONOCIDO: el chip "Todos" del Reporte de Cotizaciones no incluye las Proformas en estado "Facturados"',
+    async ({ page }) => {
+      test.setTimeout(POS_TIMEOUTS.TEST);
+      const pos = new PosPage(page);
+      const reporte = new ReporteCotizacionesPage(page);
+
+      await test.step('Cargar el POS y crear + facturar una Proforma Normal simple, desechable', async () => {
+        await pos.cargarPosDesdeDashboard();
+        await pos.cerrarOverlaysConocidos();
+        await pos.esperarEstadoInicial();
+        if (await pos.modalAbrirCajaVisible()) {
+          await pos.cerrarModalAbrirCaja();
+        }
+      });
+
+      const nombreCliente = `Cliente Reporte BugTodos ${Date.now()}`;
+      await test.step('Crear la Proforma con un cliente existente y facturarla de contado', async () => {
+        const producto = await pos.obtenerPrimerProductoNormal();
+        await pos.agregarProductoAlCarrito(producto);
+        await pos.seleccionarClienteExistente();
+        await pos.abrirCrearProforma();
+        await pos.seleccionarTipoProforma('normal');
+        await pos.llenarNombreClienteProforma(nombreCliente);
+        const respuesta = await pos.guardarProformaYObtenerRespuesta();
+        await pos.validarProformaCreada(respuesta);
+        await pos.cerrarModalGestionProforma();
+
+        const tarjeta = await pos.abrirMenuTarjetaProformaEnTab(nombreCliente, 'normal');
+        await pos.cargarProformaEnCarritoDesdeTab(tarjeta);
+        await pos.abrirModalDePago();
+        const total = await pos.obtenerTotalVentaNumerico();
+        await pos.seleccionarPagoEfectivo(String(total));
+        await pos.confirmarPagoAbriendoCajaSiEsNecesario();
+        await pos.validarCarritoVacio();
+      });
+
+      await test.step('Con el chip "Facturados" activo, la Proforma facturada SÍ aparece', async () => {
+        await reporte.abrirReporteCotizaciones();
+        await reporte.seleccionarEstado('cash');
+        await reporte.buscar(nombreCliente);
+        expect(await reporte.contarFilas(), 'La Proforma facturada debería aparecer con el chip "Facturados"').toBe(1);
+      });
+
+      await test.step('Con el chip "Todos" activo, la misma Proforma debería seguir apareciendo (falla: desaparece)', async () => {
+        await reporte.seleccionarEstado('all');
+        await reporte.buscar(nombreCliente);
+        expect(await reporte.contarFilas(), 'La Proforma facturada no aparece con el chip "Todos"').toBe(1);
+      });
+    }
+  );
+
+  // ─── Bug 3: "Análisis de Cotizaciones" mezcla monedas SIN CONVERTIR (multiplica en vez de dividir) ──
+  //
+  // Investigación disparada por: "el símbolo de moneda no se registra
+  // correctamente en Cotizaciones al crear una proforma en dólares". Nunca se
+  // encontró un símbolo incorrecto en ninguna de las 3 superficies de
+  // Cotizaciones (pestaña interna del POS, listado externo, este Reporte),
+  // pero SÍ se encontró un defecto real y cuantificable en el reporte
+  // "Análisis de Cotizaciones" (`/reports/proformAnalysis`), que agrupa el
+  // KPI "Valor Cotizado" por vendedor SIN ninguna columna ni separación por
+  // moneda (a diferencia de "Reporte de Cotizaciones", que sí separa "Total
+  // CRC"/"Total USD"/"Total HNL").
+  //
+  // Repro controlada, mismo vendedor, ambiente real (tasa de cambio real
+  // observada ₡/$ ≈ 635): se leyó el "Valor Cotizado" del vendedor ANTES y
+  // DESPUÉS de agregar una única Proforma nueva en moneda NO BASE (₡). El
+  // incremento real observado fue $3,629,011,694.77 para una Proforma de
+  // ₡5,715,000 — la tasa implícita del incremento (delta ÷ total en ₡) dio
+  // **634.9977**, prácticamente idéntica a la tasa de cambio real del
+  // ambiente (635.0000), no a 1 (sin convertir) ni a 1/635≈0.00157
+  // (conversión correcta a dólares). Es decir: el sistema toma el monto en
+  // moneda NO BASE y lo MULTIPLICA por la tasa de cambio en vez de
+  // dividirlo (o de no tocarlo) — el resultado correcto hubiera sido sumar
+  // ≈$9,000 (el equivalente real en dólares), y en cambio sumó ≈$3,629
+  // millones bajo el mismo símbolo "$" fijo de la columna. Cualquier
+  // vendedor con Proformas en más de una moneda ve un "Valor Cotizado" sin
+  // sentido matemático, inflado por un factor ≈635x — el defecto de moneda
+  // más severo encontrado en toda esta investigación, aunque su síntoma no
+  // sea un símbolo incorrecto sino un monto astronómicamente inflado bajo un
+  // símbolo fijo que no refleja la mezcla real de monedas.
+  test.fail(
+    'BUG CONOCIDO: "Análisis de Cotizaciones" (Valor Cotizado por vendedor) multiplica por la tasa de cambio en vez de convertir una Proforma en moneda no-base, inflando el total ≈635x cuando se mezcla con Proformas en la moneda base',
+    async ({ page }) => {
+      test.setTimeout(POS_TIMEOUTS.TEST);
+      const pos = new PosPage(page);
+      const analisis = new ReporteAnalisisCotizacionesPage(page);
+
+      await test.step('Cargar el POS y confirmar moneda base + moneda no-base disponibles', async () => {
+        await pos.cargarPosDesdeDashboard();
+        await pos.cerrarOverlaysConocidos();
+        await pos.esperarEstadoInicial();
+        if (await pos.modalAbrirCajaVisible()) {
+          await pos.cerrarModalAbrirCaja();
+        }
+      });
+
+      const { simboloBase } = await pos.obtenerInfoMoneda();
+      const simbolos = await pos.obtenerSimbolosMonedaDisponibles();
+      const simboloNoBase = simbolos.find((s) => s !== simboloBase);
+      expect(simboloNoBase, `No hay ninguna moneda distinta de la base (${simboloBase}) disponible en este ambiente`).toBeTruthy();
+
+      let nombreVendedor = '';
+      let valorCotizadoAntes = 0;
+      await test.step('Crear una Proforma en moneda BASE y leer el "Valor Cotizado" del vendedor', async () => {
+        await pos.cambiarMoneda(simboloBase);
+        const producto = await pos.obtenerPrimerProductoNormal();
+        await pos.agregarProductoAlCarrito(producto);
+        await pos.abrirCrearProforma();
+        await pos.seleccionarTipoProforma('normal');
+        await pos.llenarNombreClienteProforma(`Cliente Analisis MezclaMoneda ${Date.now()}`);
+        nombreVendedor = await pos.seleccionarVendedorProforma();
+        const respuesta = await pos.guardarProformaYObtenerRespuesta();
+        await pos.validarProformaCreada(respuesta);
+        await pos.cerrarModalGestionProforma();
+
+        await analisis.abrirReporteAnalisisCotizaciones();
+        await analisis.seleccionarFechaInicial(hoyISO());
+        await analisis.seleccionarFechaFinal(hoyISO());
+        await analisis.buscar();
+        valorCotizadoAntes = await leerValorCotizadoDeVendedor(analisis, nombreVendedor);
+      });
+
+      let totalNoBase = 0;
+      let valorCotizadoDespues = 0;
+      await test.step('Agregar UNA Proforma en moneda NO BASE con el mismo vendedor y volver a leer el "Valor Cotizado"', async () => {
+        await pos.cambiarMoneda(simboloNoBase!);
+        const producto = await pos.obtenerPrimerProductoNormal();
+        await pos.agregarProductoAlCarrito(producto);
+        totalNoBase = await pos.obtenerTotalVentaNumerico();
+        await pos.abrirCrearProforma();
+        await pos.seleccionarTipoProforma('normal');
+        await pos.llenarNombreClienteProforma(`Cliente Analisis MezclaMoneda2 ${Date.now()}`);
+        // El Chosen de vendedor ya trae preseleccionado el mismo (único
+        // vendedor real disponible en este ambiente, confirmado en vivo) —
+        // se lee en vez de reintentar seleccionarlo (no hay "otra opción").
+        await pos.guardarProformaYObtenerRespuesta().then((r) => pos.validarProformaCreada(r));
+        await pos.cerrarModalGestionProforma();
+
+        await analisis.abrirReporteAnalisisCotizaciones();
+        await analisis.seleccionarFechaInicial(hoyISO());
+        await analisis.seleccionarFechaFinal(hoyISO());
+        await analisis.buscar();
+        valorCotizadoDespues = await leerValorCotizadoDeVendedor(analisis, nombreVendedor);
+
+        await pos.cambiarMoneda(simboloBase);
+      });
+
+      await test.step('El incremento del "Valor Cotizado" debería ser el equivalente real en dólares de la Proforma en moneda no-base (falla: aparece multiplicado por la tasa de cambio)', async () => {
+        const incrementoReal = valorCotizadoDespues - valorCotizadoAntes;
+        console.log(`[Análisis mezcla monedas] antes=${valorCotizadoAntes}, después=${valorCotizadoDespues}, incremento=${incrementoReal}, total Proforma no-base=${totalNoBase}, tasa implícita=${incrementoReal / totalNoBase}`);
+        // Cota generosa (2x el monto real en moneda no-base) — cualquier
+        // conversión razonable (correcta, o incluso sin convertir del todo)
+        // cae dentro de este rango; solo la multiplicación por la tasa real
+        // (≈635x en este ambiente) lo excede por 2-3 órdenes de magnitud.
+        expect(incrementoReal, 'El incremento del "Valor Cotizado" está multiplicado por la tasa de cambio en vez de convertido correctamente').toBeLessThan(totalNoBase * 2);
+      });
+    }
+  );
+});
+
+/**
+ * Lee la celda "Valor Cotizado" (columna 6, ver el comentario de
+ * ReporteAnalisisCotizacionesPage: "Vendedor/Total/Convertidas/Pendientes/
+ * Eliminadas/% Conversión/Valor Cotizado/Valor Vendido/Días Prom.") de la
+ * fila de un vendedor específico — el propio Page Object no expone un
+ * lector directo de esta columna (solo Vendedor y "Total", ver
+ * COLUMNA_VENDEDOR/COLUMNA_TOTAL), así que se lee aquí sobre sus locators
+ * públicos (`filas()`) en vez de duplicar la clase por un solo campo nuevo.
+ */
+async function leerValorCotizadoDeVendedor(analisis: ReporteAnalisisCotizacionesPage, vendedor: string): Promise<number> {
+  const COLUMNA_VALOR_COTIZADO = 6;
+  const filas = analisis.filas();
+  const total = await filas.count();
+  for (let i = 0; i < total; i++) {
+    const texto = await filas.nth(i).innerText();
+    if (texto.includes(vendedor)) {
+      const celda = await filas.nth(i).locator('td').nth(COLUMNA_VALOR_COTIZADO).innerText();
+      return parseFloat(celda.replace(/[^\d.-]/g, '')) || 0;
+    }
+  }
+  throw new Error(`No se encontró ninguna fila para el vendedor "${vendedor}" en "Resumen por Vendedor"`);
+}

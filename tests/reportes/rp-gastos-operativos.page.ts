@@ -427,21 +427,42 @@ export class ReporteGastosOperativosPage {
    * de "Agregar", el de éxito de esta acción ("¡Éxito! El gasto operativo se
    * eliminó correctamente...") NO se autocierra — hay que presionar
    * "Aceptar" (confirmado en vivo).
+   *
+   * Reintento acotado (mismo patrón ya usado en otros menús de 3 puntos de
+   * esta suite) como salvaguarda ante una posible intermitencia de click
+   * real, reabriendo el menú antes de cada intento.
+   *
+   * Bug de automatización real confirmado en vivo: el link "Eliminar" real
+   * dispara `onclick="confirm_delete_subsidy(<id>)"` — SÍ muestra el
+   * SweetAlert correcto (confirmado disparando el evento nativo a mano) —
+   * pero un `.click()` normal de Playwright sobre ese `<a>` específico no
+   * registra el evento (el dropdown queda abierto, sin SweetAlert, sin
+   * cerrarse), incluso reabriendo el menú varias veces. `evaluate(el =>
+   * el.click())` dispara el click nativo real y sí funciona de forma
+   * consistente — mismo criterio ya usado en este repo para handlers
+   * legacy que no reaccionan a los eventos sintéticos de Playwright (ver
+   * `presionarEscReal()` en pos-permisos.page.ts).
    */
   async eliminarFila(indice = 0) {
-    await this.filas().nth(indice).locator('.pce-btn-more').click();
-    await expect(this.menuAccionesDeFila(indice)).toBeVisible({ timeout: TIMEOUTS.CARGA });
+    const confirmacion = this.page.locator('.swal2-popup', { hasText: 'Eliminar gasto operativo' });
+    const MAX_INTENTOS = 5;
+    let confirmado = false;
+    for (let intento = 1; intento <= MAX_INTENTOS && !confirmado; intento++) {
+      await this.filas().nth(indice).locator('.pce-btn-more').click();
+      const menuAbrio = await expect(this.menuAccionesDeFila(indice)).toBeVisible({ timeout: 5_000 }).then(() => true).catch(() => false);
+      if (!menuAbrio) continue;
+      await this.menuAccionesDeFila(indice)
+        .locator('a', { hasText: 'Eliminar' })
+        .evaluate((el) => (el as HTMLElement).click());
+      confirmado = await confirmacion.isVisible({ timeout: 3_000 }).catch(() => false);
+    }
+    expect(confirmado, `No apareció la confirmación "¡Eliminar gasto operativo!" tras ${MAX_INTENTOS} intentos`).toBe(true);
 
     const respuestaPromise = this.page.waitForResponse(
       (res) => res.url().includes('delete_operating_expense'),
       { timeout: TIMEOUTS.CARGA }
     );
-    await this.menuAccionesDeFila(indice).locator('a', { hasText: 'Eliminar' }).click();
-
-    const confirmacion = this.page.locator('.swal2-popup', { hasText: 'Eliminar gasto operativo' });
-    await expect(confirmacion, 'No apareció la confirmación "¡Eliminar gasto operativo!"').toBeVisible({ timeout: TIMEOUTS.CARGA });
     await confirmacion.locator('.swal2-confirm').click();
-
     await respuestaPromise;
 
     const exito = this.page.locator('.swal2-popup', { hasText: 'se eliminó correctamente' });

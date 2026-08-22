@@ -57,6 +57,23 @@ export const TIMEOUTS = {
   // waitForTimeout() artificial: sigue siendo una espera real sobre la
   // respuesta de red.
   CIERRE_CAJA:    30_000,
+  // "Descargar PDF" de una Proforma (`downloadProformPdf`, usado por
+  // descargarPdfProforma()/descargarPdfProformaDesdeTab()/
+  // descargarPdfProformaSeleccionadaDelListado() en pos-proforma.page.ts) ya
+  // NO es una respuesta directa del servidor — confirmado en vivo (captura
+  // de red completa) que el click dispara `getProformDataToPrint` (un AJAX
+  // que solo trae los datos) y el PDF real se genera 100% client-side con
+  // jsPDF/html2pdf (`plugins/jsPDF/*`, `js/jspdf/PdfManager.js` y afines) —
+  // un cambio real de arquitectura frente a lo documentado en una
+  // investigación previa (que asumía un endpoint de descarga directo). Ese
+  // render client-side puede tardar bastante más que un AJAX normal bajo
+  // carga del ambiente — confirmado en vivo con variación real amplia entre
+  // corridas (40s insuficiente en un intento, ~51s totales en otro con
+  // margen, y 60s TAMPOCO alcanzó en un tercer intento bajo más carga) —
+  // PRINT_POPUP (15s) es insuficiente y generaba un timeout real esperando
+  // el evento "download", no un cuelgue ni un bug de sistema. Presupuesto
+  // amplio (mismo orden que NAVIGATE) para tolerar esa variación real.
+  PDF_PROFORMA_CLIENTE: 90_000,
 } as const;
 
 // ─── Pausas visuales ──────────────────────────────────────────────────────────
@@ -445,6 +462,28 @@ export type ReporteAvanzado = {
   totalSalidas: number;
   // "Ingresos por Abonos": Órdenes + Ventas a crédito + Apartados combinados.
   totalAbonos: number;
+};
+
+// ─── "Validación por método de pago" (Detalle de Cierre) ──────────────────
+// Feature real nueva del modal de cierre (código fuente de la app fechado
+// 18-08-2026) — ver el comentario de cabecera de la sección homónima en
+// pos-cierre-caja.page.ts para el detalle completo del mecanismo. Los ids
+// reales de método son los mismos 1/2/4/3 que el resto de esta suite ya usa
+// para checkboxes de pago (CHECKBOX_ID), aquí con su propio alias legible.
+export type MetodoValidacionPagoId = 1 | 2 | 4 | 3;
+export type MetodoValidacionPago = 'efectivo' | 'tarjeta' | 'sinpe' | 'transaccion';
+
+export type ValidacionMetodoPago = {
+  /** Si el switch de esta tarjeta está activo (Efectivo siempre `true`, no se puede desactivar). */
+  activo: boolean;
+  /** Texto real del badge de estado ("Pendiente"/"Coincide"/"Diferencia" — depende del idioma configurado). */
+  estado: string;
+  /** "Monto sistema" — total real consolidado de ese método (mismo dato que CIERRE_METODO_PAGO_*). */
+  montoSistema: number;
+  /** "Monto contado" — `null` si el campo está vacío (método inactivo, o activo sin digitar aún). */
+  montoContado: number | null;
+  /** "Diferencia" = Monto contado − Monto sistema (positivo = sobrante, negativo = faltante). 0 si el campo está vacío. */
+  diferencia: number;
 };
 
 // ─── Tab Facturas del modal "Detalle de Cierre" ────────────────────────────────

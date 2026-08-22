@@ -273,6 +273,28 @@ export const L = {
   CIERRE_METODO_PAGO_SINPE:       '#payment_method_sinpe_display',
   CIERRE_METODO_PAGO_TRANSACCION: '#payment_method_transaction_display',
 
+  // ─── "Validación por método de pago" (feature real nueva, código fuente de
+  // la app fechado 18-08-2026 — investigada en vivo leyendo `js/pos.js`
+  // directo, sin documentación previa en este repo) ──────────────────────────
+  // Contenedor condicional (`$('#container_payment_validation').length===0`
+  // es la comprobación real que la propia app usa antes de tocar cualquier
+  // campo de esta sección — puede no existir según compañía/config): nunca
+  // asumir su presencia sin comprobarlo primero.
+  // 4 tarjetas reales por id de método (1=Efectivo/2=Tarjeta/4=SINPE ("check"
+  // internamente, mismo convenio ya documentado en otras partes de esta
+  // suite)/3=Transacción) — Efectivo siempre queda activo y su switch
+  // deshabilitado (espejo de CIERRE_EFECTIVO_CAJA, no un campo independiente).
+  CIERRE_PV_CONTENEDOR:        '#container_payment_validation',
+  CIERRE_PV_VALIDAR_TODOS:     '#pv_validate_all',
+  CIERRE_PV_TARJETA:           (id: number) => `#pv_card_${id}`,
+  CIERRE_PV_SWITCH:            (id: number) => `#pv_switch_${id}`,
+  CIERRE_PV_ESTADO:            (id: number) => `#pv_state_${id}`,
+  CIERRE_PV_MONTO_SISTEMA:     (id: number) => `#pv_system_${id}`,
+  CIERRE_PV_MONTO_CONTADO:     (id: number) => `#pv_counted_${id}`,
+  CIERRE_PV_DIFERENCIA:        (id: number) => `#pv_difference_${id}`,
+  CIERRE_PV_ACCION:            (id: number) => `#pv_edit_${id}`,
+  CIERRE_PV_ETIQUETA_ACCION:   (id: number) => `#pv_edit_label_${id}`,
+
   // "Resumen de cierre" (columna izquierda de "Datos de Cierre").
   CIERRE_RESUMEN_APERTURA:               '#aperture_cash_new',
   CIERRE_RESUMEN_VENTAS_EFECTIVO:        '#total_cash_new',
