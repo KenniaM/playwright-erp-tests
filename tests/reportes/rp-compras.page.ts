@@ -64,9 +64,28 @@ const URL_ANTIGUEDAD_CREDITO = SUBMODULOS_REPORTES_COMPRAS[6].url;
 
 // ─── Utilidades compartidas ─────────────────────────────────────────────────
 
-/** Convierte un monto mostrado en pantalla (p.ej. "$ 1,234.56", "₡ 500.00") a number. */
+/**
+ * Convierte un monto mostrado en pantalla a number, tolerando AMBOS formatos
+ * reales de este ERP: "$1,234.56" (punto decimal, coma de miles) Y
+ * "₡4.000,00" (coma decimal, punto de miles — confirmado en vivo leyendo
+ * `formatMoney()` real de `js/expense_report_v2/ExpenseReportV2Utils.js`:
+ * usa SIEMPRE "." de miles + "," decimal, sin importar la moneda real).
+ * Bug real encontrado al validar el Reporte de Gastos (V2): el regex viejo
+ * (`[^\d.-]`) solo eliminaba el símbolo de moneda pero dejaba AMBOS
+ * separadores como si fueran puntos decimales — "₡4.000,00" quedaba como
+ * "4.000.00" y `parseFloat` lo truncaba a 4 en vez de 4000. Se detecta el
+ * separador decimal real como el ÚLTIMO de "," o "." en el texto (el otro,
+ * si aparece antes, es de miles).
+ */
 function montoANumero(texto: string): number {
-  return parseFloat(texto.replace(/[^\d.-]/g, ''));
+  const limpio = texto.replace(/[^\d.,-]/g, '');
+  const ultimaComa = limpio.lastIndexOf(',');
+  const ultimoPunto = limpio.lastIndexOf('.');
+  if (ultimaComa === -1 && ultimoPunto === -1) return parseFloat(limpio) || 0;
+  const separadorDecimal = ultimaComa > ultimoPunto ? ',' : '.';
+  const separadorMiles = separadorDecimal === ',' ? '.' : ',';
+  const normalizado = limpio.split(separadorMiles).join('').replace(separadorDecimal, '.');
+  return parseFloat(normalizado) || 0;
 }
 
 /** No hay ningún mensaje de error de aplicación (`.noty_bar`) visible en pantalla. */
@@ -673,47 +692,91 @@ export class ReporteComprasExternasPage {
  * a proveedores dentro del módulo Compras (distinto del Reporte de Gastos
  * Operativos, cubierto en rp-gastos-operativos.page.ts).
  *
- * Analizado en vivo:
- * - Filtros: buscador (`#expense_invoice_search`), rango de fechas
- *   (`#expense_start_date`/`#expense_end_date`), 3 chips de estado
- *   (Todas/Crédito/Contado) y Moneda (menú compartido).
- * - "Buscar" (`#btn_search_receip2`) dispara AJAX real `getExpenseSeacrh`.
- * - Exportación: único botón directo "Descargar" (`#btn_export_expense`),
- *   descarga real, sin SweetAlert de confirmación.
- * - BUG confirmado en vivo: el botón "Moneda:" existe en el DOM pero su
- *   contenedor (`.btn-group`) tiene permanentemente la clase Bootstrap
- *   `hide` (`display: none`), sin importar el Estado aplicado ni tras
- *   ejecutar una búsqueda — el filtro de Moneda es inaccesible/no
- *   funcional en este reporte (a diferencia de Abonos/Compras/Cuentas por
- *   Pagar/Antigüedad de Crédito, donde el mismo control sí es visible).
+ * REDISEÑADO POR COMPLETO — componente nuevo "ExpenseReportV2" (mismo
+ * patrón de rediseño ya documentado en este repo para acr-v2/casv2).
+ * Confirmado leyendo `js/expense_report_v2/*.js` real (`curl` directo): el
+ * Page Object viejo (`#expense_invoice_search`, `#btn_search_receip2`,
+ * endpoint `getExpenseSeacrh`) ya NO EXISTE — causaba que `buscar()` se
+ * quedara colgada indefinidamente esperando una respuesta de red que nunca
+ * llega (confirmado en vivo: el test completo agotaba su timeout de 120s
+ * dentro de `buscar()`, sin ningún error intermedio porque el `.fill()`
+ * sobre el selector viejo simplemente reintentaba sin fin contra un
+ * elemento inexistente).
+ *
+ * Raíz real: `#expense_report_v2_app`.
+ * - Búsqueda REACTIVA (no hay botón "Buscar"): `#erv2_search_input`
+ *   dispara `refresh()` tras 350ms de debounce sobre el evento `input` —
+ *   nunca un `.click()` en un botón de búsqueda.
+ * - Filtros reales: Compañía (`#erv2_company_select`, `<select>` Chosen
+ *   solo si la cuenta tiene más de una compañía — si no, es un
+ *   `<input type="hidden">`), rango de fechas (`#erv2_start_date`/
+ *   `#erv2_end_date`), "Tipo de compra" (`#erv2_state_select`, Chosen —
+ *   el nombre interno "state" es engañoso: sus 3 opciones reales son
+ *   "Todas"(2, por defecto)/"Crédito"(1)/"Contado"(0), NO un estado de
+ *   pago pendiente/pagado), Moneda (`#erv2_currency_select`, Chosen,
+ *   poblada vía AJAX `getReportCurrencyCompany` al cargar/cambiar
+ *   compañía). "Limpiar" (`#btn_erv2_clear`).
+ * - Endpoint real de búsqueda/filtrado: `getExpenseReportSearchData`
+ *   (POST) — usar ESTE en `page.waitForResponse`, nunca `getExpenseSeacrh`
+ *   (ya no existe en absoluto).
+ * - Tabla `#erv2_table_body` (scroll incremental dentro de
+ *   `#erv2_table_container`, contador real `#erv2_loaded_count`) — 7
+ *   columnas por fila (Factura/Fechas/Proveedor/Tipo y Estado/Servicio/
+ *   Resumen financiero/Acciones) generadas por JS, sin `id` individual por
+ *   celda: el nombre del proveedor vive en `.erv2-cell-primary` de la
+ *   columna 2 (0-based), el monto total real en `.erv2-cell-primary--money`
+ *   de la columna 5. Estado vacío real `#erv2_empty_state`, estado de
+ *   error `#erv2_error_state` (ambos con `display:flex`/`none`, nunca
+ *   `hidden` de Playwright — confirmar por CSS, no por visibilidad).
+ * - Menú de acciones por fila: botón `.erv2-action-toggle` (dropdown
+ *   Bootstrap) → único ítem real "Ver detalles" (`.erv2-view-detail`,
+ *   `data-expense-id`) abre el modal `#erv2_expense_detail_modal` (AJAX
+ *   `getExpenseReportDetailData`).
+ * - Resumen por moneda: `#erv2_summary_content`, un bloque
+ *   `.erv2-summary-currency` por moneda con datos reales — mismo patrón ya
+ *   usado en `casv2` (`rp-clientes.page.ts`): `<span><small>etiqueta</small><b>valor</b></span>`
+ *   por métrica, en orden fijo Total/Subtotal/IVA/Descuento.
+ * - "Descargar" (`#btn_erv2_export`) genera el Excel 100% client-side
+ *   (ExcelJS + Blob, mismo patrón que casv2/acr-v2) — SÍ dispara un evento
+ *   `download` real (`<a download>` con click programático), a diferencia
+ *   del componente viejo (descarga directa del backend).
+ * - El bug de "Moneda no funcional" documentado para el componente viejo
+ *   YA NO APLICA — el filtro de Moneda de ExpenseReportV2 es un `<select>`
+ *   Chosen normal, visible y funcional (confirmado en vivo).
  */
 export class ReporteGastosComprasPage {
   constructor(private readonly page: Page) {}
 
-  private readonly buscador = () => this.page.locator('#expense_invoice_search');
-  private readonly fechaInicial = () => this.page.locator('#expense_start_date');
-  private readonly fechaFinal = () => this.page.locator('#expense_end_date');
-  private readonly btnBuscar = () => this.page.locator('#btn_search_receip2');
-  private readonly chipEstado = (estado: 'all' | 'pending' | 'paid') => this.page.locator(`#expense_${estado}`);
-  private readonly btnDescargar = () => this.page.locator('#btn_export_expense');
-  private readonly tbody = () => this.page.locator('#table_expense');
-  private readonly botonMoneda = () => this.page.locator('#company_currency_report').locator('xpath=preceding-sibling::button[1]');
+  private readonly appRoot = () => this.page.locator('#expense_report_v2_app');
+  private readonly buscador = () => this.page.locator('#erv2_search_input');
+  private readonly fechaInicial = () => this.page.locator('#erv2_start_date');
+  private readonly fechaFinal = () => this.page.locator('#erv2_end_date');
+  private readonly btnLimpiar = () => this.page.locator('#btn_erv2_clear');
+  private readonly filtroTipoCompra = () => this.page.locator('#erv2_state_select');
+  private readonly filtroMoneda = () => this.page.locator('#erv2_currency_select');
+  private readonly btnDescargar = () => this.page.locator('#btn_erv2_export');
+  private readonly contenedorTabla = () => this.page.locator('#erv2_table_container');
+  private readonly tablaBody = () => this.page.locator('#erv2_table_body');
+  private readonly estadoVacio = () => this.page.locator('#erv2_empty_state');
+  private readonly resumenPorMoneda = () => this.page.locator('#erv2_summary_content');
 
-  static readonly COLUMNA_FACTURA = 0;
   static readonly COLUMNA_PROVEEDOR = 2;
-  static readonly COLUMNA_TOTAL = 11;
+  static readonly COLUMNA_TOTAL = 5;
 
   async abrirReporteGastos() {
     await this.page.goto(URL_GASTOS, { waitUntil: 'domcontentloaded', timeout: TIMEOUTS.NAVIGATE });
     await cerrarBannerNotificaciones(this.page);
+    await expect(this.appRoot(), 'La raíz real #expense_report_v2_app no quedó visible').toBeVisible({ timeout: TIMEOUTS.CARGA });
   }
 
   async seleccionarFechaInicial(fecha: string) {
     await seleccionarFechaCalendario(this.page, this.fechaInicial(), fecha);
+    await this._esperarRespuestaBusqueda();
   }
 
   async seleccionarFechaFinal(fecha: string) {
     await seleccionarFechaCalendario(this.page, this.fechaFinal(), fecha);
+    await this._esperarRespuestaBusqueda();
   }
 
   async obtenerFechaInicial(): Promise<string> {
@@ -725,66 +788,114 @@ export class ReporteGastosComprasPage {
   }
 
   async aumentarRangoFechas(fechaInicial: string, fechaFinal: string) {
-    await this.seleccionarFechaInicial(fechaInicial);
-    await this.seleccionarFechaFinal(fechaFinal);
+    await seleccionarFechaCalendario(this.page, this.fechaInicial(), fechaInicial);
+    await seleccionarFechaCalendario(this.page, this.fechaFinal(), fechaFinal);
+    await this._esperarRespuestaBusqueda();
   }
 
+  /**
+   * Escribe en el buscador real (`#erv2_search_input`) — la búsqueda es
+   * REACTIVA (debounce de 350ms sobre `input`, sin botón "Buscar" que
+   * disparar). Espera la respuesta real de `getExpenseReportSearchData`
+   * (el endpoint real, no `getExpenseSeacrh`).
+   */
   async buscar(termino = '') {
     await this.buscador().fill(termino);
-    const respuestaPromise = this.page.waitForResponse(
-      (res) => res.url().includes('getExpenseSeacrh'),
-      { timeout: TIMEOUTS.CARGA }
-    );
-    await this.btnBuscar().click();
-    await respuestaPromise;
+    await this._esperarRespuestaBusqueda();
+  }
+
+  private async _esperarRespuestaBusqueda() {
+    await this.page.waitForResponse((res) => res.url().includes('getExpenseReportSearchData'), { timeout: TIMEOUTS.CARGA });
+    // Margen corto para que la tabla ya renderizada por `renderRows()` quede pintada en el DOM.
+    await this.page.waitForTimeout(200);
   }
 
   async limpiarBusqueda() {
     await this.buscar('');
   }
 
-  async seleccionarEstado(estado: 'all' | 'pending' | 'paid') {
-    const respuestaPromise = this.page.waitForResponse(
-      (res) => res.url().includes('getExpenseSeacrh'),
-      { timeout: TIMEOUTS.CARGA }
-    );
-    await this.chipEstado(estado).click();
-    await respuestaPromise;
+  /** "Tipo de compra" real (no un estado de pago) — opciones reales: "Todas"/"Crédito"/"Contado". */
+  async seleccionarTipoCompra(texto: 'Todas' | 'Crédito' | 'Contado') {
+    await this._seleccionarChosen('erv2_state_select', texto);
+    await this._esperarRespuestaBusqueda();
   }
 
-  /** Ver bug documentado en el comentario de la clase: siempre `false` en este reporte. */
+  async seleccionarMoneda(texto: string) {
+    await this._seleccionarChosen('erv2_currency_select', texto);
+    await this._esperarRespuestaBusqueda();
+  }
+
+  private async _seleccionarChosen(idSelectReal: string, texto: string) {
+    const contenedor = `#${idSelectReal}_chosen`;
+    await this.page.locator(`${contenedor} .chosen-single`).click();
+    await this.page.locator(`${contenedor} .chosen-results li`, { hasText: texto }).click();
+  }
+
+  /**
+   * Confirmado en vivo: el filtro de Moneda de ExpenseReportV2 SÍ es un
+   * Chosen visible y funcional (a diferencia del componente viejo, ver el
+   * comentario de la clase). Chosen oculta el `<select>` real
+   * (`display:none`) y lo reemplaza visualmente con `.chosen-container` —
+   * hay que comprobar ESE contenedor, nunca el `<select>` subyacente
+   * (confirmado en vivo: `filtroMoneda().isVisible()` siempre da `false`
+   * pese a que el usuario sí lo ve y puede usarlo).
+   */
   async monedaEsVisible(): Promise<boolean> {
-    return this.botonMoneda().isVisible();
+    return this.page.locator('#erv2_currency_select_chosen').isVisible();
   }
 
   async limpiarFiltros() {
-    await this.seleccionarEstado('all');
-    await this.buscar('');
+    const respuestaPromise = this.page.waitForResponse((res) => res.url().includes('getExpenseReportSearchData'), { timeout: TIMEOUTS.CARGA });
+    await this.btnLimpiar().click();
+    await respuestaPromise;
+    await this.page.waitForTimeout(200);
   }
 
-  /** Un `tbody` vacío (sin filas) colapsa a 0px de alto y Playwright lo reporta como "hidden" aunque no tenga `display:none` (confirmado en vivo) — se valida la `<table>` completa (encabezados incluidos), que permanece visible con o sin datos. */
+  /** El contenedor con scroll (`#erv2_table_container`) permanece visible con o sin datos — la tabla interna puede colapsar a 0 filas sin `display:none`. */
   tabla(): Locator {
-    return this.tbody().locator('xpath=ancestor::table[1]');
+    return this.contenedorTabla();
   }
 
   filas(): Locator {
-    return this.tbody().locator('tr');
+    return this.tablaBody().locator('tr');
   }
 
   async contarFilas(): Promise<number> {
     return this.filas().count();
   }
 
-  private async celdaDeFila(indice: number, columna: number): Promise<string> {
-    return (await this.filas().nth(indice).locator('td').nth(columna).innerText()).trim();
+  async sinResultadosVisible(): Promise<boolean> {
+    return this.estadoVacio().evaluate((el) => getComputedStyle(el).display !== 'none');
   }
 
   async obtenerProveedorDeFila(indice: number): Promise<string> {
-    return this.celdaDeFila(indice, ReporteGastosComprasPage.COLUMNA_PROVEEDOR);
+    const texto = await this.filas().nth(indice).locator('td').nth(ReporteGastosComprasPage.COLUMNA_PROVEEDOR).locator('.erv2-cell-primary').innerText();
+    return texto.trim();
   }
 
   async obtenerTotalNumericoDeFila(indice: number): Promise<number> {
-    return montoANumero(await this.celdaDeFila(indice, ReporteGastosComprasPage.COLUMNA_TOTAL));
+    const texto = await this.filas().nth(indice).locator('td').nth(ReporteGastosComprasPage.COLUMNA_TOTAL).locator('.erv2-cell-primary--money').innerText();
+    return montoANumero(texto);
+  }
+
+  /** Lee el bloque real de resumen por moneda (`.erv2-summary-currency`) — mismo patrón de lectura ya usado para `casv2` en `rp-clientes.page.ts`. */
+  async obtenerResumenPorMoneda(): Promise<{ codigo: string; total: number; subtotal: number; iva: number; descuento: number }[]> {
+    const bloques = this.resumenPorMoneda().locator('.erv2-summary-currency');
+    const total = await bloques.count();
+    const resultado: { codigo: string; total: number; subtotal: number; iva: number; descuento: number }[] = [];
+    for (let i = 0; i < total; i++) {
+      const bloque = bloques.nth(i);
+      const codigo = (await bloque.locator('.erv2-summary-currency-title strong').innerText()).trim();
+      const valores = bloque.locator('.erv2-summary-values span b');
+      resultado.push({
+        codigo,
+        total: montoANumero(await valores.nth(0).innerText()),
+        subtotal: montoANumero(await valores.nth(1).innerText()),
+        iva: montoANumero(await valores.nth(2).innerText()),
+        descuento: montoANumero(await valores.nth(3).innerText()),
+      });
+    }
+    return resultado;
   }
 
   async descargarExcel(): Promise<Download> {
