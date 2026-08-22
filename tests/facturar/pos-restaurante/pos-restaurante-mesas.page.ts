@@ -58,7 +58,15 @@ import { esperarVentanaImpresion } from '../pos/pos.utils';
 //   su propio botón "Unificar".
 const L_MESA = {
   TAB_MESAS: '#footer_tab_rest_table',
-  TAB_PRODUCTOS: 'div[onclick="show_rest_product_list_from_tabs()"]',
+  // Bug de automatización real corregido en vivo: el selector exacto por
+  // `onclick="show_rest_product_list_from_tabs()"` dejó de coincidir — la
+  // app ahora invoca esa función con 4 parámetros
+  // (`show_rest_product_list_from_tabs(0, 0, 0, 1)`, confirmado leyendo el
+  // HTML real), rompiendo el match exacto de string. El elemento real tiene
+  // un `id="footer_tab_product"` estable (mismo patrón que
+  // `footer_tab_rest_table`/`footer_tab_rest_table_fast`) — se usa ESE en
+  // vez de depender del onclick completo.
+  TAB_PRODUCTOS: '#footer_tab_product',
 
   BTN_VISTA_CUADRICULA: '#rest_table_style_box',
   VISTA_CUADRICULA_ACTIVA_CLASE: 'rest_table_style_view_active',
@@ -592,15 +600,40 @@ export class PosRestauranteMesas {
    * siguiente click (discount/eliminar) indefinidamente. Se amplía a 8s
    * (6s documentados + margen), consistente con el resto del archivo.
    */
+  /**
+   * BUG DE AUTOMATIZACIÓN real corregido en vivo (2026-08-22): esta espera
+   * solo comprobaba el modal VIEJO (`#dialog_rest_mod_view`). El sistema de
+   * Aditivos fue rediseñado por completo (ver
+   * `PosRestauranteMesas.ADITIVOS_ROTOS_2026_08_22` para el hallazgo
+   * completo) — el modal real hoy puede ser el NUEVO
+   * `#dialog_product_recipe_selection` ("Aditivos y opciones de receta",
+   * `data-keyboard="true"`, confirmado que se abre automáticamente al
+   * agregar CUALQUIER producto con receta/aditivos configurados, no solo
+   * `PRODUCTO_CON_ADITIVOS`). Sin este fix, el modal nuevo quedaba abierto
+   * tapando la pantalla y colgaba el SIGUIENTE click (ej. el botón flotante
+   * "Producto Rápido") hasta agotar el timeout completo del test —
+   * confirmado en vivo, mismo síntoma ya documentado para el modal viejo.
+   * Se comprueban AMBOS modales; el nuevo se cierra con Escape (su propio
+   * `data-keyboard="true"` lo soporta) en vez de perseguir un botón
+   * "Cerrar" específico dentro de su wizard de varios pasos.
+   */
   async _cerrarModalAditivosSiApareceAutomaticamente() {
-    const abierto = await this.modalAditivos
+    const modalNuevo = this.page.locator('#dialog_product_recipe_selection');
+
+    const abiertoViejo = await this.modalAditivos
       .waitFor({ state: 'visible', timeout: 8_000 })
       .then(() => true)
       .catch(() => false);
-    if (!abierto) return;
+    if (abiertoViejo) {
+      await this.page.locator(L_MESA.MODAL_ADITIVOS_BTN_CERRAR).click().catch(() => {});
+      await this.modalAditivos.waitFor({ state: 'hidden', timeout: TIMEOUTS.PAYMENT_MODAL }).catch(() => {});
+      return;
+    }
 
-    await this.page.locator(L_MESA.MODAL_ADITIVOS_BTN_CERRAR).click().catch(() => {});
-    await this.modalAditivos.waitFor({ state: 'hidden', timeout: TIMEOUTS.PAYMENT_MODAL }).catch(() => {});
+    const abiertoNuevo = await modalNuevo.isVisible().catch(() => false);
+    if (!abiertoNuevo) return;
+    await this.page.keyboard.press('Escape').catch(() => {});
+    await modalNuevo.waitFor({ state: 'hidden', timeout: TIMEOUTS.PAYMENT_MODAL }).catch(() => {});
   }
 
 
@@ -822,17 +855,47 @@ export class PosRestauranteMesas {
 
 
   // ─── Aditivos / Modificadores ────────────────────────────────────────────
+  //
+  // HALLAZGO MAYOR SIN RESOLVER (confirmado en vivo 2026-08-22, pendiente de
+  // una sesión dedicada — fuera del alcance de la auditoría de persistencia/
+  // cálculos/descuentos/múltiples órdenes que motivó esta investigación):
+  // el producto de prueba histórico de esta constante
+  // ("165/60r14 75h supraforce keter", un producto de LLANTAS — de otro
+  // dominio por completo, nunca perteneció al catálogo real de este
+  // restaurante) YA NO EXISTE en el catálogo (confirmado: 0 coincidencias
+  // buscando "keter"/"supraforce"/"165" en el grid completo). El catálogo
+  // real de este ambiente hoy son 13 ítems de comida (ACEITE, ARROZ CON
+  // POLLO, PIZZA HAWAIANA/NAPPOLITANA/PEPPERONI como PRODUCTOS separados —
+  // ya NO como opciones de modificador de una única "PIZZA" genérica, TACOS,
+  // etc.). Además, el propio modal de "Aditivos" fue rediseñado por
+  // completo: el viejo `#dialog_rest_mod_view` (simple, un solo click por
+  // opción) ya no aparece — el nuevo modal real es
+  // `#dialog_product_recipe_selection` ("Aditivos y opciones de receta", con
+  // pestañas "Aditivos"/"Opciones de receta", navegación tipo wizard
+  // Volver/Continuar, confirmación real "Agregar receta"). Confirmado en
+  // vivo que su apertura es INCONSISTENTE para el mismo producto entre
+  // corridas distintas (abrió una vez para "ARROZ CON POLLO", no abrió la
+  // siguiente) — mismo patrón de asincronía ya documentado para el modal
+  // viejo, ahora sin un mecanismo de respaldo confiable descubierto todavía.
+  // `agregarProductoConAditivo()`/`agregarProductoConAditivoConPrecio()`
+  // (usados solo por los Escenarios 14/29/31, ninguno de los priorizados en
+  // esta sesión) quedan documentados como ROTOS hasta una investigación
+  // dedicada del nuevo modal — el Escenario 14 de este archivo ya NO llama a
+  // `agregarProductoConAditivo()` (ver su comentario), para no bloquear la
+  // validación de "múltiples órdenes en una mesa" en una dependencia no
+  // relacionada con su objetivo real.
+  static readonly ADITIVOS_ROTOS_2026_08_22 = true;
 
   /**
-   * Único producto del catálogo de este ambiente confirmado en vivo con
-   * Aditivos/Modificadores reales configurados (grupo "COMBINACIÓN DE
-   * PIZZA", opción "HAWAIANA") — confirmado inspeccionando en vivo la
-   * respuesta real del AJAX `getProductWithModifiers` (interceptando red).
-   * El resto del catálogo probado en vivo (varios productos de
-   * "TODOS"/"Categoria QA") no tiene ningún aditivo configurado — el propio
-   * backend responde `models=1` (que la UI resuelve con un toast "este
-   * producto no tiene aditivos", sin abrir ningún modal) — es un dato del
-   * catálogo de este ambiente QA, no una limitación de la funcionalidad.
+   * @deprecated Producto de prueba HISTÓRICO — confirmado en vivo que ya NO
+   * existe en el catálogo de este ambiente (ver el hallazgo completo arriba
+   * de esta sección). Cualquier método que la use fallará con un mensaje
+   * explícito ("no está en el catálogo de este ambiente"), nunca en
+   * silencio. No usar en escenarios nuevos hasta que una sesión dedicada
+   * investigue el nuevo modal `#dialog_product_recipe_selection` y
+   * encuentre (dinámicamente, sin hardcodear un nombre — ver
+   * [[feedback_tests_no_dependen_nombre_especifico]]) un producto real de
+   * este catálogo con aditivos configurados de forma confiable.
    */
   static readonly PRODUCTO_CON_ADITIVOS = '165/60r14 75h supraforce keter';
 

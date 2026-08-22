@@ -517,13 +517,20 @@ test.describe('Restaurante — Mesas', () => {
     let mesa: DatosMesaPlano;
     let nombrePrincipal = '';
     let nombreCliente = '';
-    await test.step('Seleccionar mesa, agregar productos normales, con aditivos y rápidos, y asignar un cliente existente', async () => {
+    // NOTA: ya NO usa agregarProductoConAditivo() — ver el hallazgo completo
+    // documentado junto a PosRestauranteMesas.ADITIVOS_ROTOS_2026_08_22
+    // (el modal de Aditivos fue rediseñado por completo y su apertura es
+    // inconsistente en vivo; su producto de prueba histórico tampoco existe
+    // ya en el catálogo). El objetivo real de este escenario — validar que
+    // dos órdenes en la misma mesa permanecen independientes — no depende
+    // de esa funcionalidad, así que se usa un segundo producto normal en su
+    // lugar para no bloquear la validación en una dependencia no relacionada.
+    await test.step('Seleccionar mesa, agregar productos normales y rápidos, y asignar un cliente existente', async () => {
       await mesas.abrirMesas();
       mesa = await mesas.seleccionarMesaDisponible();
 
       await mesas.volverAProductos();
-      await mesas.agregarPrimerProductoNoPresenteAlCarritoDeMesa();
-      await mesas.agregarProductoConAditivo();
+      await agregarDosProductosDistintos(pos, mesas);
       await pos.agregarProductoRapidoSimple(`Rápido Orden Principal ${Date.now()}`, PRECIO_PRODUCTO_RAPIDO);
 
       nombreCliente = await pos.seleccionarClienteExistente();
